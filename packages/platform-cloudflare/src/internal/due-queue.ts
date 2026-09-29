@@ -27,9 +27,33 @@ export const Lifecycle = "effect-agent:lifecycle";
 
 const decode = Schema.decodeUnknownSync(Schema.Array(DueLane));
 
-/** Bind the foreign storage handle once; callers reserve its Effect SQL connection and
- * own the enclosing storage transaction, including the alarm update. */
+const views = new WeakMap<SqlStorage, { rows: ReadonlyArray<DueLane> | undefined }>();
+
+export const invalidate = (sql: SqlStorage): void => {
+  const view = views.get(sql);
+
+  if (view !== undefined) view.rows = undefined;
+};
+
+/** Callers reserve the shared SQL connection through commit and invalidate on rollback.
+ * Retain at most 128 lanes; SQLite and the alarm still reconstruct every cold owner. */
 export const make = (sql: SqlStorage) => {
+  let view = views.get(sql);
+
+  if (view === undefined) {
+    view = { rows: undefined };
+    views.set(sql, view);
+  }
+  const current = view;
+
+  const retain = (changed: ReadonlyArray<DueLane>) => {
+    if (current.rows === undefined) return;
+    const ids = new Set(changed.map((row) => row.id));
+    const next = [...current.rows.filter((row) => !ids.has(row.id)), ...changed];
+
+    current.rows = next.length <= 128 ? next : undefined;
+  };
+
   const initialize = () => {
     sql.exec(`CREATE TABLE IF NOT EXISTS platform_cloudflare_due_queue (
     id TEXT PRIMARY KEY, revision INTEGER NOT NULL, dueAt REAL, stalls INTEGER NOT NULL
@@ -37,44 +61,82 @@ export const make = (sql: SqlStorage) => {
   };
 
   /** Keep dormant rows so delete/reinsert cannot reuse a revision held by an older wave. */
-  const read = () =>
-    decode(
+  const read = () => {
+    if (current.rows !== undefined) return current.rows;
+
+    const rows = decode(
       sql.exec("SELECT id, revision, dueAt, stalls FROM platform_cloudflare_due_queue").toArray(),
     );
+
+    if (rows.length <= 128) current.rows = rows;
+
+    return rows;
+  };
 
   const dirty = (id: string, dueAt: number) => {
     Schema.decodeSync(LaneId)(id);
     Schema.decodeSync(Schema.Finite)(dueAt);
-    sql.exec(
-      `INSERT INTO platform_cloudflare_due_queue VALUES (?, 1, ?, 0)
+    retain(
+      decode(
+        sql
+          .exec(
+            `INSERT INTO platform_cloudflare_due_queue VALUES (?, 1, ?, 0)
      ON CONFLICT(id) DO UPDATE SET revision = revision + 1,
        dueAt = CASE WHEN dueAt IS NULL THEN excluded.dueAt ELSE min(dueAt, excluded.dueAt) END,
-       stalls = 0`,
-      id,
-      dueAt,
+       stalls = 0 RETURNING id, revision, dueAt, stalls`,
+            id,
+            dueAt,
+          )
+          .toArray(),
+      ),
     );
   };
 
   /** One initial native discovery wave; host lanes always require explicit enrollment. */
   const register = (id: string) => {
-    sql.exec("INSERT OR IGNORE INTO platform_cloudflare_due_queue VALUES (?, 0, 0, 0)", id);
+    retain(
+      decode(
+        sql
+          .exec(
+            "INSERT OR IGNORE INTO platform_cloudflare_due_queue VALUES (?, 0, 0, 0) RETURNING id, revision, dueAt, stalls",
+            id,
+          )
+          .toArray(),
+      ),
+    );
   };
 
   const complete = (lane: DueLane, dueAt: number | null, failed = false) => {
     Schema.decodeSync(Deadline)(dueAt);
-    sql.exec(
-      "UPDATE platform_cloudflare_due_queue SET dueAt = ?, stalls = ?, revision = revision + 1 WHERE id = ? AND revision = ?",
-      dueAt,
-      failed ? Math.min(30, lane.stalls + 1) : 0,
-      lane.id,
-      lane.revision,
+    retain(
+      decode(
+        sql
+          .exec(
+            "UPDATE platform_cloudflare_due_queue SET dueAt = ?, stalls = ?, revision = revision + 1 WHERE id = ? AND revision = ? RETURNING id, revision, dueAt, stalls",
+            dueAt,
+            failed ? Math.min(30, lane.stalls + 1) : 0,
+            lane.id,
+            lane.revision,
+          )
+          .toArray(),
+      ),
     );
   };
 
   /** Native checkpoints already fence their own dirty/processed generation. */
   const checkpointNative = (dueAt: number | null) => {
     Schema.decodeSync(Deadline)(dueAt);
-    sql.exec("UPDATE platform_cloudflare_due_queue SET dueAt = ? WHERE id = ?", dueAt, Native);
+    retain(
+      decode(
+        sql
+          .exec(
+            "UPDATE platform_cloudflare_due_queue SET dueAt = ? WHERE id = ? RETURNING id, revision, dueAt, stalls",
+            dueAt,
+            Native,
+          )
+          .toArray(),
+      ),
+    );
   };
 
   return { initialize, read, dirty, register, complete, checkpointNative };

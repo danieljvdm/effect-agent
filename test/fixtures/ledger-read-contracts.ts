@@ -164,7 +164,7 @@ const seedScan = Effect.fn("LedgerReadFixture.seedScan")(function* (count: numbe
   `;
 });
 
-export const ledgerReadCases = [
+export const ledgerReadCases = (invalidateReadState: Effect.Effect<void> = Effect.void) => [
   {
     name: "keeps cursor order during settlement and observes earlier admissions on the next scan",
     run: Effect.gen(function* () {
@@ -251,6 +251,7 @@ export const ledgerReadCases = [
 
       yield* ledger.finalizeSettlement(request);
       yield* sql`DELETE FROM effect_agent_settlement_reservations WHERE submission_id=${request.submissionId}`;
+      yield* invalidateReadState;
 
       const before =
         yield* sql`SELECT * FROM effect_agent_settlement_reservations WHERE submission_id=${request.submissionId}`;
@@ -268,11 +269,13 @@ export const ledgerReadCases = [
     }),
   })),
   ...(["interruption"] as const).map((mode) => ({
-    name: `releases a ${mode} during the settled read and permits later mutations`,
+    name: `releases a ${mode} during a cold settled read and permits later mutations`,
     run: Effect.gen(function* () {
       const ledger = yield* SubmissionLedger;
       const request = yield* reserveReadFixture(`cleanup-${mode}`);
       const settled = yield* ledger.finalizeSettlement(request);
+
+      yield* invalidateReadState;
 
       const result = yield* ledger.finalizeSettlement(request).pipe(
         Effect.provideService(CurrentTransformer, () => Effect.interrupt),

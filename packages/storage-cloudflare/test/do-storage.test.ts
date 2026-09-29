@@ -8,6 +8,7 @@ import { CurrentDoStorageVersion } from "@effect-agent/storage-cloudflare/do-sto
 import { ledgerLayer } from "@effect-agent/storage-cloudflare/do-submission-ledger";
 import {
   threadStoreLayer,
+  invalidate,
   layer,
   storageConfigLayer,
 } from "@effect-agent/storage-cloudflare/do-thread-store";
@@ -132,6 +133,8 @@ describe("DoThreadStore", () => {
               );
           });
 
+          yield* invalidate(storage);
+
           const failure = yield* Stream.runCollect(
             store.read(ThreadRead.make({ threadId, limit: 10 })),
           ).pipe(Effect.flip);
@@ -180,6 +183,7 @@ describe("DoThreadStore", () => {
             threadId,
           ),
         );
+        yield* invalidate(storage);
         expect(
           yield* store.export(ThreadExportRequest.make({ threadId })).pipe(Effect.flip),
         ).toMatchObject({

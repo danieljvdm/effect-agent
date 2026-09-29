@@ -241,6 +241,7 @@ import {
   modelResponseRecordId,
   projectRunJournalStream,
   type JournalBoundary,
+  type RunJournalProjection,
   runCompletedRecordId,
   runCompletionDigest,
   runIdForSubmission,
@@ -1263,6 +1264,19 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   const ledger = yield* SubmissionLedger;
   const submissionScheduling = yield* SubmissionScheduling;
   const store = yield* ThreadStore;
+
+  // Disposable: canonical tail and owner identify the exact projection, never ownership.
+  // Retain only the most recent view; persisted checkpoints still govern cold recovery.
+  let projectedJournal:
+    | {
+        readonly threadId: ThreadId;
+        readonly through: CanonicalSequence;
+        readonly runId: RunId;
+        readonly seedThrough: CanonicalSequence | undefined;
+        readonly journal: RunJournalProjection;
+        readonly boundaries: ReadonlyArray<JournalBoundary>;
+      }
+    | undefined;
 
   const wake = yield* WakeScheduler;
   const failpoint = yield* DurableRuntimeFailpoint;
@@ -4562,13 +4576,31 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const runId = runIdForSubmission(submissionId);
       const boundaries: Array<JournalBoundary> = [];
 
-      const journal = yield* projectRunJournalStream(
-        canonical,
+      const cached = projectedJournal;
+
+      const journal =
+        cached !== undefined &&
+        cached.threadId === ctx.threadId &&
+        cached.through === canonicalThrough &&
+        cached.runId === runId &&
+        cached.seedThrough === journalSeed?.throughSequence
+          ? (boundaries.push(...cached.boundaries), cached.journal)
+          : yield* projectRunJournalStream(
+              canonical,
+              runId,
+              (boundary) => boundaries.push(boundary),
+              journalSeed,
+              journalMetadata,
+            );
+
+      projectedJournal = {
+        threadId: ctx.threadId,
+        through: canonicalThrough,
         runId,
-        (boundary) => boundaries.push(boundary),
-        journalSeed,
-        journalMetadata,
-      );
+        seedThrough: journalSeed?.throughSequence,
+        journal,
+        boundaries,
+      };
 
       const saveRecoveryCheckpoint = Effect.fn("DurableAgentRuntime.saveRecoveryCheckpoint")(
         function* (compactionId: RecordId): Effect.fn.Return<void, DurableWorkerFailure> {

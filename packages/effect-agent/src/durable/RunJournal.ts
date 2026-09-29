@@ -1,4 +1,4 @@
-import { type Crypto, Effect, Schema, Stream, type DateTime } from "effect";
+import { type Crypto, Effect, Predicate, Schema, Stream, type DateTime } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
 import { ThreadId, RunId, ToolCallId, TurnId, type SubmissionId } from "../core/Identifiers.ts";
@@ -330,14 +330,34 @@ export const childIdempotencyKeyFor = (
   toolCallId: ToolCallId,
 ): IdempotencyKey => decodeIdempotencyKey(`subagent:${parentRunId}:${toolCallId}`);
 
-const decodePromptMessages = Effect.fn("RunJournal.decodePromptMessages")(
-  (messages: PersistedJson): Effect.Effect<Prompt.Prompt, RunJournalError> =>
-    Schema.decodeUnknownEffect(Prompt.Prompt)(messages).pipe(
-      Effect.mapError((cause) =>
-        journalError("Canonical messages are not Schema-encoded Prompt messages", cause),
-      ),
+const decodePersistedPrompt = (
+  messages: PersistedJson,
+): Effect.Effect<Prompt.Prompt, RunJournalError> =>
+  Schema.decodeUnknownEffect(Prompt.Prompt)(messages).pipe(
+    Effect.mapError((cause) =>
+      journalError("Canonical messages are not Schema-encoded Prompt messages", cause),
     ),
-);
+  );
+
+// Canonical payloads are immutable. Weak keys let retained storage rows own the lifetime
+// while repeated projections of an advancing tail reuse their validated Prompt values.
+const decodedMessages = new WeakMap<object, Prompt.Prompt>();
+
+const decodePromptMessages = (messages: PersistedJson) =>
+  Effect.suspend(() => {
+    if (!Predicate.isObject(messages)) return decodePersistedPrompt(messages);
+    const cached = decodedMessages.get(messages);
+
+    return cached === undefined
+      ? decodePersistedPrompt(messages).pipe(
+          Effect.tap((prompt) =>
+            Effect.sync(() => {
+              decodedMessages.set(messages, prompt);
+            }),
+          ),
+        )
+      : Effect.succeed(cached);
+  });
 
 interface PendingSettledTool {
   readonly record: ToolCallSettled;
@@ -345,24 +365,24 @@ interface PendingSettledTool {
   readonly cleared: boolean;
 }
 
-const toolMessageFromSettled = Effect.fn("RunJournal.toolMessageFromSettled")(
-  (settled: ReadonlyArray<PendingSettledTool>): Effect.Effect<Prompt.Message, RunJournalError> =>
-    Effect.try({
-      try: () =>
-        Prompt.makeMessage("tool", {
-          content: settled.map(({ record, cleared }) =>
-            Prompt.makePart("tool-result", {
-              id: record.toolCallId,
-              name: record.toolName,
-              result: cleared ? CLEARED_TOOL_RESULT : record.result,
-              isFailure: record.isFailure,
-              providerExecuted: false,
-            }),
-          ),
-        }),
-      catch: (cause) => journalError("Unable to rebuild Tool message from ToolCallSettled", cause),
-    }),
-);
+const toolMessageFromSettled = (
+  settled: ReadonlyArray<PendingSettledTool>,
+): Effect.Effect<Prompt.Message, RunJournalError> =>
+  Effect.try({
+    try: () =>
+      Prompt.makeMessage("tool", {
+        content: settled.map(({ record, cleared }) =>
+          Prompt.makePart("tool-result", {
+            id: record.toolCallId,
+            name: record.toolName,
+            result: cleared ? CLEARED_TOOL_RESULT : record.result,
+            isFailure: record.isFailure,
+            providerExecuted: false,
+          }),
+        ),
+      }),
+    catch: (cause) => journalError("Unable to rebuild Tool message from ToolCallSettled", cause),
+  });
 
 /**
  * Pure canonical projection of one Run's durable execution state.
@@ -1022,7 +1042,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
 
   let pendingToolOrder = new Map<string, number>();
 
-  const flushTools = Effect.fn("RunJournal.flushTools")(function* (
+  const flushTools = Effect.fnUntraced(function* (
     current: FoldState,
   ): Effect.fn.Return<FoldState, RunJournalError> {
     if (current.pendingTools.length === 0) return current;

@@ -92,6 +92,7 @@ import {
   type SuspensionOutcome,
 } from "effect-agent/submission-ledger";
 import { ThreadStoreDiagnostic } from "effect-agent/thread-store";
+import { AssignmentTerminal } from "effect-agent/worker";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
@@ -110,6 +111,7 @@ import {
   type DoStorageOptions,
 } from "./DoThreadStore.ts";
 import { decodeRows, initializeDoJournal } from "./internal/do-journal.ts";
+import { ownedRows } from "./internal/owned-state.ts";
 import { withStorageSpan } from "./internal/storage-span.ts";
 
 type SubmissionId = SubmissionSnapshot["submissionId"];
@@ -161,6 +163,18 @@ class SubmissionRow extends Schema.Class<SubmissionRow>("SubmissionRow")({
   worker_admission_json: Schema.NullOr(BoundedStoredText),
   message_admission_json: Schema.NullOr(BoundedStoredText),
 }) {}
+
+// Discovery retains identity and state, never every queued input payload.
+const SubmissionWorkRow = Schema.Struct({
+  submission_id: SubmissionRow.fields.submission_id,
+  thread_id: SubmissionRow.fields.thread_id,
+  queue_sequence: SubmissionRow.fields.queue_sequence,
+  principal: SubmissionRow.fields.principal,
+  idempotency_key: SubmissionRow.fields.idempotency_key,
+  deployment_id: SubmissionRow.fields.deployment_id,
+  receipt_id: SubmissionRow.fields.receipt_id,
+  state: SubmissionRow.fields.state,
+});
 
 class ChildReservationRow extends Schema.Class<ChildReservationRow>("ChildReservationRow")({
   reservation_id: BoundedIdentifier,
@@ -231,21 +245,13 @@ class AbortIntentRow extends Schema.Class<AbortIntentRow>("AbortIntentRow")({
   canonical_record_id: Schema.NullOr(BoundedIdentifier),
 }) {}
 
+class WorkerStopRow extends Schema.Class<WorkerStopRow>("WorkerStopRow")({
+  thread_id: BoundedIdentifier,
+  terminal: Schema.NullOr(AssignmentTerminal),
+}) {}
+
 class MaxQueueSequenceRow extends Schema.Class<MaxQueueSequenceRow>("MaxQueueSequenceRow")({
   max_queue_sequence: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-}) {}
-
-class AbortIntentLookupRow extends Schema.Class<AbortIntentLookupRow>("AbortIntentLookupRow")({
-  submission_id: BoundedIdentifier,
-  abort_submission_id: Schema.NullOr(BoundedIdentifier),
-  author: Schema.NullOr(BoundedIdentifier),
-  reason: Schema.NullOr(BoundedStoredText),
-  requested_at: Schema.NullOr(BoundedTimestamp),
-  canonical_record_id: Schema.NullOr(BoundedIdentifier),
-}) {}
-
-class CanonicalRecordIdRow extends Schema.Class<CanonicalRecordIdRow>("CanonicalRecordIdRow")({
-  record_id: BoundedIdentifier,
 }) {}
 
 const SUBMISSION_COLUMNS = `
@@ -358,6 +364,68 @@ const sqlFailure =
 const corruptionFailure = (operation: string, table: string, rowKey: string, message: string) =>
   internalFailure(operation)(DoStorageCorruptionError.make({ table, rowKey, message }));
 
+const submissionsRows = ownedRows(
+  SubmissionRow,
+  "effect_agent_submissions",
+  (row) => row.submission_id,
+  "submission_id",
+);
+
+const ownershipRows = ownedRows(
+  OwnershipRow,
+  "effect_agent_submission_ownership",
+  (row) => row.submission_id,
+  "submission_id",
+);
+
+const reservationsRows = ownedRows(
+  ReservationRow,
+  "effect_agent_settlement_reservations",
+  (row) => row.submission_id,
+  "submission_id",
+);
+
+const abortsRows = ownedRows(
+  AbortIntentRow,
+  "effect_agent_abort_intents",
+  (row) => row.submission_id,
+  "submission_id",
+);
+
+const approvalsRows = ownedRows(ApprovalDecisionRow, "effect_agent_approval_decisions", (row) =>
+  JSON.stringify([row.submission_id, row.tool_call_id]),
+);
+
+const resolutionsRows = ownedRows(UnknownResolutionRow, "effect_agent_unknown_resolutions", (row) =>
+  JSON.stringify([row.submission_id, row.tool_call_id]),
+);
+
+const childSettlementsRows = ownedRows(
+  ChildSettlementMarkerRow,
+  "effect_agent_child_settlements",
+  (row) => JSON.stringify([row.parent_submission_id, row.child_submission_id]),
+);
+
+const childReservationsRows = ownedRows(
+  ChildReservationRow,
+  "effect_agent_child_reservations",
+  (row) => row.reservation_id,
+  "reservation_id",
+);
+
+const workerStopsRows = ownedRows(
+  WorkerStopRow,
+  "effect_agent_worker_stops",
+  (row) => row.thread_id,
+  "thread_id",
+);
+
+const submissionWorkRows = ownedRows(
+  SubmissionWorkRow,
+  "effect_agent_submissions",
+  (row) => row.submission_id,
+);
+
 const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
   const config = yield* DoStorageConfig;
   const failpoint = yield* DoStorageFailpoint;
@@ -366,6 +434,34 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
   const admissionFence = yield* SubmissionAdmissionFence;
   const journal = yield* initializeDoJournal(sql, failpoint.hit, config.maxStoredValueBytes);
   const lifecycle = journal.lifecycle;
+  const state = journal.state;
+  const submissionViews = submissionsRows(state, sql);
+  const workRows = submissionWorkRows(state, sql);
+
+  const rows = {
+    submissions: {
+      by: submissionViews.by,
+      // The same RETURNING rows update the full-row views and the small discovery index.
+      write: <E, R>(effect: Effect.Effect<ReadonlyArray<unknown>, E, R>) =>
+        submissionViews
+          .write(effect)
+          .pipe(Effect.tap((changed) => workRows.write(Effect.succeed(changed)))),
+    },
+    ownership: ownershipRows(state, sql),
+    reservations: reservationsRows(state, sql),
+    aborts: abortsRows(state, sql),
+    approvals: approvalsRows(state, sql),
+    resolutions: resolutionsRows(state, sql),
+    childSettlements: childSettlementsRows(state, sql),
+    childReservations: childReservationsRows(state, sql),
+    threads: journal.threads,
+    workerStops: workerStopsRows(state, sql),
+  };
+
+  const cached = <A>(
+    effect: Effect.Effect<A, SqlError | DoStorageCorruptionError>,
+    operation: string,
+  ) => effect.pipe(Effect.mapError(internalFailure(operation)));
 
   const retainLifecycle = (submission: SubmissionRow, fact: LifecyclePublicationFact) =>
     lifecycle === undefined
@@ -481,24 +577,9 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     operation: string,
     submissionId: string,
   ): Effect.fn.Return<Option.Option<SubmissionRow>, LedgerError> {
-    const rows = yield* sql<Record<string, unknown>>`
-      SELECT ${sql.literal(SUBMISSION_COLUMNS)}
-      FROM effect_agent_submissions
-      WHERE submission_id = ${submissionId}
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+    const found = yield* cached(rows.submissions.by("submission_id", submissionId), operation);
 
-    const decoded = yield* decodeSubmissionRows(operation, submissionId, rows);
-
-    if (decoded.length > 1) {
-      return yield* corruptionFailure(
-        operation,
-        "effect_agent_submissions",
-        submissionId,
-        "A submission primary key returned more than one row.",
-      );
-    }
-
-    return decoded.length === 0 ? Option.none() : Option.some(decoded[0]);
+    return Option.fromUndefinedOr(found[0]);
   });
 
   const requireSubmission = Effect.fn("DoSubmissionLedger.requireSubmission")(function* (
@@ -521,35 +602,9 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     operation: string,
     submissionId: string,
   ): Effect.fn.Return<Option.Option<OwnershipRow>, LedgerError> {
-    const rows = yield* sql<Record<string, unknown>>`
-      SELECT
-        submission_id,
-        attempt_id,
-        ownership_token,
-        producer_epoch,
-        owner_producer_id,
-        lease_expires_at
-      FROM effect_agent_submission_ownership
-      WHERE submission_id = ${submissionId}
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+    const found = yield* cached(rows.ownership.by("submission_id", submissionId), operation);
 
-    const decoded = yield* decodeRows(
-      Schema.Array(OwnershipRow),
-      "effect_agent_submission_ownership",
-      submissionId,
-      rows,
-    ).pipe(Effect.mapError(internalFailure(operation)));
-
-    if (decoded.length > 1) {
-      return yield* corruptionFailure(
-        operation,
-        "effect_agent_submission_ownership",
-        submissionId,
-        "An ownership primary key returned more than one row.",
-      );
-    }
-
-    return decoded.length === 0 ? Option.none() : Option.some(decoded[0]);
+    return Option.fromUndefinedOr(found[0]);
   });
 
   const threadEpoch = Effect.fn("DoSubmissionLedger.threadEpoch")(function* (
@@ -597,11 +652,17 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     ),
   );
 
+  const submissions = new WeakMap<SubmissionRow, SubmissionSnapshot>();
+
   const decodeSubmissionSnapshot = Effect.fn("DoSubmissionLedger.decodeSubmissionSnapshot")(
     function* (
       operation: string,
       row: SubmissionRow,
     ): Effect.fn.Return<SubmissionSnapshot, LedgerError> {
+      const existing = submissions.get(row);
+
+      if (existing !== undefined) return existing;
+
       const decodeFailure = (error: Schema.SchemaError) =>
         internalFailure(operation)(
           DoStorageCorruptionError.make({
@@ -634,7 +695,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
         );
       }
 
-      return yield* decodeSubmissionSnapshotUnknown({
+      const snapshot = yield* decodeSubmissionSnapshotUnknown({
         submissionId: row.submission_id,
         threadId: row.thread_id,
         queueSequence: row.queue_sequence,
@@ -681,6 +742,10 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
               },
             }),
       }).pipe(Effect.mapError(decodeFailure));
+
+      submissions.set(row, snapshot);
+
+      return snapshot;
     },
   );
 
@@ -688,71 +753,18 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     operation: string,
     submissionId: string,
   ): Effect.fn.Return<Option.Option<ReservationRow>, LedgerError> {
-    const rows = yield* sql<Record<string, unknown>>`
-      SELECT
-        submission_id,
-        settlement_id,
-        outcome,
-        record_id,
-        record_json,
-        record_digest,
-        reserved_at,
-        finalized_at
-      FROM effect_agent_settlement_reservations
-      WHERE submission_id = ${submissionId}
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+    const found = yield* cached(rows.reservations.by("submission_id", submissionId), operation);
 
-    const decoded = yield* decodeRows(
-      Schema.Array(ReservationRow),
-      "effect_agent_settlement_reservations",
-      submissionId,
-      rows,
-    ).pipe(Effect.mapError(internalFailure(operation)));
-
-    if (decoded.length > 1) {
-      return yield* corruptionFailure(
-        operation,
-        "effect_agent_settlement_reservations",
-        submissionId,
-        "A settlement reservation primary key returned more than one row.",
-      );
-    }
-
-    return decoded.length === 0 ? Option.none() : Option.some(decoded[0]);
+    return Option.fromUndefinedOr(found[0]);
   });
 
   const readAbortIntent = Effect.fn("DoSubmissionLedger.readAbortIntent")(function* (
     operation: string,
     submissionId: string,
   ): Effect.fn.Return<Option.Option<AbortIntentRow>, LedgerError> {
-    const rows = yield* sql<Record<string, unknown>>`
-      SELECT
-        submission_id,
-        author,
-        reason,
-        requested_at,
-        canonical_record_id
-      FROM effect_agent_abort_intents
-      WHERE submission_id = ${submissionId}
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+    const found = yield* cached(rows.aborts.by("submission_id", submissionId), operation);
 
-    const decoded = yield* decodeRows(
-      Schema.Array(AbortIntentRow),
-      "effect_agent_abort_intents",
-      submissionId,
-      rows,
-    ).pipe(Effect.mapError(internalFailure(operation)));
-
-    if (decoded.length > 1) {
-      return yield* corruptionFailure(
-        operation,
-        "effect_agent_abort_intents",
-        submissionId,
-        "An abort intent primary key returned more than one row.",
-      );
-    }
-
-    return decoded.length === 0 ? Option.none() : Option.some(decoded[0]);
+    return Option.fromUndefinedOr(found[0]);
   });
 
   /**
@@ -765,23 +777,18 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       operation: string,
       parentSubmissionId: string,
     ): Effect.fn.Return<ReadonlyArray<ChildSettlementMarkerRow>, LedgerError> {
-      const rows = yield* sql<Record<string, unknown>>`
-        SELECT
-          parent_submission_id,
-          child_submission_id,
-          child_outcome,
-          recorded_at
-        FROM effect_agent_child_settlements
-        WHERE parent_submission_id = ${parentSubmissionId}
-        ORDER BY child_submission_id ASC
-      `.pipe(Effect.mapError(sqlFailure(operation)));
+      const found = yield* cached(
+        rows.childSettlements.by("parent_submission_id", parentSubmissionId),
+        operation,
+      );
 
-      return yield* decodeRows(
-        Schema.Array(ChildSettlementMarkerRow),
-        "effect_agent_child_settlements",
-        parentSubmissionId,
-        rows,
-      ).pipe(Effect.mapError(internalFailure(operation)));
+      return found.toSorted((a, b) =>
+        a.child_submission_id < b.child_submission_id
+          ? -1
+          : a.child_submission_id > b.child_submission_id
+            ? 1
+            : 0,
+      );
     },
   );
 
@@ -908,25 +915,11 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     operation: string,
     submissionId: string,
   ): Effect.fn.Return<ReadonlyArray<ApprovalDecisionRow>, LedgerError> {
-    const rows = yield* sql<Record<string, unknown>>`
-      SELECT
-        submission_id,
-        tool_call_id,
-        decision,
-        resolver,
-        reason,
-        decided_at
-      FROM effect_agent_approval_decisions
-      WHERE submission_id = ${submissionId}
-      ORDER BY tool_call_id ASC
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+    const found = yield* cached(rows.approvals.by("submission_id", submissionId), operation);
 
-    return yield* decodeRows(
-      Schema.Array(ApprovalDecisionRow),
-      "effect_agent_approval_decisions",
-      submissionId,
-      rows,
-    ).pipe(Effect.mapError(internalFailure(operation)));
+    return found.toSorted((a, b) =>
+      a.tool_call_id < b.tool_call_id ? -1 : a.tool_call_id > b.tool_call_id ? 1 : 0,
+    );
   });
 
   const approvalIntentFromRow = Effect.fn("DoSubmissionLedger.approvalIntentFromRow")(function* (
@@ -956,25 +949,11 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     operation: string,
     submissionId: string,
   ): Effect.fn.Return<ReadonlyArray<UnknownResolutionRow>, LedgerError> {
-    const rows = yield* sql<Record<string, unknown>>`
-      SELECT
-        submission_id,
-        tool_call_id,
-        author,
-        reason,
-        resolution_json,
-        resolved_at
-      FROM effect_agent_unknown_resolutions
-      WHERE submission_id = ${submissionId}
-      ORDER BY tool_call_id ASC
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+    const found = yield* cached(rows.resolutions.by("submission_id", submissionId), operation);
 
-    return yield* decodeRows(
-      Schema.Array(UnknownResolutionRow),
-      "effect_agent_unknown_resolutions",
-      submissionId,
-      rows,
-    ).pipe(Effect.mapError(internalFailure(operation)));
+    return found.toSorted((a, b) =>
+      a.tool_call_id < b.tool_call_id ? -1 : a.tool_call_id > b.tool_call_id ? 1 : 0,
+    );
   });
 
   const unknownResolutionIntentFromRow = Effect.fn(
@@ -1046,21 +1025,11 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
   ): Effect.fn.Return<string | undefined, LedgerError> {
     const recordId = submissionAbortRecordId(submissionId);
 
-    const rows = yield* sql<Record<string, unknown>>`
-      SELECT record_id
-      FROM effect_agent_canonical_records
-      WHERE thread_id = ${threadId}
-        AND record_id = ${recordId}
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+    const present = yield* journal
+      .hasRecord(threadId, recordId)
+      .pipe(Effect.mapError(internalFailure(operation)));
 
-    const decoded = yield* decodeRows(
-      Schema.Array(CanonicalRecordIdRow),
-      "effect_agent_canonical_records",
-      `${threadId}/${recordId}`,
-      rows,
-    ).pipe(Effect.mapError(internalFailure(operation)));
-
-    return decoded.length === 0 ? undefined : recordId;
+    return present ? recordId : undefined;
   });
 
   const abortIntentFromRow = Effect.fn("DoSubmissionLedger.abortIntentFromRow")(function* (
@@ -1270,10 +1239,10 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             }).pipe(Effect.mapError(internalFailure(operation)));
           }
 
-          const stopped =
-            yield* sql`SELECT thread_id FROM effect_agent_worker_stops WHERE thread_id = ${validated.threadId}`.pipe(
-              Effect.mapError(sqlFailure(operation)),
-            );
+          const stopped = yield* cached(
+            rows.workerStops.by("thread_id", validated.threadId),
+            operation,
+          );
 
           if (stopped.length > 0)
             return yield* AdmissionPolicyError.make({ reason: "refused", code: "worker-stopped" });
@@ -1388,7 +1357,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
               ${workerAdmissionJson},
               ${messageAdmissionJson}
             )
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+           RETURNING *`.pipe(rows.submissions.write, Effect.mapError(internalFailure(operation)));
 
           return yield* decodeAdmissionResult({
             submissionId: mintedSubmissionId,
@@ -1428,7 +1397,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           UPDATE effect_agent_submissions
           SET state = 'ready', ready_at = ${now.iso}
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+         RETURNING *`.pipe(rows.submissions.write, Effect.mapError(internalFailure(operation)));
         yield* retainLifecycle(submission, {
           _tag: "SubmissionReady",
           submissionId: validated.submissionId,
@@ -1657,14 +1626,14 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
                 ${EMPTY_TAIL_DIGEST},
                 ${producerEpoch}
               )
-            `.pipe(Effect.mapError(sqlFailure(operation)));
+             RETURNING *`.pipe(rows.threads.write, Effect.mapError(internalFailure(operation)));
           } else {
             producerEpoch = threads[0].producer_epoch + 1;
             yield* sql`
               UPDATE effect_agent_threads
               SET producer_epoch = ${producerEpoch}
               WHERE thread_id = ${head.thread_id}
-            `.pipe(Effect.mapError(sqlFailure(operation)));
+             RETURNING *`.pipe(rows.threads.write, Effect.mapError(internalFailure(operation)));
           }
 
           const leaseExpiresAt = new Date(now.millis + config.ownershipLeaseDuration).toISOString();
@@ -1691,7 +1660,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
               producer_epoch = excluded.producer_epoch,
               owner_producer_id = excluded.owner_producer_id,
               lease_expires_at = excluded.lease_expires_at
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+           RETURNING *`.pipe(rows.ownership.write, Effect.mapError(internalFailure(operation)));
 
           yield* sql`
             INSERT INTO effect_agent_attempts (
@@ -1716,7 +1685,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
               UPDATE effect_agent_submissions
               SET state = 'running'
               WHERE submission_id = ${head.submission_id}
-            `.pipe(Effect.mapError(sqlFailure(operation)));
+             RETURNING *`.pipe(rows.submissions.write, Effect.mapError(internalFailure(operation)));
           }
 
           const inputPayload = yield* parseStoredJsonText(head.input_json).pipe(
@@ -1773,7 +1742,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           UPDATE effect_agent_submission_ownership
           SET lease_expires_at = ${leaseExpiresAt}
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+         RETURNING *`.pipe(rows.ownership.write, Effect.mapError(internalFailure(operation)));
 
         return yield* decodeOwnershipRenewal({
           ownershipToken: validated.ownershipToken,
@@ -1810,13 +1779,13 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           yield* sql`
           DELETE FROM effect_agent_submission_ownership
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+         RETURNING *`.pipe(rows.ownership.remove, Effect.mapError(internalFailure(operation)));
           if (submission.state === "running") {
             yield* sql`
             UPDATE effect_agent_submissions
             SET state = 'ready'
             WHERE submission_id = ${validated.submissionId}
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+           RETURNING *`.pipe(rows.submissions.write, Effect.mapError(internalFailure(operation)));
           }
         }),
         (error) => error._tag === "OwnershipLost",
@@ -1870,7 +1839,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
               ELSE state
             END
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+         RETURNING *`.pipe(rows.submissions.write, Effect.mapError(internalFailure(operation)));
       }),
     );
     yield* hitFailpoint("ledger:mark-input-applied:after", operation);
@@ -1999,12 +1968,12 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             ${validated.recordDigest},
             ${now.iso}
           )
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+         RETURNING *`.pipe(rows.reservations.write, Effect.mapError(internalFailure(operation)));
         yield* sql`
           UPDATE effect_agent_submissions
           SET state = 'terminalizing'
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+         RETURNING *`.pipe(rows.submissions.write, Effect.mapError(internalFailure(operation)));
 
         return ReservedSettlement.make({
           submissionId: validated.submissionId,
@@ -2103,54 +2072,26 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
 
     yield* hitFailpoint("ledger:finalize-settlement:before", operation);
 
-    // A single statement captures the settled row and its immutable reservation together.
-    // A miss does not authorize finalization: the write path re-reads under its transaction.
-    const replayRows = yield* sql<Record<string, unknown>>`
-      SELECT submission.*, reservation.settlement_id, reservation.outcome,
-        reservation.record_id, reservation.record_json, reservation.record_digest,
-        reservation.reserved_at, reservation.finalized_at
-      FROM effect_agent_submissions AS submission
-      INNER JOIN effect_agent_settlement_reservations AS reservation
-        ON reservation.submission_id = submission.submission_id
-      WHERE submission.submission_id = ${validated.submissionId} AND submission.state = 'settled'
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+    // Read the immutable receipt under the same gate as every local write.
+    const replay = yield* state.read(
+      Effect.gen(function* () {
+        const submission = yield* readSubmission(operation, validated.submissionId);
 
-    if (replayRows.length > 1) {
-      return yield* corruptionFailure(
-        operation,
-        "effect_agent_submissions",
-        validated.submissionId,
-        "A submission primary key returned more than one row.",
-      );
-    }
-    const replayRow = replayRows[0];
+        if (Option.isNone(submission) || submission.value.state !== "settled") return Option.none();
 
-    if (replayRow !== undefined) {
-      const reservations = yield* decodeRows(
-        Schema.Array(ReservationRow),
-        "effect_agent_settlement_reservations",
-        validated.submissionId,
-        replayRows,
-      ).pipe(Effect.mapError(internalFailure(operation)));
+        const finalization = yield* validateFinalization(
+          validated,
+          yield* readReservation(operation, validated.submissionId),
+        );
 
-      const state = yield* validateFinalization(validated, Option.fromUndefinedOr(reservations[0]));
+        return Option.some(yield* replayFinalization(validated, submission.value, finalization));
+      }),
+    );
 
-      const submission = yield* Schema.decodeUnknownEffect(SubmissionRow)(replayRow).pipe(
-        Effect.mapError((error) =>
-          corruptionFailure(
-            operation,
-            "effect_agent_submissions",
-            validated.submissionId,
-            error.message,
-          ),
-        ),
-      );
-
-      const settlement = yield* replayFinalization(validated, submission, state);
-
+    if (Option.isSome(replay)) {
       yield* hitFailpoint("ledger:finalize-settlement:after", operation);
 
-      return settlement;
+      return replay.value;
     }
 
     const settlement = yield* inWriteTransaction(
@@ -2195,8 +2136,9 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           if (pending.length === 0) {
             const sealed =
               yield* sql`INSERT OR IGNORE INTO effect_agent_worker_stops (thread_id, terminal)
-              VALUES (${submission.thread_id}, ${terminal}) RETURNING thread_id`.pipe(
-                Effect.mapError(sqlFailure(operation)),
+              VALUES (${submission.thread_id}, ${terminal}) RETURNING *`.pipe(
+                rows.workerStops.write,
+                Effect.mapError(internalFailure(operation)),
               );
 
             yield* sql`INSERT OR IGNORE INTO effect_agent_abort_intents (submission_id, author, reason, requested_at)
@@ -2204,7 +2146,10 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
               FROM effect_agent_submissions WHERE thread_id = ${submission.thread_id} AND state <> 'settled'
               AND submission_id <> ${submission.submission_id}
               AND (joined_host_submission_id IS NULL OR joined_host_submission_id <> ${submission.submission_id}
-                OR input_applied_record_id IS NULL)`.pipe(Effect.mapError(sqlFailure(operation)));
+                OR input_applied_record_id IS NULL) RETURNING *`.pipe(
+              rows.aborts.write,
+              Effect.mapError(internalFailure(operation)),
+            );
             if (sealed.length > 0) sealedTerminal = terminal;
           }
         }
@@ -2213,16 +2158,16 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           UPDATE effect_agent_submissions
           SET state = 'settled', settled_outcome = ${reservation.outcome}
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+         RETURNING *`.pipe(rows.submissions.write, Effect.mapError(internalFailure(operation)));
         yield* sql`
           UPDATE effect_agent_settlement_reservations
           SET finalized_at = ${now.iso}
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+         RETURNING *`.pipe(rows.reservations.write, Effect.mapError(internalFailure(operation)));
         yield* sql`
           DELETE FROM effect_agent_submission_ownership
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+         RETURNING *`.pipe(rows.ownership.remove, Effect.mapError(internalFailure(operation)));
 
         if (sealedTerminal !== undefined)
           yield* retainWorkerSeal(submission.thread_id, sealedTerminal);
@@ -2248,8 +2193,9 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
   ) {
     const operation = "inspect worker";
 
-    return yield* sql
-      .withTransaction(
+    return yield* state
+      .transaction(
+        sql,
         Effect.gen(function* () {
           const read = Effect.fnUntraced(function* (active: boolean) {
             const rows =
@@ -2269,12 +2215,9 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           const latest = yield* read(false);
           const active = yield* read(true);
 
-          const stops =
-            yield* sql`SELECT terminal FROM effect_agent_worker_stops WHERE thread_id = ${threadId}`.pipe(
-              Effect.mapError(sqlFailure(operation)),
-            );
+          const stops = yield* cached(rows.workerStops.by("thread_id", threadId), operation);
 
-          return yield* Schema.decodeUnknownEffect(Schema.toType(WorkerLedgerState))({
+          return yield* Schema.decodeEffect(Schema.toType(WorkerLedgerState))({
             latest,
             active,
             stopped: stops.length > 0,
@@ -2302,17 +2245,19 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
         const now = yield* currentInstant;
 
         const sealed =
-          yield* sql`INSERT OR IGNORE INTO effect_agent_worker_stops (thread_id) VALUES (${validated.threadId}) RETURNING thread_id`.pipe(
-            Effect.mapError(sqlFailure(operation)),
+          yield* sql`INSERT OR IGNORE INTO effect_agent_worker_stops (thread_id) VALUES (${validated.threadId}) RETURNING *`.pipe(
+            rows.workerStops.write,
+            Effect.mapError(internalFailure(operation)),
           );
 
         yield* sql`INSERT OR IGNORE INTO effect_agent_abort_intents (submission_id, author, reason, requested_at)
         SELECT submission_id, ${validated.author}, 'Worker owner stopped the worker', ${now.iso}
-        FROM effect_agent_submissions WHERE thread_id = ${validated.threadId} AND state <> 'settled'`.pipe(
-          Effect.mapError(sqlFailure(operation)),
+        FROM effect_agent_submissions WHERE thread_id = ${validated.threadId} AND state <> 'settled' RETURNING *`.pipe(
+          rows.aborts.write,
+          Effect.mapError(internalFailure(operation)),
         );
 
-        const rows = yield* sql`SELECT o.submission_id FROM effect_agent_submission_ownership o
+        const owners = yield* sql`SELECT o.submission_id FROM effect_agent_submission_ownership o
         JOIN effect_agent_submissions s ON s.submission_id = o.submission_id
         WHERE s.thread_id = ${validated.threadId} AND s.state <> 'settled'`.pipe(
           Effect.mapError(sqlFailure(operation)),
@@ -2320,7 +2265,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
 
         if (sealed.length > 0) yield* retainWorkerSeal(validated.threadId, null);
 
-        return rows.length;
+        return owners.length;
       }),
     );
   });
@@ -2402,7 +2347,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             ${validated.reason},
             ${now.iso}
           )
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+         RETURNING *`.pipe(rows.aborts.write, Effect.mapError(internalFailure(operation)));
 
         const canonicalRecordId = yield* canonicalAbortRecordId(
           operation,
@@ -2454,10 +2399,10 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
         // The host Attempt already owns the lane; no epoch bump happens here (plan §2.5).
         yield* requireOwnership(operation, host, validated.ownershipToken);
 
-        const stopped =
-          yield* sql`SELECT thread_id FROM effect_agent_worker_stops WHERE thread_id = ${validated.threadId}`.pipe(
-            Effect.mapError(sqlFailure(operation)),
-          );
+        const stopped = yield* cached(
+          rows.workerStops.by("thread_id", validated.threadId),
+          operation,
+        );
 
         if (stopped.length > 0) return [];
 
@@ -2493,7 +2438,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             UPDATE effect_agent_submissions
             SET state = 'joining', joined_host_submission_id = ${validated.hostSubmissionId}
             WHERE submission_id = ${row.submission_id}
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+           RETURNING *`.pipe(rows.submissions.write, Effect.mapError(internalFailure(operation)));
 
           const inputPayload = yield* parseStoredJsonText(row.input_json).pipe(
             Effect.mapError((error) =>
@@ -2578,7 +2523,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             input_applied_sequence = ${validated.sequence},
             state = 'joined'
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+         RETURNING *`.pipe(rows.submissions.write, Effect.mapError(internalFailure(operation)));
       }),
     );
     yield* hitFailpoint("ledger:mark-joined:after", operation);
@@ -2606,7 +2551,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           UPDATE effect_agent_submissions
           SET state = 'ready', joined_host_submission_id = NULL
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+         RETURNING *`.pipe(rows.submissions.write, Effect.mapError(internalFailure(operation)));
       }),
     );
     yield* hitFailpoint("ledger:revert-joining:after", operation);
@@ -2700,13 +2645,13 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
               suspended_reason_json = ${reasonJson},
               suspended_at = ${now.iso}
             WHERE submission_id = ${validated.submissionId}
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+           RETURNING *`.pipe(rows.submissions.write, Effect.mapError(internalFailure(operation)));
           // Suspension ends the ownership period WITHOUT settling: the accepted-work
           // obligation stays owed while the lane consumes no worker permit (plan §2.6).
           yield* sql`
             DELETE FROM effect_agent_submission_ownership
             WHERE submission_id = ${validated.submissionId}
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+           RETURNING *`.pipe(rows.ownership.remove, Effect.mapError(internalFailure(operation)));
 
           yield* retainLifecycle(submission, {
             _tag: "SubmissionSuspended",
@@ -2761,7 +2706,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
         suspended_reason_json = NULL,
         suspended_at = NULL
       WHERE submission_id = ${submission.submission_id}
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+     RETURNING *`.pipe(rows.submissions.write, Effect.mapError(internalFailure(operation)));
     yield* retainLifecycle(submission, {
       _tag: "SubmissionResumed",
       submissionId: yield* decodeSubmissionId(submission.submission_id).pipe(
@@ -2835,7 +2780,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             ${validated.reason},
             ${now.iso}
           )
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+         RETURNING *`.pipe(rows.approvals.write, Effect.mapError(internalFailure(operation)));
         yield* wakeSuspendedIfCovered(operation, submission);
 
         return yield* decodeApprovalDecisionIntent({
@@ -2915,7 +2860,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             unknown_reason = ${submission.unknown_reason ?? validated.reason},
             unknown_tool_call_ids_json = ${idsJson}
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+         RETURNING *`.pipe(rows.submissions.write, Effect.mapError(internalFailure(operation)));
         if (submission.state !== "unknown")
           yield* retainLifecycle(submission, {
             _tag: "SubmissionUnknown",
@@ -3003,7 +2948,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
               ${resolutionJson},
               ${now.iso}
             )
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+           RETURNING *`.pipe(rows.resolutions.write, Effect.mapError(internalFailure(operation)));
 
           const resolution = yield* parseStoredJsonText(resolutionJson).pipe(
             Effect.mapError(internalFailure(operation)),
@@ -3034,7 +2979,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
                 unknown_reason = NULL,
                 unknown_tool_call_ids_json = NULL
               WHERE submission_id = ${validated.submissionId}
-            `.pipe(Effect.mapError(sqlFailure(operation)));
+             RETURNING *`.pipe(rows.submissions.write, Effect.mapError(internalFailure(operation)));
             yield* retainLifecycle(submission, {
               _tag: "SubmissionResumed",
               submissionId: validated.submissionId,
@@ -3110,7 +3055,10 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             ${now.iso}
           )
           ON CONFLICT (parent_submission_id, child_submission_id) DO NOTHING
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+         RETURNING *`.pipe(
+          rows.childSettlements.write,
+          Effect.mapError(internalFailure(operation)),
+        );
 
         if (parent.state !== "suspended" || parent.suspended_reason_json === null) {
           return NOT_WAITING;
@@ -3161,7 +3109,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             suspended_reason_json = NULL,
             suspended_at = NULL
           WHERE submission_id = ${validated.parentSubmissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+         RETURNING *`.pipe(rows.submissions.write, Effect.mapError(internalFailure(operation)));
 
         yield* retainLifecycle(parent, {
           _tag: "SubmissionResumed",
@@ -3264,7 +3212,10 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             ${validated.allocationDigest},
             ${now.iso}
           )
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+         RETURNING *`.pipe(
+          rows.childReservations.write,
+          Effect.mapError(internalFailure(operation)),
+        );
         const inserted = yield* readChildReservation(operation, validated.reservationId);
 
         if (Option.isNone(inserted)) {
@@ -3341,7 +3292,10 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             UPDATE effect_agent_child_reservations
             SET child_submission_id = ${validated.childSubmissionId}
             WHERE reservation_id = ${validated.reservationId}
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+           RETURNING *`.pipe(
+            rows.childReservations.write,
+            Effect.mapError(internalFailure(operation)),
+          );
           const updated = yield* readChildReservation(operation, validated.reservationId);
 
           if (Option.isNone(updated)) {
@@ -3418,7 +3372,10 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             accounting_json = ${accountingJson},
             release_began_at = ${now.iso}
           WHERE reservation_id = ${validated.reservationId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+         RETURNING *`.pipe(
+          rows.childReservations.write,
+          Effect.mapError(internalFailure(operation)),
+        );
         const updated = yield* readChildReservation(operation, validated.reservationId);
 
         if (Option.isNone(updated)) {
@@ -3479,7 +3436,10 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           UPDATE effect_agent_child_reservations
           SET status = 'released', released_at = ${now.iso}
           WHERE reservation_id = ${validated.reservationId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+         RETURNING *`.pipe(
+          rows.childReservations.write,
+          Effect.mapError(internalFailure(operation)),
+        );
         const updated = yield* readChildReservation(operation, validated.reservationId);
 
         if (Option.isNone(updated)) {
@@ -3557,11 +3517,53 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     return [decoded, next] as const;
   });
 
-  const scanNonterminal: Stream.Stream<SubmissionWorkItem, LedgerError> = Stream.paginate<
-    ScanCursor | undefined,
-    SubmissionWorkItem,
-    LedgerError
-  >(undefined, scanPage);
+  const scanNonterminal: Stream.Stream<SubmissionWorkItem, LedgerError> = Stream.unwrap(
+    state.read(
+      Effect.gen(function* () {
+        // Cache only a complete bounded active set. Large hosts keep the paged scan.
+        const active = yield* cached(
+          workRows.matching(
+            "nonterminal",
+            (row) => row.state !== "settled",
+            sql`SELECT submission_id, thread_id, queue_sequence, principal, idempotency_key,
+              deployment_id, receipt_id, state
+              FROM effect_agent_submissions WHERE state <> 'settled' LIMIT 129`,
+            128,
+          ),
+          "ledger scan nonterminal",
+        );
+
+        if (active.length > 128)
+          return Stream.paginate<ScanCursor | undefined, SubmissionWorkItem, LedgerError>(
+            undefined,
+            scanPage,
+          );
+
+        const sorted = [...active].sort((left, right) =>
+          left.thread_id < right.thread_id
+            ? -1
+            : left.thread_id > right.thread_id
+              ? 1
+              : left.queue_sequence - right.queue_sequence,
+        );
+
+        const work = yield* Schema.decodeEffect(Schema.Array(SubmissionWorkItem))(
+          sorted.map((row) => ({
+            submissionId: row.submission_id,
+            threadId: row.thread_id,
+            queueSequence: row.queue_sequence,
+            principal: row.principal,
+            idempotencyKey: row.idempotency_key,
+            deploymentId: row.deployment_id,
+            receiptId: row.receipt_id,
+            state: row.state,
+          })),
+        ).pipe(Effect.mapError(internalFailure("ledger scan nonterminal")));
+
+        return Stream.fromIterable(work);
+      }),
+    ),
+  );
 
   const readAbortIntentForSubmission: SubmissionLedger["Service"]["readAbortIntent"] = Effect.fn(
     "DoSubmissionLedger.readAbortIntentForSubmission",
@@ -3572,65 +3574,15 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       Effect.mapError(internalFailure(operation)),
     );
 
-    const recordId = submissionAbortRecordId(validated.submissionId);
+    return yield* state.read(
+      Effect.gen(function* () {
+        const submission = yield* requireSubmission(operation, validated.submissionId);
+        const intent = yield* readAbortIntent(operation, validated.submissionId);
 
-    const rows = yield* sql<Record<string, unknown>>`
-      SELECT
-        submission.submission_id,
-        abort.submission_id AS abort_submission_id,
-        abort.author,
-        abort.reason,
-        abort.requested_at,
-        canonical.record_id AS canonical_record_id
-      FROM effect_agent_submissions AS submission
-      LEFT JOIN effect_agent_abort_intents AS abort
-        ON abort.submission_id = submission.submission_id
-      LEFT JOIN effect_agent_canonical_records AS canonical
-        ON canonical.thread_id = submission.thread_id
-          AND canonical.record_id = ${recordId}
-      WHERE submission.submission_id = ${validated.submissionId}
-    `.pipe(Effect.mapError(sqlFailure(operation)));
-
-    const decoded = yield* decodeRows(
-      Schema.Array(AbortIntentLookupRow),
-      "effect_agent_abort_intents",
-      validated.submissionId,
-      rows,
-    ).pipe(Effect.mapError(internalFailure(operation)));
-
-    if (decoded.length === 0) {
-      return yield* LedgerError.make({
-        operation,
-        message: `Unknown submission ${validated.submissionId}.`,
-      });
-    }
-    if (decoded.length !== 1) {
-      return yield* corruptionFailure(
-        operation,
-        "effect_agent_abort_intents",
-        validated.submissionId,
-        "An abort intent lookup returned more than one row.",
-      );
-    }
-    const row = decoded[0];
-
-    if (row.abort_submission_id === null) return undefined;
-
-    return yield* decodeAbortIntent({
-      submissionId: row.abort_submission_id,
-      author: row.author,
-      reason: row.reason,
-      requestedAt: row.requested_at,
-      ...(row.canonical_record_id === null ? {} : { canonicalRecordId: row.canonical_record_id }),
-    }).pipe(
-      Effect.mapError((error) =>
-        corruptionFailure(
-          operation,
-          "effect_agent_abort_intents",
-          validated.submissionId,
-          error.message,
-        ),
-      ),
+        return Option.isNone(intent)
+          ? undefined
+          : yield* abortIntentFromRow(operation, submission, validated.submissionId, intent.value);
+      }),
     );
   });
 
@@ -3643,235 +3595,233 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       request,
     ).pipe(Effect.mapError(internalFailure(operation)));
 
-    return yield* sql
-      .withTransaction(
-        Effect.gen(function* () {
-          const submissionRow = yield* requireSubmission(operation, validated.submissionId);
-          const submission = yield* decodeSubmissionSnapshot(operation, submissionRow);
+    return yield* state.read(
+      Effect.gen(function* () {
+        const submissionRow = yield* requireSubmission(operation, validated.submissionId);
+        const submission = yield* decodeSubmissionSnapshot(operation, submissionRow);
 
-          let ownership: OwnershipSnapshot | undefined;
-          const ownershipRow = yield* readOwnership(operation, validated.submissionId);
+        let ownership: OwnershipSnapshot | undefined;
+        const ownershipRow = yield* readOwnership(operation, validated.submissionId);
 
-          if (Option.isSome(ownershipRow)) {
-            ownership = yield* decodeOwnershipSnapshot({
-              attemptId: ownershipRow.value.attempt_id,
-              ownerProducerId: ownershipRow.value.owner_producer_id,
-              producerEpoch: ownershipRow.value.producer_epoch,
-              leaseExpiresAt: ownershipRow.value.lease_expires_at,
-            }).pipe(Effect.mapError(internalFailure(operation)));
-          }
+        if (Option.isSome(ownershipRow)) {
+          ownership = yield* decodeOwnershipSnapshot({
+            attemptId: ownershipRow.value.attempt_id,
+            ownerProducerId: ownershipRow.value.owner_producer_id,
+            producerEpoch: ownershipRow.value.producer_epoch,
+            leaseExpiresAt: ownershipRow.value.lease_expires_at,
+          }).pipe(Effect.mapError(internalFailure(operation)));
+        }
 
-          let inputApplied: InputAppliedMarker | undefined;
+        let inputApplied: InputAppliedMarker | undefined;
 
-          if (
-            submissionRow.input_applied_record_id !== null &&
-            submissionRow.input_applied_sequence !== null
-          ) {
-            inputApplied = yield* decodeInputAppliedMarker({
-              recordId: submissionRow.input_applied_record_id,
-              sequence: submissionRow.input_applied_sequence,
-            }).pipe(Effect.mapError(internalFailure(operation)));
-          }
+        if (
+          submissionRow.input_applied_record_id !== null &&
+          submissionRow.input_applied_sequence !== null
+        ) {
+          inputApplied = yield* decodeInputAppliedMarker({
+            recordId: submissionRow.input_applied_record_id,
+            sequence: submissionRow.input_applied_sequence,
+          }).pipe(Effect.mapError(internalFailure(operation)));
+        }
 
-          let reservation: SettlementReservationSnapshot | undefined;
-          const reservationRow = yield* readReservation(operation, validated.submissionId);
+        let reservation: SettlementReservationSnapshot | undefined;
+        const reservationRow = yield* readReservation(operation, validated.submissionId);
 
-          if (Option.isSome(reservationRow)) {
-            const record = yield* decodeRecordEnvelopeText(reservationRow.value.record_json).pipe(
-              Effect.mapError((error) =>
-                corruptionFailure(
-                  operation,
-                  "effect_agent_settlement_reservations",
-                  validated.submissionId,
-                  error.message,
-                ),
+        if (Option.isSome(reservationRow)) {
+          const record = yield* decodeRecordEnvelopeText(reservationRow.value.record_json).pipe(
+            Effect.mapError((error) =>
+              corruptionFailure(
+                operation,
+                "effect_agent_settlement_reservations",
+                validated.submissionId,
+                error.message,
               ),
-            );
+            ),
+          );
 
-            const settlementId = yield* Schema.decodeEffect(
-              SettlementReservationSnapshot.fields.settlementId,
-            )(reservationRow.value.settlement_id).pipe(Effect.mapError(internalFailure(operation)));
+          const settlementId = yield* Schema.decodeEffect(
+            SettlementReservationSnapshot.fields.settlementId,
+          )(reservationRow.value.settlement_id).pipe(Effect.mapError(internalFailure(operation)));
 
-            reservation = SettlementReservationSnapshot.make({
-              settlementId,
-              outcome: reservationRow.value.outcome,
-              record,
-              recordDigest: reservationRow.value.record_digest,
-              finalized: reservationRow.value.finalized_at !== null,
-            });
-          }
+          reservation = SettlementReservationSnapshot.make({
+            settlementId,
+            outcome: reservationRow.value.outcome,
+            record,
+            recordDigest: reservationRow.value.record_digest,
+            finalized: reservationRow.value.finalized_at !== null,
+          });
+        }
 
-          let abortIntent: AbortIntent | undefined;
-          const abortRow = yield* readAbortIntent(operation, validated.submissionId);
+        let abortIntent: AbortIntent | undefined;
+        const abortRow = yield* readAbortIntent(operation, validated.submissionId);
 
-          if (Option.isSome(abortRow)) {
-            abortIntent = yield* abortIntentFromRow(
-              operation,
-              submissionRow,
-              validated.submissionId,
-              abortRow.value,
-            );
-          }
-
-          // Host-side view: every Submission whose host linkage points here, in queue order
-          // (the terminalize loop settles them with the host outcome, DUR-002).
-          const joinRows = yield* sql<Record<string, unknown>>`
-            SELECT ${sql.literal(SUBMISSION_COLUMNS)}
-            FROM effect_agent_submissions
-            WHERE joined_host_submission_id = ${validated.submissionId}
-            ORDER BY queue_sequence ASC
-          `.pipe(Effect.mapError(sqlFailure(operation)));
-
-          const joinSubmissions = yield* decodeSubmissionRows(
+        if (Option.isSome(abortRow)) {
+          abortIntent = yield* abortIntentFromRow(
             operation,
+            submissionRow,
             validated.submissionId,
-            joinRows,
+            abortRow.value,
           );
+        }
 
-          const joins = yield* Effect.forEach(joinSubmissions, (row) =>
-            decodeJoinSnapshot({
-              submissionId: row.submission_id,
-              state: row.state,
-              hostSubmissionId: validated.submissionId,
-            }).pipe(Effect.mapError(internalFailure(operation))),
-          );
+        // Host-side view: every Submission whose host linkage points here, in queue order
+        // (the terminalize loop settles them with the host outcome, DUR-002).
+        const joinRows = (yield* cached(
+          rows.submissions.by("joined_host_submission_id", validated.submissionId),
+          operation,
+        ))
+          .filter((row) => row.joined_host_submission_id === validated.submissionId)
+          .sort((a, b) => a.queue_sequence - b.queue_sequence);
 
-          let hostSubmissionId: RecoverySnapshot["hostSubmissionId"];
+        const joinSubmissions = yield* decodeSubmissionRows(
+          operation,
+          validated.submissionId,
+          joinRows,
+        );
 
-          if (submissionRow.joined_host_submission_id !== null) {
-            hostSubmissionId = yield* decodeSubmissionId(
-              submissionRow.joined_host_submission_id,
-            ).pipe(Effect.mapError(internalFailure(operation)));
-          }
+        const joins = yield* Effect.forEach(joinSubmissions, (row) =>
+          decodeJoinSnapshot({
+            submissionId: row.submission_id,
+            state: row.state,
+            hostSubmissionId: validated.submissionId,
+          }).pipe(Effect.mapError(internalFailure(operation))),
+        );
 
-          let suspension: SuspensionSnapshot | undefined;
+        let hostSubmissionId: RecoverySnapshot["hostSubmissionId"];
 
-          if (submissionRow.suspended_reason_json !== null && submissionRow.suspended_at !== null) {
-            const reason = yield* parseStoredJsonText(submissionRow.suspended_reason_json).pipe(
-              Effect.mapError((error) =>
-                corruptionFailure(
-                  operation,
-                  "effect_agent_submissions",
-                  validated.submissionId,
-                  error.message,
-                ),
+        if (submissionRow.joined_host_submission_id !== null) {
+          hostSubmissionId = yield* decodeSubmissionId(
+            submissionRow.joined_host_submission_id,
+          ).pipe(Effect.mapError(internalFailure(operation)));
+        }
+
+        let suspension: SuspensionSnapshot | undefined;
+
+        if (submissionRow.suspended_reason_json !== null && submissionRow.suspended_at !== null) {
+          const reason = yield* parseStoredJsonText(submissionRow.suspended_reason_json).pipe(
+            Effect.mapError((error) =>
+              corruptionFailure(
+                operation,
+                "effect_agent_submissions",
+                validated.submissionId,
+                error.message,
               ),
-            );
+            ),
+          );
 
-            suspension = yield* decodeSuspensionSnapshot({
-              reason,
-              suspendedAt: submissionRow.suspended_at,
-            }).pipe(
-              Effect.mapError((error) =>
-                corruptionFailure(
-                  operation,
-                  "effect_agent_submissions",
-                  validated.submissionId,
-                  error.message,
-                ),
+          suspension = yield* decodeSuspensionSnapshot({
+            reason,
+            suspendedAt: submissionRow.suspended_at,
+          }).pipe(
+            Effect.mapError((error) =>
+              corruptionFailure(
+                operation,
+                "effect_agent_submissions",
+                validated.submissionId,
+                error.message,
               ),
-            );
-          }
-
-          const decisionRows = yield* readApprovalDecisions(operation, validated.submissionId);
-
-          const approvalDecisions = yield* Effect.forEach(decisionRows, (row) =>
-            approvalIntentFromRow(operation, row),
+            ),
           );
+        }
 
-          const resolutionRows = yield* readUnknownResolutions(operation, validated.submissionId);
+        const decisionRows = yield* readApprovalDecisions(operation, validated.submissionId);
 
-          const unknownResolutions = yield* Effect.forEach(resolutionRows, (row) =>
-            unknownResolutionIntentFromRow(operation, row),
-          );
+        const approvalDecisions = yield* Effect.forEach(decisionRows, (row) =>
+          approvalIntentFromRow(operation, row),
+        );
 
-          // Parent-side subagent view: this Submission's child budget reservations in parent
-          // Tool Call order, plus each attached child's current lane state (a disposable
-          // derived view; canonical records stay the recovery truth, DUR-015). The child's
-          // state comes from its local row when this store holds it, and otherwise from the
-          // durable cross-store settlement marker; a child that is neither local nor marked
-          // settled is enriched by the routed per-child lookup one layer out (plan §1.3).
-          const childReservationRows = yield* sql<Record<string, unknown>>`
-            SELECT ${sql.literal(CHILD_RESERVATION_COLUMNS)}
-            FROM effect_agent_child_reservations
-            WHERE parent_submission_id = ${validated.submissionId}
-            ORDER BY parent_tool_call_id ASC
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+        const resolutionRows = yield* readUnknownResolutions(operation, validated.submissionId);
 
-          const decodedChildReservations = yield* decodeChildReservationRows(
-            operation,
-            validated.submissionId,
-            childReservationRows,
-          );
+        const unknownResolutions = yield* Effect.forEach(resolutionRows, (row) =>
+          unknownResolutionIntentFromRow(operation, row),
+        );
 
-          const childReservations = yield* Effect.forEach(decodedChildReservations, (row) =>
-            childReservationSnapshotFromRow(operation, row),
-          );
+        // Parent-side subagent view: this Submission's child budget reservations in parent
+        // Tool Call order, plus each attached child's current lane state (a disposable
+        // derived view; canonical records stay the recovery truth, DUR-015). The child's
+        // state comes from its local row when this store holds it, and otherwise from the
+        // durable cross-store settlement marker; a child that is neither local nor marked
+        // settled is enriched by the routed per-child lookup one layer out (plan §1.3).
+        const childReservationRows = (yield* cached(
+          rows.childReservations.by("parent_submission_id", validated.submissionId),
+          operation,
+        ))
+          .filter((row) => row.parent_submission_id === validated.submissionId)
+          .sort((a, b) => a.parent_tool_call_id.localeCompare(b.parent_tool_call_id));
 
-          const markers = yield* readChildSettlementMarkers(operation, validated.submissionId);
-          const markersByChild = new Map(markers.map((row) => [row.child_submission_id, row]));
-          const childAttachments: Array<ChildAttachmentSnapshot> = [];
+        const decodedChildReservations = yield* decodeChildReservationRows(
+          operation,
+          validated.submissionId,
+          childReservationRows,
+        );
 
-          for (const row of decodedChildReservations) {
-            if (row.child_submission_id === null) continue;
-            const child = yield* readSubmission(operation, row.child_submission_id);
+        const childReservations = yield* Effect.forEach(decodedChildReservations, (row) =>
+          childReservationSnapshotFromRow(operation, row),
+        );
 
-            if (Option.isSome(child)) {
-              childAttachments.push(
-                yield* decodeChildAttachmentSnapshot({
-                  toolCallId: row.parent_tool_call_id,
-                  childSubmissionId: row.child_submission_id,
-                  childState: child.value.state,
-                  ...(child.value.settled_outcome === null
-                    ? {}
-                    : { childOutcome: child.value.settled_outcome }),
-                }).pipe(Effect.mapError(internalFailure(operation))),
-              );
-              continue;
-            }
-            const marker = markersByChild.get(row.child_submission_id);
+        const markers = yield* readChildSettlementMarkers(operation, validated.submissionId);
+        const markersByChild = new Map(markers.map((row) => [row.child_submission_id, row]));
+        const childAttachments: Array<ChildAttachmentSnapshot> = [];
 
-            if (marker === undefined) continue;
+        for (const row of decodedChildReservations) {
+          if (row.child_submission_id === null) continue;
+          const child = yield* readSubmission(operation, row.child_submission_id);
+
+          if (Option.isSome(child)) {
             childAttachments.push(
               yield* decodeChildAttachmentSnapshot({
                 toolCallId: row.parent_tool_call_id,
                 childSubmissionId: row.child_submission_id,
-                childState: "settled",
-                ...(marker.child_outcome === null ? {} : { childOutcome: marker.child_outcome }),
+                childState: child.value.state,
+                ...(child.value.settled_outcome === null
+                  ? {}
+                  : { childOutcome: child.value.settled_outcome }),
               }).pipe(Effect.mapError(internalFailure(operation))),
             );
+            continue;
           }
+          const marker = markersByChild.get(row.child_submission_id);
 
-          let parentLinkage: ParentLinkage | undefined;
+          if (marker === undefined) continue;
+          childAttachments.push(
+            yield* decodeChildAttachmentSnapshot({
+              toolCallId: row.parent_tool_call_id,
+              childSubmissionId: row.child_submission_id,
+              childState: "settled",
+              ...(marker.child_outcome === null ? {} : { childOutcome: marker.child_outcome }),
+            }).pipe(Effect.mapError(internalFailure(operation))),
+          );
+        }
 
-          if (
-            submissionRow.parent_submission_id !== null &&
-            submissionRow.parent_tool_call_id !== null
-          ) {
-            parentLinkage = yield* decodeParentLinkage({
-              parentSubmissionId: submissionRow.parent_submission_id,
-              parentToolCallId: submissionRow.parent_tool_call_id,
-            }).pipe(Effect.mapError(internalFailure(operation)));
-          }
+        let parentLinkage: ParentLinkage | undefined;
 
-          return RecoverySnapshot.make({
-            submission,
-            joins,
-            approvalDecisions,
-            unknownResolutions,
-            childReservations,
-            childAttachments,
-            ...(parentLinkage === undefined ? {} : { parentLinkage }),
-            ...(hostSubmissionId === undefined ? {} : { hostSubmissionId }),
-            ...(suspension === undefined ? {} : { suspension }),
-            ...(ownership === undefined ? {} : { ownership }),
-            ...(inputApplied === undefined ? {} : { inputApplied }),
-            ...(reservation === undefined ? {} : { reservation }),
-            ...(abortIntent === undefined ? {} : { abortIntent }),
-          });
-        }),
-      )
-      .pipe(Effect.catchTag("SqlError", (error) => Effect.fail(sqlFailure(operation)(error))));
+        if (
+          submissionRow.parent_submission_id !== null &&
+          submissionRow.parent_tool_call_id !== null
+        ) {
+          parentLinkage = yield* decodeParentLinkage({
+            parentSubmissionId: submissionRow.parent_submission_id,
+            parentToolCallId: submissionRow.parent_tool_call_id,
+          }).pipe(Effect.mapError(internalFailure(operation)));
+        }
+
+        return RecoverySnapshot.make({
+          submission,
+          joins,
+          approvalDecisions,
+          unknownResolutions,
+          childReservations,
+          childAttachments,
+          ...(parentLinkage === undefined ? {} : { parentLinkage }),
+          ...(hostSubmissionId === undefined ? {} : { hostSubmissionId }),
+          ...(suspension === undefined ? {} : { suspension }),
+          ...(ownership === undefined ? {} : { ownership }),
+          ...(inputApplied === undefined ? {} : { inputApplied }),
+          ...(reservation === undefined ? {} : { reservation }),
+          ...(abortIntent === undefined ? {} : { abortIntent }),
+        });
+      }),
+    );
   });
 
   return Context.make(

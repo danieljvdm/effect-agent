@@ -40,7 +40,7 @@ const withFixture = <A, E>(
   ).pipe(Effect.provide(NodeFileSystem.layer));
 
 describe("SQLite ledger read contracts", () => {
-  for (const test of ledgerReadCases) it.effect(test.name, () => withFixture(test.run));
+  for (const test of ledgerReadCases()) it.effect(test.name, () => withFixture(test.run));
 
   it.effect("replays finalized state while another connection holds BEGIN IMMEDIATE", () =>
     Effect.scoped(

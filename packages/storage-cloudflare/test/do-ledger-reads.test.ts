@@ -8,13 +8,15 @@ import { describe, it } from "vite-plus/test";
 import { ledgerReadCases } from "../../../test/fixtures/ledger-read-contracts.ts";
 import { DoStorageFailpoint } from "../src/DoStorageFailpoint.ts";
 import { submissionLedgerLayer } from "../src/DoSubmissionLedger.ts";
-import { storageConfigLayer } from "../src/DoThreadStore.ts";
+import { invalidate, storageConfigLayer } from "../src/DoThreadStore.ts";
 import { withThreadStorage } from "./harness.ts";
 
 let nextId = 0;
 
 const withFixture = <A, E>(
-  effect: Effect.Effect<A, E, SubmissionLedger | SqlClient.SqlClient | Crypto.Crypto>,
+  build: (
+    storage: DurableObjectStorage,
+  ) => Effect.Effect<A, E, SubmissionLedger | SqlClient.SqlClient | Crypto.Crypto>,
 ) =>
   withThreadStorage(`ledger-reads-${nextId++}`, (storage) =>
     Effect.gen(function* () {
@@ -27,12 +29,13 @@ const withFixture = <A, E>(
         DoStorageFailpoint.layer,
       );
 
-      return yield* effect.pipe(
+      return yield* build(storage).pipe(
         Effect.provide(submissionLedgerLayer.pipe(Layer.provideMerge(deps))),
       );
     }).pipe(Effect.provide(SqliteClient.layer({ storage }))),
   );
 
 describe("Durable Object ledger read contracts", () => {
-  for (const test of ledgerReadCases) it(test.name, () => withFixture(test.run));
+  for (const [index, test] of ledgerReadCases().entries())
+    it(test.name, () => withFixture((storage) => ledgerReadCases(invalidate(storage))[index].run));
 });

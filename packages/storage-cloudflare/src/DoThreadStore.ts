@@ -72,6 +72,7 @@ import {
   RawReadRequest,
   type DoJournal,
 } from "./internal/do-journal.ts";
+import { invalidateOwnedState } from "./internal/owned-state.ts";
 import { isAppendContention, withStorageSpan } from "./internal/storage-span.ts";
 
 /**
@@ -213,12 +214,18 @@ const encodeCheckpoint = Effect.fn(function* (
   );
 });
 
-const decodeEnvelope = Effect.fn(function* (row: {
+const envelopes = new WeakMap<object, CanonicalRecordEnvelope>();
+
+const decodeEnvelope = Effect.fnUntraced(function* (row: {
   readonly batch_id: string;
   readonly thread_id: string;
   readonly record_json: string;
   readonly sequence: CanonicalSequence;
 }) {
+  const cached = envelopes.get(row);
+
+  if (cached !== undefined) return cached;
+
   const record = yield* Schema.decodeEffect(Schema.fromJsonString(CanonicalRecord))(
     row.record_json,
   ).pipe(
@@ -256,13 +263,17 @@ const decodeEnvelope = Effect.fn(function* (row: {
     row.batch_id,
   ).pipe(Effect.mapError((error) => schemaStoreError("decode batch identity", error)));
 
-  return CanonicalRecordEnvelope.make({
+  const envelope = CanonicalRecordEnvelope.make({
     threadId,
     batchId,
     sequence: row.sequence,
     offset,
     record,
   });
+
+  envelopes.set(row, envelope);
+
+  return envelope;
 });
 
 const decodeCheckpoint = Effect.fn(function* (
@@ -1069,3 +1080,10 @@ export const layer = (
       ),
     ),
   ).pipe(Layer.provide(storageConfigLayer(options)));
+
+/**
+ * Discard the Object's derived thread and ledger state after direct SQL maintenance.
+ * Quiesce port operations during the raw write and invalidation, and enroll the write with
+ * the host mutation gate. Ordinary ThreadStore/SubmissionLedger writes maintain this view.
+ */
+export const invalidate = invalidateOwnedState;

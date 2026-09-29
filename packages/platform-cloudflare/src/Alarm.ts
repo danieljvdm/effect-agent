@@ -81,20 +81,27 @@ const alarmFailure =
 
 // SQL and raw KV/alarm operations share one physical SQLite transaction. Reserve its
 // connection for each short storage operation, never around a mutation or snapshot body.
-const makeStorageEffect = Effect.map(
-  SqlClient,
-  (sql) =>
-    <A, R>(operation: string, execute: Effect.Effect<A, DurableAlarmError, R>) =>
-      Effect.flatMap(Effect.serviceOption(sql.transactionService), (current) => {
-        const body = Effect.uninterruptible(execute);
+const makeStorageEffect = Effect.gen(function* () {
+  const sql = yield* SqlClient;
+  const { ctx } = yield* DurableObjectContext;
+  const invalidate = Effect.sync(() => DueQueue.invalidate(ctx.storage.sql));
 
-        return current._tag === "Some"
-          ? body
-          : Effect.scoped(
-              Effect.andThen(sql.reserve.pipe(Effect.mapError(alarmFailure(operation))), body),
-            );
-      }),
-);
+  return <A, R>(operation: string, execute: Effect.Effect<A, DurableAlarmError, R>) =>
+    Effect.flatMap(Effect.serviceOption(sql.transactionService), (current) => {
+      const body = Effect.uninterruptible(execute);
+
+      // An enclosing source transaction can still roll back after a successful schedule.
+      // Never retain its speculative queue view beyond this nested storage operation.
+      return current._tag === "Some"
+        ? body.pipe(Effect.ensuring(invalidate))
+        : Effect.scoped(
+            Effect.andThen(
+              sql.reserve.pipe(Effect.mapError(alarmFailure(operation))),
+              body.pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? invalidate : Effect.void))),
+            ),
+          );
+    });
+});
 
 const makeStorageOperation = Effect.map(
   makeStorageEffect,

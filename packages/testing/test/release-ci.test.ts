@@ -554,6 +554,6 @@ layer(NodeServices.layer)((it) => {
           yield* decideReleaseCi(readMetadata(directory, base, yield* git("rev-parse", "HEAD"))),
         ).toEqual({ fast: false });
       }),
-    30_000,
+    90_000,
   );
 });

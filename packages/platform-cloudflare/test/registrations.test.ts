@@ -4,6 +4,7 @@ import {
   DurableObjectContext,
 } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
+import { invalidate } from "@effect-agent/storage-cloudflare/do-thread-store";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Context, Effect, Layer, Option } from "effect";
@@ -83,6 +84,7 @@ it("keeps local submission lookups inside the physical owner, including corrupt 
         const foreignId = SubmissionId.make(`0198f6c0-0000-7000-8000-000000000001:${foreign}`);
 
         yield* sql`UPDATE effect_agent_submissions SET submission_id=${foreignId} WHERE submission_id=${owned.submissionId}`;
+        yield* invalidate(state.storage);
         let queries = 0;
 
         const rejected = yield* ports.lookupSubmission(foreignId).pipe(
@@ -103,17 +105,20 @@ it("keeps local submission lookups inside the physical owner, including corrupt 
         ).toMatchObject({ _tag: "Failure", failure: { _tag: "LedgerError" } });
 
         yield* sql`UPDATE effect_agent_submissions SET submission_id=${owned.submissionId},thread_id=${foreign} WHERE submission_id=${foreignId}`;
+        yield* invalidate(state.storage);
         expect(yield* ports.lookupSubmission(owned.submissionId).pipe(Effect.result)).toMatchObject(
           { _tag: "Failure", failure: { _tag: "LedgerError" } },
         );
         const opaqueId = SubmissionId.make("opaque-local-submission");
 
         yield* sql`UPDATE effect_agent_submissions SET submission_id=${opaqueId} WHERE submission_id=${owned.submissionId}`;
+        yield* invalidate(state.storage);
         expect(yield* ports.lookupSubmission(opaqueId).pipe(Effect.result)).toMatchObject({
           _tag: "Failure",
           failure: { _tag: "LedgerError" },
         });
         yield* sql`UPDATE effect_agent_submissions SET thread_id=${thread} WHERE submission_id=${opaqueId}`;
+        yield* invalidate(state.storage);
         expect(Option.getOrThrow(yield* ports.lookupSubmission(opaqueId)).threadId).toBe(thread);
       }).pipe(Effect.provide(BrowserCrypto.layer), Effect.scoped),
     ),
