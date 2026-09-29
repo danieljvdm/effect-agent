@@ -1,5 +1,14 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.147
+
+### Patch Changes
+
+- [#684](https://github.com/danieljvdm/effect-agent/pull/684) [`fb99576`](https://github.com/danieljvdm/effect-agent/commit/fb99576a6f9911461074dbcab2eb789fa4548c9a) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reassess earlier blockers for evidence that they are fixed, refuted, or obsolete, and identify unresolved reviews with their original titles, dates, commits, and links. Avoid redundant diff and status reads when the review already has the evidence it needs.
+
+- Updated dependencies [[`27877c8`](https://github.com/danieljvdm/effect-agent/commit/27877c820b42cbffcbeecca42dc7c4b6f4a382cc), [`af24505`](https://github.com/danieljvdm/effect-agent/commit/af2450560f185e75d725a425349e9f611741645c)]:
+  - effect-agent@0.1.0-beta.147
+
 ## 0.1.0-beta.146
 
 ### Patch Changes

@@ -1,5 +1,13 @@
 # effect-agent
 
+## 0.1.0-beta.147
+
+### Patch Changes
+
+- [#683](https://github.com/danieljvdm/effect-agent/pull/683) [`27877c8`](https://github.com/danieljvdm/effect-agent/commit/27877c820b42cbffcbeecca42dc7c4b6f4a382cc) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Preserve reusable history prefixes for xAI Responses and honor native model support for chronological system instructions. Keep Anthropic instructions grouped until a capable upstream adapter is installed.
+
+- [#687](https://github.com/danieljvdm/effect-agent/pull/687) [`af24505`](https://github.com/danieljvdm/effect-agent/commit/af2450560f185e75d725a425349e9f611741645c) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Expose the current start admission to worker authorization, policy and budget hooks during preparation and synchronous delivery. Keep retries and changed source tails subject to fresh authorization.
+
 ## 0.1.0-beta.146
 
 ### Minor Changes
