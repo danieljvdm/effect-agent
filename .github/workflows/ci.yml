@@ -27,9 +27,14 @@ env:
 jobs:
   release-proof:
     name: Verify release equivalence
-    # Eligibility is only a cost filter. The trusted base verifier checks every
-    # changed byte/mode, current PR revisions, and ordinary base CI via the API.
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.ref == 'changeset-release/main' && github.event.pull_request.head.repo.full_name == github.repository }}
+    # Eligibility is only a cost filter. Ordinary main pushes start CI without
+    # installing a verifier that only recognizes version merges. The trusted
+    # base verifier still checks every changed byte/mode and all CI evidence.
+    if: >-
+      ${{ github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore: version packages') ||
+          github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main' &&
+          github.event.pull_request.head.ref == 'changeset-release/main' &&
+          github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 3
     # Setup/API failures must select ordinary CI, including bootstrap before this

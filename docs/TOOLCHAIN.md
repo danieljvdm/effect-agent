@@ -181,8 +181,9 @@ Edit those files to change its examples. A `twoslash` fence enables type hovers 
 validation during `vp run docs:build`. Relative imports resolve from that snippet directory.
 
 Twoslash uses the pinned `typescript-twoslash` JavaScript compiler API; repository checks use
-TypeScript 7. Production builds reuse Twoslash compiler and filesystem caches within the process;
-the dev server disables both so imported snippet edits remain visible.
+TypeScript 7. Production builds share successful snippet checks between client and server
+rendering and reuse compiler and filesystem state within the process. Each build starts empty;
+the dev server disables these caches so imported snippet edits remain visible.
 Keep compiler validation enabled. Do not suppress errors with `noErrors` or
 `noErrorValidation`.
 
@@ -225,13 +226,15 @@ The project is in prerelease mode. Leaving it requires an explicit release decis
 `vp run changeset pre exit`.
 
 Use `vp run changeset` to describe a consumer-visible change.
-After successful CI on the current `main` revision, `.github/workflows/release.yml` maintains the
-version PR. Its source baseline is already complete when the PR's release metadata proof runs.
+Each push to `main` starts `.github/workflows/release.yml` updating the version PR alongside
+source CI. The version PR reuses a completed source baseline when available and otherwise runs
+ordinary CI; its `ready` check still requires every gate.
 After that PR merges and its exact main revision passes CI, the workflow publishes through npm
 trusted publishing with provenance. PR updates and publication use separate queues.
 
 ```text
-version PR head ──► CI + release gates (continuity, hosted checkout) ──► ready ──► merge
+main push ──┬──► source CI
+            └──► version PR ──► CI + release gates ──► ready ──► merge
 merged main ──► CI ──► release:plan ──► gates only if the tree is not the gated head ──► npm
 ```
 
@@ -249,7 +252,7 @@ For the [context continuity evaluation](../tooling/context-continuity-eval/READM
 as a repository variable; the workflow explicitly selects `gpt-6-astra` by default. Each suite has a
 conservative $10 spending limit. Nightly and release gate jobs select one existing explicit-rollover
 profile; manual dispatch may select one bounded SQLite pressure/restart profile. Cloudflare and
-full-capacity coverage require separate explicit preparation. PR checks are deterministic and
+full-capacity coverage require separate explicit preparation. Ordinary PR checks are deterministic and
 never call a model.
 Each attempt preserves its own evidence artifact, including failures. This gate proves the
 documented continuity scenario; it does not certify large-history startup or Cloudflare host
@@ -562,7 +565,8 @@ dependencies run from that base, with read-only contents, Actions and pull-reque
 Candidate files are read as Git objects; the proof does not execute candidate code.
 
 ```text
-main push -> ordinary source CI -> version PR: proof or ordinary CI + build + package checks
+main push -> ordinary source CI and version PR in parallel
+version PR -> proof or ordinary CI + build + package checks
 successful source + PR CI -> version merge: proof + restore PR build + package checks
 successful main CI -> publication: restore main build + reuse or rerun release gates -> npm
 ```
@@ -589,8 +593,9 @@ fast path. No manifest or lockfile is globally excluded from Vite Task inputs.
 The version PR still receives a frozen install, all package/example/docs/Action builds, formatting,
 export and purity checks, and `ci:release-packages`. Main repeats the frozen install, formatting,
 export, purity and package checks after restoring that exact build. Package inspection temporarily prepares the
-same npm-ready manifests used by publication and checks `npm pack --dry-run --ignore-scripts`
-for the actual version and every exported JavaScript and declaration file. Source manifests and
+same npm-ready manifests used by publication and runs `npm pack --dry-run --ignore-scripts`
+for at most four packages concurrently, checking the actual version and every exported JavaScript
+and declaration file. Source manifests and
 prerelease state are restored. A failed retained check fails `ready`. This path neither publishes
 nor calls paid models; the separate release gates remain required.
 

@@ -1,7 +1,10 @@
 import { dirname, resolve } from "node:path";
 
 import { NodeServices } from "@effect/platform-node";
-import { transformerTwoslash } from "@shikijs/vitepress-twoslash";
+import {
+  transformerTwoslash,
+  type VitePressPluginTwoslashOptions,
+} from "@shikijs/vitepress-twoslash";
 import { Effect } from "effect";
 import ts from "typescript-twoslash";
 import { defineConfig } from "vitepress";
@@ -11,6 +14,20 @@ import tokyoNightLight from "./theme/tokyo-night-light.json";
 
 const siteUrl = "https://effect-agent.com";
 const socialPages = new Map<string, SocialPage>();
+const productionBuild = process.env.NODE_ENV === "production";
+
+type TypesCache = NonNullable<VitePressPluginTwoslashOptions["typesCache"]>;
+
+// Client and server rendering share successful snippet checks in this build.
+// A new build starts empty, and dev always rechecks edited imports.
+const snippetTypes = new Map<string, ReturnType<TypesCache["read"]>>();
+
+const typesCache: TypesCache = {
+  read: (code, language) => snippetTypes.get(`${language}\0${code}`) ?? null,
+  write: (code, types, language) => {
+    snippetTypes.set(`${language}\0${code}`, types);
+  },
+};
 
 export default defineConfig({
   lang: "en-US",
@@ -74,6 +91,7 @@ export default defineConfig({
     codeTransformers: [
       transformerTwoslash({
         throws: true,
+        typesCache: productionBuild ? typesCache : undefined,
         twoslashOptions: {
           // Twoslash uses the JS compiler API, which TypeScript 7 no longer exports.
           tsModule: ts,
@@ -81,8 +99,8 @@ export default defineConfig({
           vfsRoot: resolve(import.meta.dirname, "../snippets/travel-planner"),
           // VitePress sets production mode before loading build configuration.
           // Reuse compiler state within a build, but re-read snippets in dev.
-          cache: process.env.NODE_ENV === "production",
-          fsCache: process.env.NODE_ENV === "production",
+          cache: productionBuild,
+          fsCache: productionBuild,
           compilerOptions: {
             target: ts.ScriptTarget.ES2023,
             module: ts.ModuleKind.ESNext,

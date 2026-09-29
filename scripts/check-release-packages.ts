@@ -74,7 +74,7 @@ export const checkReleasePackages = Effect.fn("checkReleasePackages")(function* 
         yield* verifyPackedFiles(manifest, packs);
         yield* Console.log(`Inspected ${manifest.name}@${manifest.version}`);
       }),
-      { discard: true },
+      { concurrency: 4, discard: true },
     ),
   );
 }, Effect.scoped);
