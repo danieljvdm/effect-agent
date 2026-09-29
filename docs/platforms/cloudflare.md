@@ -380,7 +380,9 @@ A registered host lane starts idle. Producers name only the lanes receiving work
 prearms those entries before the mutation body. A failed mutation can leave a discovery wave;
 validation and authorization should precede enrollment when they establish that no work is needed.
 `gate.schedule(id, dueAt)` explicitly enrolls an existing obligation or an earlier deadline. Use it
-inside a local source transaction, or use `withMutation` around the whole remote commit. Keep the
+inside a local source transaction. For a remote source, retain a scheduling notice atomically with
+the work and retry its delivery to `schedule` until acknowledged, using the source's existing retry
+identity. Prearming alone cannot fence a remote commit that finishes after Object eviction. Keep the
 same gate instance when rebuilding runtime services. Receipt bookkeeping that creates no new work
 uses `invalidatesRecovery: false` with no lanes. Native admissions and controls keep the default
 `invalidatesRecovery: true`.

@@ -641,8 +641,9 @@ export class ThreadMutationGate extends Context.Service<
        */
       options?: { readonly invalidatesRecovery?: boolean; readonly lanes?: ReadonlyArray<string> },
     ) => Effect.Effect<A, E | DurableAlarmError, R>;
-    /** Enroll a known lane and keep its earliest deadline. Call inside the source transaction
-     * when local; remote producers must durably retain enrollment before acknowledging work. */
+    /** Enroll a known lane and keep its earliest deadline. Call inside the local source
+     * transaction. Remote sources retain a scheduling notice with their work and retry its
+     * delivery here; prearming alone cannot fence a remote commit after Object eviction. */
     readonly schedule: (id: string, dueAt: number) => Effect.Effect<void, DurableAlarmError>;
     /** In-incarnation notification; the durable due queue is the recovery authority. */
     readonly activeLanes: Effect.Effect<ReadonlySet<string>>;
