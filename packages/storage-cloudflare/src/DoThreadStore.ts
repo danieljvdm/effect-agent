@@ -72,6 +72,7 @@ import {
   RawReadRequest,
   type DoJournal,
 } from "./internal/do-journal.ts";
+import { isAppendContention, withStorageSpan } from "./internal/storage-span.ts";
 
 /**
  * Convenience-layer construction options. `storage` is the Durable Object's own
@@ -544,7 +545,7 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
         .pipe(Effect.mapError((error) => storeError(`storage failpoint ${location}`, error))),
   );
 
-  const materialize: ThreadStore["Service"]["materialize"] = Effect.fn("DoThreadStore.materialize")(
+  const materialize: ThreadStore["Service"]["materialize"] = Effect.fnUntraced(
     function* (request: ThreadMaterialization) {
       const validated = yield* Schema.decodeEffect(Schema.toType(ThreadMaterialization))(
         request,
@@ -569,80 +570,82 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
         );
       yield* hitFailpoint("materialize:after");
     },
+    withStorageSpan("DoThreadStore.materialize", (error) => error._tag === "FenceRejected"),
   );
 
-  const append: ThreadStore["Service"]["append"] = Effect.fn("DoThreadStore.append")(function* (
-    request: FencedAppendRequest,
-  ) {
-    const validated = yield* Schema.decodeEffect(Schema.toType(FencedAppendRequest))(request).pipe(
-      Effect.mapError((error) => schemaStoreError("validate canonical append", error)),
-    );
+  const append: ThreadStore["Service"]["append"] = Effect.fnUntraced(
+    function* (request: FencedAppendRequest) {
+      const validated = yield* Schema.decodeEffect(Schema.toType(FencedAppendRequest))(
+        request,
+      ).pipe(Effect.mapError((error) => schemaStoreError("validate canonical append", error)));
 
-    yield* requireThread(journal, validated.threadId);
+      const observed = yield* requireThread(journal, validated.threadId);
 
-    const tailDigest = yield* provideCrypto(
-      digestCanonicalBatch(validated.expectedTailDigest, validated.batch),
-    ).pipe(Effect.mapError((error) => storeError("digest canonical append", error)));
+      const tailDigest = yield* provideCrypto(
+        digestCanonicalBatch(validated.expectedTailDigest, validated.batch),
+      ).pipe(Effect.mapError((error) => storeError("digest canonical append", error)));
 
-    const batchJson = yield* encodeCanonicalBatch(validated.batch);
+      const batchJson = yield* encodeCanonicalBatch(validated.batch);
 
-    const rawRecords = yield* Effect.forEach(validated.batch.records, (record) =>
-      encodeCanonicalRecord(record).pipe(
-        Effect.map((recordJson) => ({
-          recordId: record.recordId,
-          recordJson,
-        })),
-      ),
-    );
-
-    const rawRequest = yield* Schema.decodeEffect(RawAppendRequest)({
-      threadId: validated.threadId,
-      batchId: validated.batch.batchId,
-      batchDigest: tailDigest,
-      batchJson,
-      expectedTailSequence: validated.expectedTailSequence,
-      expectedTailDigest: validated.expectedTailDigest,
-      producerEpoch: validated.producerEpoch,
-      records: rawRecords,
-      tailDigest,
-    }).pipe(Effect.mapError((error) => schemaStoreError("encode canonical append", error)));
-
-    yield* hitFailpoint("append:before");
-
-    const result = yield* journal.append(rawRequest).pipe(
-      Effect.mapError((error) => {
-        if (isDoFenceRejected(error)) {
-          return mapFence(validated.threadId, error);
-        }
-        if (isDoAppendConflict(error)) {
-          return error.actualTailSequence !== undefined && isDigest(error.actualTailDigest)
-            ? AppendConflict.make({
-                threadId: validated.threadId,
-                batchId: validated.batch.batchId,
-                reason: error.reason,
-                actualTailSequence: error.actualTailSequence,
-                actualTailDigest: error.actualTailDigest,
-              })
-            : AppendConflict.make({
-                threadId: validated.threadId,
-                batchId: validated.batch.batchId,
-                reason: error.reason,
-              });
-        }
-
-        return storeError("append canonical batch", error);
-      }),
-      Effect.flatMap((result) =>
-        Schema.decodeEffect(AppendResult)(result).pipe(
-          Effect.mapError((error) => schemaStoreError("decode append result", error)),
+      const rawRecords = yield* Effect.forEach(validated.batch.records, (record) =>
+        encodeCanonicalRecord(record).pipe(
+          Effect.map((recordJson) => ({
+            recordId: record.recordId,
+            recordJson,
+          })),
         ),
-      ),
-    );
+      );
 
-    yield* hitFailpoint("append:after");
+      const rawRequest = yield* Schema.decodeEffect(RawAppendRequest)({
+        threadId: validated.threadId,
+        batchId: validated.batch.batchId,
+        batchDigest: tailDigest,
+        batchJson,
+        expectedTailSequence: validated.expectedTailSequence,
+        expectedTailDigest: validated.expectedTailDigest,
+        producerEpoch: validated.producerEpoch,
+        records: rawRecords,
+        tailDigest,
+      }).pipe(Effect.mapError((error) => schemaStoreError("encode canonical append", error)));
 
-    return result;
-  });
+      yield* hitFailpoint("append:before");
+
+      const result = yield* journal.append(rawRequest, observed).pipe(
+        Effect.mapError((error) => {
+          if (isDoFenceRejected(error)) {
+            return mapFence(validated.threadId, error);
+          }
+          if (isDoAppendConflict(error)) {
+            return error.actualTailSequence !== undefined && isDigest(error.actualTailDigest)
+              ? AppendConflict.make({
+                  threadId: validated.threadId,
+                  batchId: validated.batch.batchId,
+                  reason: error.reason,
+                  actualTailSequence: error.actualTailSequence,
+                  actualTailDigest: error.actualTailDigest,
+                })
+              : AppendConflict.make({
+                  threadId: validated.threadId,
+                  batchId: validated.batch.batchId,
+                  reason: error.reason,
+                });
+          }
+
+          return storeError("append canonical batch", error);
+        }),
+        Effect.flatMap((result) =>
+          Schema.decodeEffect(AppendResult)(result).pipe(
+            Effect.mapError((error) => schemaStoreError("decode append result", error)),
+          ),
+        ),
+      );
+
+      yield* hitFailpoint("append:after");
+
+      return result;
+    },
+    withStorageSpan("DoThreadStore.append", isAppendContention),
+  );
 
   const loadRecords = Effect.fnUntraced(function* (request: RawReadRequest) {
     const result = yield* journal

@@ -42,6 +42,12 @@ import {
   doMigrations,
 } from "./migrations.ts";
 import { createRecoveryCheckpointTable } from "./recovery-checkpoint-schema.ts";
+import {
+  isAppendContention,
+  annotateStorageError,
+  storageResult,
+  withStorageSpan,
+} from "./storage-span.ts";
 
 /**
  * Static schema ceiling for stored text columns. Writes are bounded in BYTES by the
@@ -924,35 +930,56 @@ const makeJournal = (
    *
    * Journal write transactions are always top level: the Durable Object client rejects
    * nested transactions, so new journal operations must not wrap this helper inside another
-   * transaction.
+   * transaction. Expected outcomes may be captured only when every such refusal precedes
+   * mutation; real faults still roll back. Successful preflight reads never authorize a write.
    */
   const withWriteTransaction =
-    (operation: string) =>
-    <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E | DoStorageError> =>
-      sql.withTransaction(effect).pipe(
+    (operation: string, expected: (error: { readonly _tag: string }) => boolean = () => false) =>
+    <A, E extends { readonly _tag: string }>(
+      effect: Effect.Effect<A, E>,
+    ): Effect.Effect<A, E | DoStorageError> =>
+      sql.withTransaction(storageResult(effect, expected)).pipe(
         Effect.mapError((error) => (isSqlError(error) ? storageError(operation)(error) : error)),
+        Effect.tapError(annotateStorageError),
         Effect.withSpan("DoJournal.withWriteTransaction", { attributes: { operation } }),
+        Effect.flatMap(Effect.fromResult),
       );
 
-  const materialize = Effect.fn("DoJournal.materialize")(function* (
-    threadId: string,
-    createdAt: string,
-    emptyTailDigest: string,
-    producerEpoch: ProducerEpoch,
-  ): Effect.fn.Return<
-    void,
-    DoFenceRejected | DoStorageCorruptionError | DoStorageError | DoValueBoundExceeded
-  > {
-    if (threadId.length > MAX_IDENTIFIER_LENGTH) {
-      return yield* DoStorageError.make({
-        operation: "materialize thread",
-        message: "Thread identity exceeds the Durable Object storage bounds.",
-      });
-    }
-    yield* checkValueBound("materialize thread", emptyTailDigest);
-    yield* withWriteTransaction("materialize transaction")(
-      Effect.gen(function* () {
-        const existingRows = yield* sql<Record<string, unknown>>`
+  const materialize = Effect.fnUntraced(
+    function* (
+      threadId: string,
+      createdAt: string,
+      emptyTailDigest: string,
+      producerEpoch: ProducerEpoch,
+    ): Effect.fn.Return<
+      void,
+      DoFenceRejected | DoStorageCorruptionError | DoStorageError | DoValueBoundExceeded
+    > {
+      if (threadId.length > MAX_IDENTIFIER_LENGTH) {
+        return yield* DoStorageError.make({
+          operation: "materialize thread",
+          message: "Thread identity exceeds the Durable Object storage bounds.",
+        });
+      }
+      yield* checkValueBound("materialize thread", emptyTailDigest);
+      // Refusals and idempotent materialization need no transaction. Recheck before writes.
+      const current = yield* getThread(threadId);
+
+      if (current.length === 1 && producerEpoch <= current[0].producer_epoch) {
+        if (producerEpoch === current[0].producer_epoch) return;
+
+        return yield* DoFenceRejected.make({
+          producerEpoch,
+          actualEpoch: current[0].producer_epoch,
+          message: "The materialization producer epoch is stale.",
+        });
+      }
+      yield* withWriteTransaction(
+        "materialize transaction",
+        (error) => error._tag === "DoFenceRejected",
+      )(
+        Effect.gen(function* () {
+          const existingRows = yield* sql<Record<string, unknown>>`
           SELECT
             thread_id,
             created_at,
@@ -963,22 +990,22 @@ const makeJournal = (
           WHERE thread_id = ${threadId}
         `.pipe(Effect.mapError(storageError("read materialized thread")));
 
-        const existing = yield* decodeRows(
-          Schema.Array(ThreadRow),
-          "effect_agent_threads",
-          threadId,
-          existingRows,
-        );
+          const existing = yield* decodeRows(
+            Schema.Array(ThreadRow),
+            "effect_agent_threads",
+            threadId,
+            existingRows,
+          );
 
-        if (existing.length > 1) {
-          return yield* DoStorageCorruptionError.make({
-            table: "effect_agent_threads",
-            rowKey: threadId,
-            message: "A thread primary key returned more than one row.",
-          });
-        }
-        if (existing.length === 0) {
-          yield* sql`
+          if (existing.length > 1) {
+            return yield* DoStorageCorruptionError.make({
+              table: "effect_agent_threads",
+              rowKey: threadId,
+              message: "A thread primary key returned more than one row.",
+            });
+          }
+          if (existing.length === 0) {
+            yield* sql`
             INSERT INTO effect_agent_threads (
               thread_id,
               created_at,
@@ -994,25 +1021,27 @@ const makeJournal = (
             )
           `.pipe(Effect.mapError(storageError("materialize thread")));
 
-          return;
-        }
-        if (producerEpoch < existing[0].producer_epoch) {
-          return yield* DoFenceRejected.make({
-            producerEpoch,
-            actualEpoch: existing[0].producer_epoch,
-            message: `Producer epoch ${producerEpoch} is stale; current epoch is ${existing[0].producer_epoch}.`,
-          });
-        }
-        if (producerEpoch > existing[0].producer_epoch) {
-          yield* sql`
+            return;
+          }
+          if (producerEpoch < existing[0].producer_epoch) {
+            return yield* DoFenceRejected.make({
+              producerEpoch,
+              actualEpoch: existing[0].producer_epoch,
+              message: `Producer epoch ${producerEpoch} is stale; current epoch is ${existing[0].producer_epoch}.`,
+            });
+          }
+          if (producerEpoch > existing[0].producer_epoch) {
+            yield* sql`
             UPDATE effect_agent_threads
             SET producer_epoch = ${producerEpoch}
             WHERE thread_id = ${threadId}
           `.pipe(Effect.mapError(storageError("advance materialization epoch")));
-        }
-      }),
-    );
-  });
+          }
+        }),
+      );
+    },
+    withStorageSpan("DoJournal.materialize", (error) => error._tag === "DoFenceRejected"),
+  );
 
   const getThread = Effect.fn("DoJournal.getThread")(function* (threadId: string) {
     const rows = yield* sql<Record<string, unknown>>`
@@ -1029,41 +1058,76 @@ const makeJournal = (
     return yield* decodeRows(Schema.Array(ThreadRow), "effect_agent_threads", threadId, rows);
   });
 
-  const append = Effect.fn("DoJournal.append")(function* (
-    request: RawAppendRequest,
-  ): Effect.fn.Return<RawAppendResult, AppendError> {
-    if (
-      request.threadId.length > MAX_IDENTIFIER_LENGTH ||
-      request.batchId.length > MAX_IDENTIFIER_LENGTH ||
-      request.records.some((record) => record.recordId.length > MAX_IDENTIFIER_LENGTH)
-    ) {
-      return yield* DoStorageError.make({
-        operation: "append canonical batch",
-        message: "Canonical identifiers exceed the Durable Object storage bounds.",
-      });
-    }
-    // The platform's ~2 MB per-value limit, enforced typed BEFORE any write (plan §1.2).
-    yield* checkValueBound("append canonical batch", request.batchJson);
-    yield* checkValueBound("append canonical batch", request.batchDigest);
-    yield* checkValueBound("append canonical batch", request.tailDigest);
-    yield* Effect.forEach(
-      request.records,
-      (record) => checkValueBound("append canonical record", record.recordJson),
-      { discard: true },
-    );
+  const append = Effect.fnUntraced(
+    function* (
+      request: RawAppendRequest,
+      observed: ThreadRow,
+    ): Effect.fn.Return<RawAppendResult, AppendError> {
+      if (
+        request.threadId.length > MAX_IDENTIFIER_LENGTH ||
+        request.batchId.length > MAX_IDENTIFIER_LENGTH ||
+        request.records.some((record) => record.recordId.length > MAX_IDENTIFIER_LENGTH)
+      ) {
+        return yield* DoStorageError.make({
+          operation: "append canonical batch",
+          message: "Canonical identifiers exceed the Durable Object storage bounds.",
+        });
+      }
+      // The platform's ~2 MB per-value limit, enforced typed BEFORE any write (plan §1.2).
+      yield* checkValueBound("append canonical batch", request.batchJson);
+      yield* checkValueBound("append canonical batch", request.batchDigest);
+      yield* checkValueBound("append canonical batch", request.tailDigest);
+      yield* Effect.forEach(
+        request.records,
+        (record) => checkValueBound("append canonical record", record.recordJson),
+        { discard: true },
+      );
 
-    return yield* withWriteTransaction("append transaction")(
-      Effect.gen(function* () {
-        const recordIds = request.records.map((record) => record.recordId);
+      const recordIds = request.records.map((record) => record.recordId);
 
-        if (new Set(recordIds).size !== recordIds.length) {
+      if (new Set(recordIds).size !== recordIds.length) {
+        return yield* DoAppendConflict.make({
+          message: `Batch ${request.batchId} contains duplicate canonical record IDs.`,
+          reason: "record-identity",
+        });
+      }
+
+      // The facade already read this tail. Reject a known stale writer without opening a
+      // transaction; a matching tail is still checked atomically below. Replays precede tail
+      // conflicts, preserving retry identity even after the log has advanced.
+      if (request.producerEpoch !== observed.producer_epoch) {
+        return yield* DoFenceRejected.make({
+          producerEpoch: request.producerEpoch,
+          actualEpoch: observed.producer_epoch,
+          message: "The append producer epoch is not current.",
+        });
+      }
+      if (
+        request.expectedTailSequence !== observed.tail_sequence ||
+        request.expectedTailDigest !== observed.tail_digest
+      ) {
+        const batches = yield* sql`
+          SELECT batch_id FROM effect_agent_canonical_batches
+          WHERE thread_id = ${request.threadId} AND batch_id = ${request.batchId}
+        `.pipe(Effect.mapError(storageError("preflight append replay")));
+
+        // A possible replay still checks the current epoch and digest in the transaction.
+        if (batches.length === 0) {
           return yield* DoAppendConflict.make({
-            message: `Batch ${request.batchId} contains duplicate canonical record IDs.`,
-            reason: "record-identity",
+            reason: "tail",
+            message: "The canonical tail has advanced.",
+            actualTailSequence: observed.tail_sequence,
+            actualTailDigest: observed.tail_digest,
           });
         }
+      }
 
-        const threadRows = yield* sql<Record<string, unknown>>`
+      return yield* withWriteTransaction(
+        "append transaction",
+        isAppendContention,
+      )(
+        Effect.gen(function* () {
+          const threadRows = yield* sql<Record<string, unknown>>`
           SELECT
             thread_id,
             created_at,
@@ -1074,22 +1138,22 @@ const makeJournal = (
           WHERE thread_id = ${request.threadId}
         `.pipe(Effect.mapError(storageError("read append tail")));
 
-        const thread = yield* decodeSingleRow(
-          Schema.Array(ThreadRow),
-          "effect_agent_threads",
-          request.threadId,
-          threadRows,
-        );
+          const thread = yield* decodeSingleRow(
+            Schema.Array(ThreadRow),
+            "effect_agent_threads",
+            request.threadId,
+            threadRows,
+          );
 
-        if (request.producerEpoch !== thread.producer_epoch) {
-          return yield* DoFenceRejected.make({
-            producerEpoch: request.producerEpoch,
-            actualEpoch: thread.producer_epoch,
-            message: `Producer epoch ${request.producerEpoch} is not the current epoch ${thread.producer_epoch}.`,
-          });
-        }
+          if (request.producerEpoch !== thread.producer_epoch) {
+            return yield* DoFenceRejected.make({
+              producerEpoch: request.producerEpoch,
+              actualEpoch: thread.producer_epoch,
+              message: `Producer epoch ${request.producerEpoch} is not the current epoch ${thread.producer_epoch}.`,
+            });
+          }
 
-        const batchRows = yield* sql<Record<string, unknown>>`
+          const batchRows = yield* sql<Record<string, unknown>>`
           SELECT
             thread_id,
             batch_id,
@@ -1103,64 +1167,64 @@ const makeJournal = (
             AND batch_id = ${request.batchId}
         `.pipe(Effect.mapError(storageError("read idempotent batch")));
 
-        const batches = yield* decodeRows(
-          Schema.Array(BatchRow),
-          "effect_agent_canonical_batches",
-          `${request.threadId}/${request.batchId}`,
-          batchRows,
-        );
+          const batches = yield* decodeRows(
+            Schema.Array(BatchRow),
+            "effect_agent_canonical_batches",
+            `${request.threadId}/${request.batchId}`,
+            batchRows,
+          );
 
-        if (batches.length > 1) {
-          return yield* DoStorageCorruptionError.make({
-            table: "effect_agent_canonical_batches",
-            rowKey: `${request.threadId}/${request.batchId}`,
-            message: "A canonical batch primary key returned more than one row.",
-          });
-        }
-        if (batches.length === 1) {
-          const existing = batches[0];
+          if (batches.length > 1) {
+            return yield* DoStorageCorruptionError.make({
+              table: "effect_agent_canonical_batches",
+              rowKey: `${request.threadId}/${request.batchId}`,
+              message: "A canonical batch primary key returned more than one row.",
+            });
+          }
+          if (batches.length === 1) {
+            const existing = batches[0];
 
-          if (existing.batch_digest !== request.batchDigest) {
-            return yield* DoAppendConflict.make({
-              message: `Batch ${request.batchId} already exists with different canonical content.`,
-              reason: "batch-digest",
+            if (existing.batch_digest !== request.batchDigest) {
+              return yield* DoAppendConflict.make({
+                message: `Batch ${request.batchId} already exists with different canonical content.`,
+                reason: "batch-digest",
+              });
+            }
+
+            return RawAppendResult.make({
+              firstSequence: existing.first_sequence,
+              lastSequence: existing.last_sequence,
+              replayed: true,
+              tailDigest: existing.tail_digest,
             });
           }
 
-          return RawAppendResult.make({
-            firstSequence: existing.first_sequence,
-            lastSequence: existing.last_sequence,
-            replayed: true,
-            tailDigest: existing.tail_digest,
-          });
-        }
+          if (
+            request.expectedTailSequence !== thread.tail_sequence ||
+            request.expectedTailDigest !== thread.tail_digest
+          ) {
+            return yield* DoAppendConflict.make({
+              message:
+                `Expected tail ${request.expectedTailSequence}/${request.expectedTailDigest} ` +
+                `but found ${thread.tail_sequence}/${thread.tail_digest}.`,
+              reason: "tail",
+              actualTailSequence: thread.tail_sequence,
+              actualTailDigest: thread.tail_digest,
+            });
+          }
+          if (thread.tail_sequence + request.records.length > MAX_RECORDS_PER_THREAD) {
+            return yield* DoStorageError.make({
+              operation: "append canonical batch",
+              message: `Thread record limit ${MAX_RECORDS_PER_THREAD} would be exceeded.`,
+            });
+          }
 
-        if (
-          request.expectedTailSequence !== thread.tail_sequence ||
-          request.expectedTailDigest !== thread.tail_digest
-        ) {
-          return yield* DoAppendConflict.make({
-            message:
-              `Expected tail ${request.expectedTailSequence}/${request.expectedTailDigest} ` +
-              `but found ${thread.tail_sequence}/${thread.tail_digest}.`,
-            reason: "tail",
-            actualTailSequence: thread.tail_sequence,
-            actualTailDigest: thread.tail_digest,
-          });
-        }
-        if (thread.tail_sequence + request.records.length > MAX_RECORDS_PER_THREAD) {
-          return yield* DoStorageError.make({
-            operation: "append canonical batch",
-            message: `Thread record limit ${MAX_RECORDS_PER_THREAD} would be exceeded.`,
-          });
-        }
+          // Chunked to respect the Durable Object platform's 100-bound-parameter statement
+          // limit: a batch may carry up to 256 records.
+          const existingRecords: Array<RecordRow> = [];
 
-        // Chunked to respect the Durable Object platform's 100-bound-parameter statement
-        // limit: a batch may carry up to 256 records.
-        const existingRecords: Array<RecordRow> = [];
-
-        for (const chunk of chunked(recordIds, MAX_BOUND_PARAMETERS - 10)) {
-          const existingRecordRows = yield* sql<Record<string, unknown>>`
+          for (const chunk of chunked(recordIds, MAX_BOUND_PARAMETERS - 10)) {
+            const existingRecordRows = yield* sql<Record<string, unknown>>`
             SELECT
               thread_id,
               sequence,
@@ -1173,47 +1237,47 @@ const makeJournal = (
             ORDER BY sequence
           `.pipe(Effect.mapError(storageError("check canonical record identities")));
 
-          existingRecords.push(
-            ...(yield* decodeRows(
-              Schema.Array(RecordRow),
-              "effect_agent_canonical_records",
-              `${request.threadId}/record_ids`,
-              existingRecordRows,
-            )),
+            existingRecords.push(
+              ...(yield* decodeRows(
+                Schema.Array(RecordRow),
+                "effect_agent_canonical_records",
+                `${request.threadId}/record_ids`,
+                existingRecordRows,
+              )),
+            );
+          }
+          if (existingRecords.length > 0) {
+            return yield* DoAppendConflict.make({
+              message: `Canonical record ID ${existingRecords[0].record_id} already exists.`,
+              reason: "record-identity",
+            });
+          }
+
+          const firstSequence = yield* Schema.decodeEffect(CanonicalSequence)(
+            thread.tail_sequence + 1,
+          ).pipe(
+            Effect.mapError((error) =>
+              DoStorageError.make({
+                cause: error,
+                operation: "append canonical batch",
+                message: error.message,
+              }),
+            ),
           );
-        }
-        if (existingRecords.length > 0) {
-          return yield* DoAppendConflict.make({
-            message: `Canonical record ID ${existingRecords[0].record_id} already exists.`,
-            reason: "record-identity",
-          });
-        }
 
-        const firstSequence = yield* Schema.decodeEffect(CanonicalSequence)(
-          thread.tail_sequence + 1,
-        ).pipe(
-          Effect.mapError((error) =>
-            DoStorageError.make({
-              cause: error,
-              operation: "append canonical batch",
-              message: error.message,
-            }),
-          ),
-        );
+          const lastSequence = yield* Schema.decodeEffect(CanonicalSequence)(
+            firstSequence + request.records.length - 1,
+          ).pipe(
+            Effect.mapError((error) =>
+              DoStorageError.make({
+                cause: error,
+                operation: "append canonical batch",
+                message: error.message,
+              }),
+            ),
+          );
 
-        const lastSequence = yield* Schema.decodeEffect(CanonicalSequence)(
-          firstSequence + request.records.length - 1,
-        ).pipe(
-          Effect.mapError((error) =>
-            DoStorageError.make({
-              cause: error,
-              operation: "append canonical batch",
-              message: error.message,
-            }),
-          ),
-        );
-
-        yield* sql`
+          yield* sql`
           INSERT INTO effect_agent_canonical_batches (
             thread_id,
             batch_id,
@@ -1232,13 +1296,13 @@ const makeJournal = (
             ${request.batchJson}
           )
         `.pipe(Effect.mapError(storageError("insert canonical batch")));
-        yield* failpoint("append:after-batch-insert");
+          yield* failpoint("append:after-batch-insert");
 
-        yield* Effect.forEach(
-          request.records,
-          (record, index) =>
-            Effect.gen(function* () {
-              yield* sql`
+          yield* Effect.forEach(
+            request.records,
+            (record, index) =>
+              Effect.gen(function* () {
+                yield* sql`
                   INSERT INTO effect_agent_canonical_records (
                     thread_id,
                     sequence,
@@ -1254,49 +1318,51 @@ const makeJournal = (
                   )
                 `.pipe(Effect.mapError(storageError("insert canonical record")));
 
-              const canonical = yield* Schema.decodeEffect(Schema.fromJsonString(CanonicalRecord))(
-                record.recordJson,
-              ).pipe(
-                Effect.mapError((error) =>
-                  DoStorageCorruptionError.make({
-                    table: "effect_agent_canonical_records",
-                    rowKey: record.recordId,
-                    message: error.message,
-                  }),
-                ),
-              );
+                const canonical = yield* Schema.decodeEffect(
+                  Schema.fromJsonString(CanonicalRecord),
+                )(record.recordJson).pipe(
+                  Effect.mapError((error) =>
+                    DoStorageCorruptionError.make({
+                      table: "effect_agent_canonical_records",
+                      rowKey: record.recordId,
+                      message: error.message,
+                    }),
+                  ),
+                );
 
-              yield* indexCanonicalRecord(request.threadId, canonical).pipe(
-                Effect.provideService(SqlClient.SqlClient, sql),
-                Effect.mapError(storageError("index canonical record")),
-              );
-              if (
-                lifecycle !== undefined &&
-                Schema.is(Schema.toType(LifecyclePublicationFact))(canonical.payload)
-              )
-                yield* lifecycle
-                  .retain({
-                    id: JSON.stringify([request.threadId, "record", record.recordId]),
-                    ownerThreadId: Schema.decodeSync(ThreadId)(request.threadId),
-                    canonicalSequence: Schema.decodeSync(CanonicalSequence)(firstSequence + index),
-                    createdAt: canonical.createdAt,
-                    fact: canonical.payload,
-                  })
-                  .pipe(
-                    Effect.mapError((cause) =>
-                      DoStorageError.make({
-                        operation: "retain lifecycle publication",
-                        message: "Native publication storage unavailable",
-                        cause,
-                      }),
-                    ),
-                  );
-              yield* failpoint("append:after-record-insert");
-            }),
-          { discard: true },
-        );
+                yield* indexCanonicalRecord(request.threadId, canonical).pipe(
+                  Effect.provideService(SqlClient.SqlClient, sql),
+                  Effect.mapError(storageError("index canonical record")),
+                );
+                if (
+                  lifecycle !== undefined &&
+                  Schema.is(Schema.toType(LifecyclePublicationFact))(canonical.payload)
+                )
+                  yield* lifecycle
+                    .retain({
+                      id: JSON.stringify([request.threadId, "record", record.recordId]),
+                      ownerThreadId: Schema.decodeSync(ThreadId)(request.threadId),
+                      canonicalSequence: Schema.decodeSync(CanonicalSequence)(
+                        firstSequence + index,
+                      ),
+                      createdAt: canonical.createdAt,
+                      fact: canonical.payload,
+                    })
+                    .pipe(
+                      Effect.mapError((cause) =>
+                        DoStorageError.make({
+                          operation: "retain lifecycle publication",
+                          message: "Native publication storage unavailable",
+                          cause,
+                        }),
+                      ),
+                    );
+                yield* failpoint("append:after-record-insert");
+              }),
+            { discard: true },
+          );
 
-        yield* sql`
+          yield* sql`
           UPDATE effect_agent_threads
           SET
             tail_sequence = ${lastSequence},
@@ -1304,17 +1370,19 @@ const makeJournal = (
             producer_epoch = ${request.producerEpoch}
           WHERE thread_id = ${request.threadId}
         `.pipe(Effect.mapError(storageError("advance thread tail")));
-        yield* failpoint("append:after-tail-update");
+          yield* failpoint("append:after-tail-update");
 
-        return RawAppendResult.make({
-          firstSequence,
-          lastSequence,
-          replayed: false,
-          tailDigest: request.tailDigest,
-        });
-      }),
-    );
-  });
+          return RawAppendResult.make({
+            firstSequence,
+            lastSequence,
+            replayed: false,
+            tailDigest: request.tailDigest,
+          });
+        }),
+      );
+    },
+    withStorageSpan("DoJournal.append", isAppendContention),
+  );
 
   const read = Effect.fnUntraced(function* (request: RawReadRequest) {
     // Capture membership without retaining payloads. Append-only sequences keep each later

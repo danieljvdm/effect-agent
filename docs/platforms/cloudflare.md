@@ -246,6 +246,11 @@ The outer platform trace can still be named `alarm`: durable execution wakes ind
 of the submitting HTTP request. Named agent, model, and tool spans appear inside it.
 Separate alarm invocations do not become one trace solely because they share a Run ID.
 
+Storage append, materialization, and ownership-release spans record expected contention or
+cleanup refusals in `storage.outcome` and end successfully. Their typed port errors still reach
+callers for recovery. Real failures retain `error.type` and, when tagged, `error.cause.type`;
+these attributes contain error tags only, without messages or payloads.
+
 ### Share an application Object
 
 Use `ThreadObject.layerInHost(application)` when an existing SQLite Durable Object owns related

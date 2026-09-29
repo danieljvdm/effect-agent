@@ -110,6 +110,7 @@ import {
   type DoStorageOptions,
 } from "./DoThreadStore.ts";
 import { decodeRows, initializeDoJournal } from "./internal/do-journal.ts";
+import { withStorageSpan } from "./internal/storage-span.ts";
 
 type SubmissionId = SubmissionSnapshot["submissionId"];
 
@@ -442,9 +443,13 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
   >(
     operation: string,
     effect: Effect.Effect<A, E>,
+    expected?: (error: { readonly _tag: string }) => boolean,
   ): Effect.Effect<A, E | LedgerError> =>
     journal
-      .withWriteTransaction(operation)(effect)
+      .withWriteTransaction(
+        operation,
+        expected,
+      )(effect)
       .pipe(
         Effect.mapError((error) =>
           isDoStorageError(error) ? internalFailure(operation)(error) : error,
@@ -563,28 +568,34 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
    * Submission's lane; a superseded or missing token fails with OwnershipLost carrying the
    * Thread's current producer epoch (DUR-006).
    */
-  const requireOwnership = Effect.fn("DoSubmissionLedger.requireOwnership")(function* (
-    operation: string,
-    submission: SubmissionRow,
-    ownershipToken: string,
-  ): Effect.fn.Return<OwnershipRow, OwnershipLost | LedgerError> {
-    const ownership = yield* readOwnership(operation, submission.submission_id);
-    const actualEpoch = yield* threadEpoch(operation, submission.thread_id);
+  const requireOwnership = Effect.fnUntraced(
+    function* (
+      operation: string,
+      submission: SubmissionRow,
+      ownershipToken: string,
+    ): Effect.fn.Return<OwnershipRow, OwnershipLost | LedgerError> {
+      const ownership = yield* readOwnership(operation, submission.submission_id);
+      const actualEpoch = yield* threadEpoch(operation, submission.thread_id);
 
-    if (
-      Option.isNone(ownership) ||
-      ownership.value.ownership_token !== ownershipToken ||
-      ownership.value.producer_epoch !== actualEpoch
-    ) {
-      const submissionId = yield* Schema.decodeEffect(SubmissionSnapshot.fields.submissionId)(
-        submission.submission_id,
-      ).pipe(Effect.mapError(internalFailure(operation)));
+      if (
+        Option.isNone(ownership) ||
+        ownership.value.ownership_token !== ownershipToken ||
+        ownership.value.producer_epoch !== actualEpoch
+      ) {
+        const submissionId = yield* Schema.decodeEffect(SubmissionSnapshot.fields.submissionId)(
+          submission.submission_id,
+        ).pipe(Effect.mapError(internalFailure(operation)));
 
-      return yield* OwnershipLost.make({ submissionId, actualEpoch });
-    }
+        return yield* OwnershipLost.make({ submissionId, actualEpoch });
+      }
 
-    return ownership.value;
-  });
+      return ownership.value;
+    },
+    withStorageSpan(
+      "DoSubmissionLedger.requireOwnership",
+      (error) => error._tag === "OwnershipLost",
+    ),
+  );
 
   const decodeSubmissionSnapshot = Effect.fn("DoSubmissionLedger.decodeSubmissionSnapshot")(
     function* (
@@ -1776,37 +1787,47 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     return renewal;
   });
 
-  const releaseOwnership: SubmissionLedger["Service"]["releaseOwnership"] = Effect.fn(
-    "DoSubmissionLedger.releaseOwnership",
-  )(function* (request: ReleaseOwnershipRequest) {
-    const operation = "ledger release ownership";
+  const releaseOwnership: SubmissionLedger["Service"]["releaseOwnership"] = Effect.fnUntraced(
+    function* (request: ReleaseOwnershipRequest) {
+      const operation = "ledger release ownership";
 
-    const validated = yield* Schema.decodeEffect(Schema.toType(ReleaseOwnershipRequest))(
-      request,
-    ).pipe(Effect.mapError(internalFailure(operation)));
+      const validated = yield* Schema.decodeEffect(Schema.toType(ReleaseOwnershipRequest))(
+        request,
+      ).pipe(Effect.mapError(internalFailure(operation)));
 
-    yield* hitFailpoint("ledger:release:before", operation);
-    yield* inWriteTransaction(
-      operation,
-      Effect.gen(function* () {
-        const submission = yield* requireSubmission(operation, validated.submissionId);
+      yield* hitFailpoint("ledger:release:before", operation);
+      // Settlement and suspension already remove ownership. Cleanup can observe that without
+      // opening a transaction; an owned lane must still pass the atomic check below.
+      const current = yield* requireSubmission(operation, validated.submissionId);
 
-        yield* requireOwnership(operation, submission, validated.ownershipToken);
-        yield* sql`
+      yield* requireOwnership(operation, current, validated.ownershipToken);
+      yield* inWriteTransaction(
+        operation,
+        Effect.gen(function* () {
+          const submission = yield* requireSubmission(operation, validated.submissionId);
+
+          yield* requireOwnership(operation, submission, validated.ownershipToken);
+          yield* sql`
           DELETE FROM effect_agent_submission_ownership
           WHERE submission_id = ${validated.submissionId}
         `.pipe(Effect.mapError(sqlFailure(operation)));
-        if (submission.state === "running") {
-          yield* sql`
+          if (submission.state === "running") {
+            yield* sql`
             UPDATE effect_agent_submissions
             SET state = 'ready'
             WHERE submission_id = ${validated.submissionId}
           `.pipe(Effect.mapError(sqlFailure(operation)));
-        }
-      }),
-    );
-    yield* hitFailpoint("ledger:release:after", operation);
-  });
+          }
+        }),
+        (error) => error._tag === "OwnershipLost",
+      );
+      yield* hitFailpoint("ledger:release:after", operation);
+    },
+    withStorageSpan(
+      "DoSubmissionLedger.releaseOwnership",
+      (error) => error._tag === "OwnershipLost",
+    ),
+  );
 
   const markInputApplied: SubmissionLedger["Service"]["markInputApplied"] = Effect.fn(
     "DoSubmissionLedger.markInputApplied",
