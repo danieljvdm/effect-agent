@@ -49,7 +49,10 @@ export class BindingUnavailable extends Schema.TaggedError<BindingUnavailable>()
 
 export type DurableBindingFailure = BindingUnavailable;
 
-/** Explicit host routing for stable Agent identities shared by distinct current Definitions. */
+/**
+ * Submission execution/recovery routing for stable identities shared by current Definitions.
+ * Worker declarations and peer-messaging endpoints still require unique Agent identities.
+ */
 export interface BindingSelection {
   /** Change when routing changes, so hosts can retry parked work without rewriting admission. */
   readonly key: string;

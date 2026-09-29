@@ -158,6 +158,7 @@ and authoritative host state; `undefined` retains unique-identity resolution. Bo
 and recovery use this selection. Set a stable `key` and change it when routing changes. Selection
 does not bypass input decoding, operation replay contracts, or authorization. Queued work keeps
 its original identity, digests and payload without requiring historical executable versions.
+Worker declarations and peer-messaging endpoints still require unique Agent identities.
 
 Application layers can use `WorkerEnvironment`, `DurableObjectState`,
 `ThreadObjectIdentity`, and Crypto. Scalar Worker vars and secrets are available through Effect
