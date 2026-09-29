@@ -15,6 +15,7 @@ import {
 import {
   AbortCommand,
   AbortIntentRequest,
+  LedgerError,
   RecoverySnapshotRequest,
   SubmissionLedger,
   SubmissionLookupById,
@@ -220,6 +221,66 @@ const corruptHistory = (owner: string, thread: string, sequence = 1) =>
 
     return row.record_json;
   });
+
+// Regression: https://github.com/danieljvdm/effect-agent/commit/35b5e858
+it("retries an accepted abort after transient recovery failure while its binding is parked", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const owner = `parked-abort-${crypto.randomUUID()}`;
+
+      yield* TestClock.setTime(Date.now() + 86_400_000);
+      maintenanceClocks.set(owner, yield* Clock.Clock);
+      yield* Effect.addFinalizer(() => Effect.sync(() => maintenanceClocks.delete(owner)));
+      const receipt = yield* localRun(owner, [])(submit(owner, "original"));
+      let failRead = false;
+
+      const run = localRun(owner, [], {
+        withoutBinding: plannerDefinition.id,
+        readAbortIntent: (read) => (request) =>
+          failRead
+            ? Effect.fail(
+                LedgerError.make({ operation: "read abort intent", message: "transient" }),
+              )
+            : read(request),
+      });
+
+      yield* run(pass);
+      expect(yield* Effect.promise(() => scheduledAlarm(owner))).toBeNull();
+      yield* run(
+        ThreadMaintenance.use((maintenance) =>
+          maintenance.withMutation(
+            DurableAgentRuntime.use((runtime) =>
+              runtime.abort(
+                AbortCommand.make({
+                  submissionId: receipt.submissionId,
+                  author: "fixture-owner",
+                  reason: "retire parked work",
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+      failRead = true;
+      yield* run(pass);
+      const fault = yield* retainedFault(owner, owner);
+
+      expect(Option.isSome(fault)).toBe(true);
+      const deadline = yield* Effect.promise(() => scheduledAlarm(owner));
+
+      expect(deadline).not.toBeNull();
+      if (Option.isNone(fault)) return;
+
+      failRead = false;
+      yield* TestClock.setTime(Math.max(fault.value.retryAt, deadline!));
+      yield* run(pass);
+      expect(
+        yield* run(DurableAgentRuntime.use((runtime) => runtime.submissionStatus(receipt))),
+      ).toMatchObject({ _tag: "settled", settlement: { outcome: "aborted" } });
+      expect(yield* retainedFault(owner, owner)).toEqual(Option.none());
+      expect(yield* Effect.promise(() => scheduledAlarm(owner))).toBeNull();
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  ));
 
 // Regression: https://github.com/danieljvdm/effect-agent/commit/e6407479ae233527685928bead040dbfe5153a22
 it(

@@ -452,6 +452,8 @@ describe("maintenance retry deadlines", () => {
           yield* Effect.addFinalizer(() => Effect.sync(() => maintenanceBindings.delete(thread)));
           const otherDefinition = { ...plannerDefinition };
           let available = false;
+          let reorderMetadata = false;
+          let interruptParking = unavailable === "missing";
           let hostFailure = true;
           let hostDrains = 0;
           const errors: string[] = [];
@@ -467,7 +469,22 @@ describe("maintenance retry deadlines", () => {
               runInDurableObject(stubFor(thread), (instance, state) =>
                 instance[DurableObject.RunSymbol](
                   Effect.gen(function* () {
-                    const bindings = yield* makeTestBindings;
+                    const bindings = (yield* makeTestBindings).map((binding) =>
+                      reorderMetadata
+                        ? {
+                            ...binding,
+                            digests: {
+                              ...(binding.digests.replay === undefined
+                                ? {}
+                                : { replay: binding.digests.replay }),
+                              tools: binding.digests.tools,
+                              model: binding.digests.model,
+                              agent: binding.digests.agent,
+                            },
+                          }
+                        : binding,
+                    );
+
                     const config = yield* CloudflareDurableRuntimeConfig;
 
                     const planner = bindings.find(
@@ -548,6 +565,17 @@ describe("maintenance retry deadlines", () => {
                         ],
                       }),
                       Effect.provide(Logger.layer([logger])),
+                      Effect.provideService(ThreadMaintenanceFailpoint, {
+                        hit: (location) => {
+                          if (interruptParking && location === "maintenance:binding-retry:after") {
+                            interruptParking = false;
+
+                            return Effect.interrupt;
+                          }
+
+                          return Effect.void;
+                        },
+                      }),
                       Effect.exit,
                     );
                   }),
@@ -589,6 +617,11 @@ describe("maintenance retry deadlines", () => {
           expect(Exit.isSuccess(yield* run(pass))).toBe(true);
           expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBeNull();
           expect(yield* snapshot).toEqual(parked);
+          // Regression: https://github.com/danieljvdm/effect-agent/commit/35b5e858
+          // Equivalent metadata ordering must not wake or report parked work again.
+          reorderMetadata = true;
+          yield* run(ensure);
+          expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBeNull();
           yield* evict;
           yield* run(ensure);
           expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBeNull();

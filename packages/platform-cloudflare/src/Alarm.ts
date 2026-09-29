@@ -1408,6 +1408,20 @@ export class ThreadMaintenance extends Context.Service<
                 reportedAt: previous?.reportedAt ?? (yield* Clock.currentTimeMillis),
               });
 
+        // Report before recording reportedAt. Interruption before the write may repeat a
+        // report, but a durable wait must never suppress a report that was not delivered.
+        if (bindingFailure !== undefined && previous === undefined) {
+          yield* Effect.logError(
+            "Thread parked until its agent binding registry changes; original work remains pending",
+            Cause.fail(bindingFailure),
+          ).pipe(
+            Effect.annotateLogs({
+              threadId: selected.threadId,
+              submissionId: selected.submissionId,
+            }),
+          );
+        }
+
         if (wait !== undefined || previous !== undefined) {
           // The Attempt released its Claim. Commit its binding wait (or clear) once,
           // before joining fallible auxiliary work. This local fact neither acknowledges
@@ -1443,17 +1457,6 @@ export class ThreadMaintenance extends Context.Service<
               .pipe(Effect.mapError(alarmFailure("record submission binding wait"))),
           );
           yield* failpoint.hit("maintenance:binding-retry:after");
-        }
-        if (bindingFailure !== undefined && previous === undefined) {
-          yield* Effect.logError(
-            "Thread parked until its agent binding registry changes; original work remains pending",
-            Cause.fail(bindingFailure),
-          ).pipe(
-            Effect.annotateLogs({
-              threadId: selected.threadId,
-              submissionId: selected.submissionId,
-            }),
-          );
         }
 
         return Option.isSome(settlement) ? 1 : 0;
@@ -1609,10 +1612,9 @@ export class ThreadMaintenance extends Context.Service<
         const parked = new Set(bindingWaits.map((wait) => wait.submissionId));
 
         const waiting = (row: SubmissionWorkItem) =>
-          parked.has(row.submissionId) ||
-          (!recovery.pending.has(row.threadId) &&
-            !recoveryFaults.has(row.threadId) &&
-            stableExternalWait(row, reports));
+          !recovery.pending.has(row.threadId) &&
+          !recoveryFaults.has(row.threadId) &&
+          (parked.has(row.submissionId) || stableExternalWait(row, reports));
 
         const heads = new Map<ThreadId, SubmissionWorkItem>();
 

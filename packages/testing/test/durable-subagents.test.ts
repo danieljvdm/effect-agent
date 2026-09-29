@@ -20,7 +20,12 @@ import {
 } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
-import { DurableWorkerBinding, type ResolvedBinding } from "effect-agent/agent-registration";
+import {
+  CurrentBindingSelection,
+  compileRegistrations,
+  DurableWorkerBinding,
+  type ResolvedBinding,
+} from "effect-agent/agent-registration";
 import { ContextRolloverRequest, ContextRolloverTool } from "effect-agent/context-window";
 import {
   DurableAgentRuntime,
@@ -36,6 +41,7 @@ import { IdGenerator } from "effect-agent/id-generator";
 import { ThreadId, RunId, ToolCallId, TurnId, type SubmissionId } from "effect-agent/identifiers";
 import {
   DefinitionDigests,
+  DefinitionDigestInput,
   DeploymentId,
   Digest,
   ProducerId,
@@ -570,6 +576,168 @@ const payloadsOf = <Tag extends string>(
   records.filter((envelope) => envelope.record.payload._tag === tag);
 
 layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/e66e913e
+  it.effect("retains selected replay contracts when restoring a shared-ID child's policy", () =>
+    Effect.gen(function* () {
+      let lookups = 0;
+      const lookup = Lookup.annotate(ToolExecutionClass, "readonly");
+      const toolkit = Toolkit.make(lookup);
+
+      const child = Agent.make("shared-contract-child", {
+        input: ChildInput,
+        output: ChildOutput,
+        instructions: "Look up the answer.",
+        toolkit,
+        policy: childDefinition.policy,
+      });
+
+      const other = { ...child, instructions: "A different current definition." };
+
+      const childModel = yield* makeScriptedModel((call) =>
+        call === 0
+          ? toolTurn(toolCall("lookup-child", "lookup", { key: "answer" }))
+          : finalParts('{"answer":"child-answer"}'),
+      );
+
+      const childBinding = Agent.withModel(child, childModel.model);
+
+      const handlers = toolkit.toLayer({
+        lookup: ({ key }) =>
+          Effect.sync(() => {
+            lookups++;
+
+            return { value: key };
+          }),
+      });
+
+      const registration = {
+        definitions: DefinitionDigestInput.make({
+          agent: "shared-child",
+          model: "scripted",
+          tools: "lookup",
+        }),
+        attemptLayer: () => handlers,
+      };
+
+      const [selected, alternative] = yield* compileRegistrations([
+        {
+          ...registration,
+          agent: childBinding,
+          continuity: { versions: { tools: { lookup: "lookup-v1" } } },
+        },
+        {
+          ...registration,
+          agent: Agent.withModel(other, childModel.model),
+          continuity: { versions: { tools: { lookup: "lookup-v2" } } },
+        },
+      ]);
+
+      if (selected === undefined || alternative === undefined)
+        return yield* Effect.die("Missing fixture registration");
+
+      const delegation = Subagent.define("delegate_shared", {
+        target: child,
+        description: "Look up one answer.",
+        parameters: Schema.Struct({ topic: Schema.String }),
+        success: Schema.Struct({ summary: Schema.String }),
+        failure: ResearchDelegationFailed,
+        prepareInput: ({ topic }) => Effect.succeed({ question: topic }),
+        projectResult: (output) => Effect.succeed({ summary: output.answer }),
+        policy: SubagentPolicy.make({
+          maxChildren: 1,
+          maxConcurrency: 1,
+          maxTurns: 4,
+          maxToolCalls: 4,
+          maxDuration: "10 seconds",
+        }),
+      });
+
+      const parent = Agent.make("shared-contract-parent", {
+        input: coordinatorDefinition.input,
+        output: coordinatorDefinition.output,
+        instructions: "Delegate, then finish.",
+        toolkit: Toolkit.make(delegation.tool),
+        policy: coordinatorDefinition.policy,
+      });
+
+      const parentModel = yield* makeScriptedModel((call) =>
+        call === 0
+          ? toolTurn(toolCall("delegate-1", "delegate_shared", { topic: "question" }))
+          : finalParts('{"report":"done"}'),
+      );
+
+      const parentBinding = Agent.withModel(parent, parentModel.model);
+
+      const parentResolved = yield* DurableWorkerBinding.make(parentBinding, PARENT_DIGESTS).pipe(
+        Effect.provide(
+          Subagent.layer(delegation, childBinding, { mapChildFailure }).pipe(
+            Layer.provide(Layer.merge(delegationSupport, handlers)),
+          ),
+        ),
+      );
+
+      const runtime = yield* DurableAgentRuntime.pipe(
+        Effect.provide(
+          DurableAgentRuntime.layerWithBindings([parentResolved, selected]).pipe(
+            Layer.provide(RunToolAuthorization.allowAll),
+          ),
+        ),
+      );
+
+      const receipt = yield* runtime.submit(
+        parentBinding,
+        { mission: "retain the contract" },
+        submitOptions("shared-contracts", "one"),
+      );
+
+      yield* runtime.processThreadResolved(receipt.threadId);
+      expect((yield* parentState(receipt.submissionId)).state).toBe("suspended");
+      const childThread = childThreadIdFor(receipt.submissionId, DELEGATE_CALL);
+
+      yield* armFailpoint("turn:after-response-append");
+      const interrupted = yield* runtime.processThreadResolved(childThread).pipe(Effect.exit);
+
+      expect(interrupted).toMatchObject({ _tag: "Failure" });
+      yield* clearFailpoint;
+      const retained = yield* readLog(childThread);
+
+      const response = retained.find(
+        ({ record }) => record.payload._tag === "ModelResponseRecorded",
+      )?.record.payload;
+
+      expect(response).toMatchObject({
+        toolOperations: [{ replay: selected.digests.replay?.tools.lookup }],
+      });
+      expect(lookups).toBe(0);
+
+      const replacement = yield* DurableAgentRuntime.pipe(
+        Effect.provide(
+          DurableAgentRuntime.layerWithBindings([parentResolved, selected, alternative]).pipe(
+            Layer.provide(RunToolAuthorization.allowAll),
+            Layer.provide(
+              Layer.succeed(CurrentBindingSelection, {
+                key: "shared-child-v1",
+                select: (submission) =>
+                  Effect.succeed(submission.agentId === child.id ? child : undefined),
+              }),
+            ),
+          ),
+        ),
+      );
+
+      const completed = yield* replacement.processThreadResolved(childThread);
+
+      expect(completed.map((settlement) => settlement.outcome)).toEqual(["completed"]);
+      expect(lookups).toBe(1);
+      expect((yield* readLog(childThread)).slice(0, retained.length)).toEqual(retained);
+      expect(
+        (yield* replacement.processThreadResolved(receipt.threadId)).map(
+          (settlement) => settlement.outcome,
+        ),
+      ).toEqual(["completed"]);
+    }),
+  );
+
   it.effect(
     "RUN-030: expired child cleanup preserves an uncertain ordinary call until operator resolution",
     () =>

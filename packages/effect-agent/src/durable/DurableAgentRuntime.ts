@@ -1306,21 +1306,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
   const contractsFor = (definition: Agent.AnyDefinition) => {
     const registered = registeredBindings.filter(
-      (binding) =>
-        binding.agentId === definition.id &&
-        binding.definition.toolkit === definition.toolkit &&
-        binding.definition.completion === definition.completion &&
-        binding.definition.completionFromTools === definition.completionFromTools,
+      (binding) => binding.agentId === definition.id && Object.is(binding.definition, definition),
     );
 
-    const exact = registered.filter((binding) => Object.is(binding.definition, definition));
-    const candidates = exact.length === 0 ? registered : exact;
-    const current = candidates.length === 1 ? candidates[0] : undefined;
-
-    // Attempts may restore the accepted Run policy on a Definition copy. Replay contracts
-    // describe Tools, so retain the registration's semantic versions while all declarations
-    // that affect those contracts are unchanged. Replaced Tools or completion declarations
-    // must not inherit another executable's replay authority.
+    const current = registered.length === 1 ? registered[0] : undefined;
     const contracts = current?.digests.replay?.tools;
 
     return contracts === undefined
@@ -1330,12 +1319,15 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       : Effect.succeed(contracts);
   };
 
+  const resolveCurrentBinding = (submission: SubmissionSnapshot) =>
+    resolveWorkerBinding(registeredBindings, submission).pipe(
+      Effect.provideService(CurrentBindingSelection, bindingSelection),
+    );
+
   const currentOperationsFor = Effect.fnUntraced(function* (submission: SubmissionSnapshot) {
-    const binding = yield* resolveWorkerBinding(
-      registeredBindings,
-      submission,
-      bindingSelection,
-    ).pipe(Effect.catchTag("BindingUnavailable", () => Effect.succeed(undefined)));
+    const binding = yield* resolveCurrentBinding(submission).pipe(
+      Effect.catchTag("BindingUnavailable", () => Effect.succeed(undefined)),
+    );
 
     return binding === undefined
       ? undefined
@@ -4560,6 +4552,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     journalMetadata: JournalMetadata | undefined,
     lineage: AttemptLineage,
     approvalDecisions: ReadonlyArray<ApprovalDecisionIntent>,
+    currentContracts: Readonly<Record<string, Digest>>,
     runTiming: { readonly startedAt: DateTime.Utc; readonly deadline: DateTime.Utc },
     yieldAfter?: DateTime.Utc,
   ) =>
@@ -4881,8 +4874,6 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               undefined,
               journalSeed,
             );
-
-      const currentContracts = yield* contractsFor(agent.definition);
 
       const rolloverOperation =
         journal.pendingContextToolCallId === undefined
@@ -8137,6 +8128,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               definition: { ...registeredAgent.definition, policy: childPolicy },
             };
 
+      // Restoring the accepted child policy changes no Tool declarations. Retain the
+      // selected registration's contracts instead of resolving the copied Definition.
+      const currentContracts = yield* contractsFor(registeredAgent.definition);
+
       const evidence = yield* evidenceFor(records, submissionId, true, snapshot.hostSubmissionId);
       const knownIds = knownRecordIdsOf(records);
 
@@ -8232,7 +8227,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           reconciliationRecords,
           reconciliationEvidence.openToolCalls,
           knownIds,
-          { definition: agent.definition, contracts: yield* contractsFor(agent.definition) },
+          { definition: agent.definition, contracts: currentContracts },
         );
 
         if (review.uncertain.length > 0 || review.unproven.length > 0) {
@@ -8272,7 +8267,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       if (continuation !== undefined) {
         const current = {
           definition: agent.definition,
-          contracts: yield* contractsFor(agent.definition),
+          contracts: currentContracts,
         };
 
         const operations = operationsFor(continuationRecords, runIdForSubmission(submissionId));
@@ -8447,6 +8442,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           journalMetadata?.snapshot(),
           lineage,
           approvalDecisionIntents,
+          currentContracts,
           runTiming,
           yieldAfter,
         );
@@ -8891,9 +8887,6 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         threadId,
       );
     });
-
-  const resolveCurrentBinding = (submission: SubmissionSnapshot) =>
-    resolveWorkerBinding(registeredBindings, submission, bindingSelection);
 
   const processThreadResolvedImpl = (
     threadId: ThreadId,
@@ -11124,9 +11117,24 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     bindingRegistryKey: yield* withCrypto(
       digestJson({
         selection: bindingSelection?.key ?? null,
-        bindings: registeredBindings
-          .map((binding) => JSON.stringify([binding.agentId, binding.digests]))
-          .sort(),
+        bindings: (yield* Effect.forEach(registeredBindings, (binding) =>
+          withCrypto(
+            digestJson({
+              agentId: binding.agentId,
+              agent: binding.digests.agent,
+              model: binding.digests.model,
+              tools: binding.digests.tools,
+              replay:
+                binding.digests.replay === undefined
+                  ? null
+                  : {
+                      agent: binding.digests.replay.agent,
+                      agentBehavior: binding.digests.replay.agentBehavior ?? null,
+                      tools: binding.digests.replay.tools,
+                    },
+            }),
+          ),
+        ).pipe(Effect.orDie)).sort(),
       }),
     ).pipe(Effect.orDie),
     workerHost: workerRuntime.acquire,

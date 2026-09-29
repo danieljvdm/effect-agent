@@ -297,6 +297,7 @@ prevents another claim. `explainThread` exposes parked operations for authorized
 Failed and no-progress passes preserve the dirty generation and use jittered exponential
 backoff up to `alarmBackoffCap` (5 seconds by default).
 Missing or duplicate agent bindings park the original submission and report the refusal once.
+Interruption before the wait commits can repeat the report; reporting is not exactly once.
 The wait survives eviction and does not schedule an alarm. Unrelated host work and aborts
 remain serviceable. On the next invocation with changed registered identities, definition
 digests, or selection key, constructor maintenance clears binding waits and schedules one native pass. A dormant

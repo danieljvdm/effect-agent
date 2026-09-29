@@ -384,8 +384,8 @@ export const makeLegacyWorkerBinding = capture;
 export const resolveWorkerBinding = Effect.fnUntraced(function* (
   bindings: ReadonlyArray<ResolvedBinding>,
   submission: SubmissionSnapshot,
-  selection?: BindingSelection,
 ) {
+  const selection = yield* CurrentBindingSelection;
   const definition = selection === undefined ? undefined : yield* selection.select(submission);
 
   const registered = bindings.filter(
