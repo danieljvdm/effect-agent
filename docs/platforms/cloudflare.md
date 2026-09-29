@@ -376,6 +376,33 @@ in epoch milliseconds, or `None` when idle. Calculate it as part of the wave tha
 receipts and retries. The scheduler never calls a separate host deadline reader. Compose hosts
 by concatenating their lanes.
 
+When native input or settlement creates application work, select its lanes at the native owner:
+
+```ts
+const RuntimeLive = ThreadObject.layer(registrations, {
+  hostLanesForMutation: (mutation) => {
+    switch (mutation._tag) {
+      case "Admission":
+        return ["guidance"];
+      case "Settlement":
+        return ["replies", "memory"];
+      case "WorkerStop":
+        return ["replies"];
+    }
+  },
+});
+```
+
+This pure, bounded selector receives the native request. The owner prearms the selected IDs and
+guards them through the source mutation, including replay and recovery finalization without a new
+canonical append. Delivery does not depend on lifecycle publication reaching an external database.
+
+Lanes run concurrently by default. Set `phase: "after-native"` on a lane such as memory delivery
+to give it one due wave after native Attempts and their scoped cleanup finish, including on native
+failure. Selection uses the final queue revisions; idle lanes do not run. The phase stays inside
+the same pass permit and fourteen-minute event deadline. Its failures retain independent retries
+and are reported together with any native failure.
+
 A registered host lane starts idle. Producers name only the lanes receiving work, and the gate
 prearms those entries before the mutation body. A failed mutation can leave a discovery wave;
 validation and authorization should precede enrollment when they establish that no work is needed.

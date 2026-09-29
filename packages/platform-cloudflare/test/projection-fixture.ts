@@ -10,6 +10,7 @@ import { SqlClient } from "effect/unstable/sql/SqlClient";
 
 import { ThreadHostMaintenance, type ThreadHostMaintenanceLane } from "../src/Alarm.ts";
 import { ThreadObjectIdentity } from "../src/CloudflareBindings.ts";
+import type { ThreadHostMutation } from "../src/ThreadObject.ts";
 
 interface ProjectionControl {
   readonly operation?: "live" | "drain";
@@ -22,6 +23,11 @@ interface ProjectionControl {
 export const projectionControls = new Map<string, ProjectionControl>();
 
 export const hostMaintenanceControls = new Map<string, ReadonlyArray<ThreadHostMaintenanceLane>>();
+
+export const hostMutationControls = new Map<
+  string,
+  (mutation: ThreadHostMutation) => ReadonlyArray<string>
+>();
 
 export const hostMaintenanceLayer = Layer.effectContext(
   Effect.gen(function* () {

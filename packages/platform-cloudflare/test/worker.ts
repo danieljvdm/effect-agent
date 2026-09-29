@@ -63,7 +63,11 @@ import {
   testMessageRecovery,
 } from "./message-delivery-fixture.ts";
 import { observabilityProbeLayer, telemetryProbe } from "./observability-fixture.ts";
-import { hostMaintenanceLayer, projectionLayer } from "./projection-fixture.ts";
+import {
+  hostMaintenanceLayer,
+  hostMutationControls,
+  projectionLayer,
+} from "./projection-fixture.ts";
 import { publicationLayer, lifecyclePublicationTestLayer } from "./publication-fixture.ts";
 import { recoveryTestLayer } from "./recovery-fixture.ts";
 import { makeSubagentTestBindings, transportFaultReason } from "./subagent-fixtures.ts";
@@ -280,7 +284,16 @@ export class ProjectionThreadObject extends ThreadObject.make(
     ),
   ).pipe(
     Layer.provideMerge(
-      ThreadObject.layer([], { projection: projectionLayer, publication: publicationLayer }),
+      Layer.unwrap(
+        Effect.map(ThreadObjectIdentity, ({ threadId }) =>
+          ThreadObject.layer([], {
+            projection: projectionLayer,
+            publication: publicationLayer,
+            hostLanesForMutation: (mutation) =>
+              hostMutationControls.get(threadId)?.(mutation) ?? [],
+          }),
+        ),
+      ),
     ),
     Layer.provideMerge(maintenanceClockLayer),
   ),

@@ -118,6 +118,7 @@ export {
   layerInHost,
   ThreadObjectPorts,
   type ThreadPublicationOptions as PublicationOptions,
+  type ThreadHostMutation,
   type CloudflareDurableRuntimeOptions as RuntimeOptions,
   type CloudflareDurableRuntimeServices as Services,
   type CloudflareDurableRuntimeInitializationError as InitializationError,

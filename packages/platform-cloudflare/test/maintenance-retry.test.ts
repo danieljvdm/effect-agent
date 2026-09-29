@@ -14,6 +14,7 @@ import {
   ReleaseOwnershipRequest,
   SubmissionLedger,
   SubmissionLookupById,
+  LedgerError,
 } from "effect-agent/submission-ledger";
 import { ThreadStore, ThreadTailRequest } from "effect-agent/thread-store";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
@@ -45,6 +46,158 @@ const Generation = Schema.Struct({
 });
 
 describe("maintenance retry deadlines", () => {
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/0e83011e
+  it.each([false, true])("runs one post-native wave after attempt cleanup (failed: %s)", (failed) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const thread = `maintenance-after-native-${crypto.randomUUID()}`;
+
+        yield* TestClock.setTime(Date.now() + 86_400_000);
+        maintenanceClocks.set(thread, yield* Clock.Clock);
+        yield* Effect.addFinalizer(() => Effect.sync(() => maintenanceClocks.delete(thread)));
+        yield* Effect.promise(() =>
+          runClient(
+            CloudflareThreadClient.use((client) =>
+              client.submit(
+                { definition: plannerDefinition },
+                { question: "post-native", ref: thread },
+                submitOptions(thread, thread),
+              ),
+            ),
+          ),
+        );
+        yield* Effect.promise(() =>
+          runInDurableObject(stubFor(thread), (instance, state) =>
+            instance[DurableObject.RunSymbol](
+              Effect.gen(function* () {
+                yield* TestClock.setTime(Date.now() + 86_400_000);
+                const runtime = yield* DurableAgentRuntime;
+                const gate = yield* ThreadMutationGate;
+                const failpoint = yield* ThreadMaintenanceFailpoint;
+                const timeoutEntered = yield* Deferred.make<void>();
+                const postEntered = yield* Deferred.make<void>();
+                const finishPost = yield* Deferred.make<void>();
+                const observed: Array<boolean> = [];
+                let finalized = false;
+                let postActive = false;
+
+                const nativeFailure = LedgerError.make({
+                  operation: "native fixture",
+                  message: "failed",
+                });
+
+                const defect = new Error("native defect");
+
+                yield* Effect.gen(function* () {
+                  const maintenance = yield* ThreadMaintenance;
+
+                  yield* gate.schedule("test:after-native", 0);
+                  if (failed) yield* gate.schedule("test:after-timeout", 0);
+                  if (failed) yield* Deferred.succeed(finishPost, undefined);
+                  const running = yield* Effect.forkChild(maintenance.pass);
+
+                  if (failed) {
+                    yield* Deferred.await(timeoutEntered);
+                    yield* TestClock.adjust(1_001);
+                  } else {
+                    yield* Deferred.await(postEntered);
+                    const next = yield* Effect.forkChild(maintenance.pass);
+
+                    yield* TestClock.adjust(1);
+                    expect(next.pollUnsafe()).toBeUndefined();
+                    yield* Deferred.succeed(finishPost, undefined);
+                    yield* Fiber.join(next);
+                  }
+                  const exit = yield* Fiber.await(running);
+
+                  expect(observed).toEqual([true]);
+                  expect(
+                    state.storage.sql
+                      .exec<{ dueAt: number | null }>(
+                        "SELECT dueAt FROM platform_cloudflare_due_queue WHERE id = 'test:after-native'",
+                      )
+                      .one().dueAt,
+                  ).toBeNull();
+                  expect(Exit.isFailure(exit)).toBe(failed);
+                  if (Exit.isFailure(exit)) {
+                    expect(Cause.hasDies(exit.cause)).toBe(true);
+                    expect(Cause.pretty(exit.cause)).toContain("LedgerError: failed");
+                    expect(Cause.pretty(exit.cause)).toContain(
+                      "The admitted host wave exceeded its allowance",
+                    );
+                    expect(yield* Effect.promise(() => state.storage.getAlarm())).not.toBeNull();
+                  }
+                }).pipe(
+                  Effect.provide(Layer.fresh(ThreadMaintenance.layer)),
+                  Effect.provideService(ThreadMaintenanceFailpoint, {
+                    hit: (location) =>
+                      failpoint.hit(location).pipe(
+                        Effect.tap(() =>
+                          Effect.sync(() => {
+                            if (location === "maintenance:begin:before")
+                              expect(postActive).toBe(false);
+                          }),
+                        ),
+                      ),
+                  }),
+                  Effect.provideService(DurableAgentRuntime, {
+                    ...runtime,
+                    processThreadHead: (...args) =>
+                      runtime.processThreadHead(...args).pipe(
+                        Effect.flatMap((value) =>
+                          failed
+                            ? Effect.failCause(
+                                Cause.combine(Cause.fail(nativeFailure), Cause.die(defect)),
+                              )
+                            : Effect.succeed(value),
+                        ),
+                        Effect.ensuring(
+                          gate.schedule("test:after-native", 0).pipe(
+                            Effect.orDie,
+                            Effect.andThen(
+                              Effect.sync(() => {
+                                finalized = true;
+                              }),
+                            ),
+                          ),
+                        ),
+                      ),
+                  }),
+                  Effect.provideService(ThreadHostMaintenance, {
+                    lanes: [
+                      {
+                        id: "test:after-native",
+                        phase: "after-native",
+                        dispatchTimeoutMillis: 1_000,
+                        run: Effect.gen(function* () {
+                          observed.push(finalized);
+                          postActive = true;
+                          yield* Deferred.succeed(postEntered, undefined);
+                          yield* Deferred.await(finishPost);
+                          postActive = false;
+
+                          return Option.none<number>();
+                        }),
+                      },
+                      {
+                        id: "test:after-timeout",
+                        phase: "after-native",
+                        dispatchTimeoutMillis: 1_000,
+                        run: Deferred.succeed(timeoutEntered, undefined).pipe(
+                          Effect.andThen(Effect.never),
+                        ),
+                      },
+                    ],
+                  }),
+                );
+              }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+            ),
+          ),
+        );
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    ),
+  );
+
   // Regression: https://reve-r6.sentry.io/issues/KOMMUNIKASIE-API-C9
   it.each(["typed", "timeout"] as const)(
     "keeps admission and native dispatch available after an independent %s failure",

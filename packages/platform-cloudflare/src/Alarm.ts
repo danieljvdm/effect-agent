@@ -320,6 +320,11 @@ export const ThreadMessageDelivery = Context.Reference<{
  */
 export interface ThreadHostMaintenanceLane {
   readonly id: string;
+  /** Omission runs concurrently with native work. After-native lanes get one due wave
+   * after all admitted native Attempts and their scoped cleanup, even on native failure.
+   * They share the event deadline and remain inside the maintenance pass permit.
+   */
+  readonly phase?: "concurrent" | "after-native";
   readonly dispatchTimeoutMillis: number;
   readonly run: Effect.Effect<Option.Option<number>, DurableAlarmError, Scope.Scope>;
 }
@@ -1873,11 +1878,42 @@ export class ThreadMaintenance extends Context.Service<
         };
       });
 
-      const pass = Effect.fn("ThreadMaintenance.pass")(function* (
+      const validateLanes = Effect.fn("ThreadMaintenance.validateLanes")(function* (
+        lanes: ReadonlyArray<ThreadHostMaintenanceLane>,
+        queued: ReadonlyArray<DueQueue.DueLane>,
+      ) {
+        const ids = new Set([
+          DueQueue.Native,
+          DueQueue.Publication,
+          DueQueue.Projection,
+          DueQueue.Messages,
+        ]);
+
+        for (const lane of lanes) {
+          yield* Schema.decodeEffect(DueQueue.LaneId)(lane.id).pipe(
+            Effect.mapError(alarmFailure("maintenance lane ID")),
+          );
+          if (ids.has(lane.id))
+            return yield* DurableAlarmError.make({
+              operation: "maintenance lane ID",
+              message: `Duplicate maintenance lane: ${lane.id}`,
+            });
+          ids.add(lane.id);
+        }
+        for (const row of queued) {
+          if (row.dueAt !== null && !ids.has(row.id))
+            return yield* DurableAlarmError.make({
+              operation: "maintenance lane ID",
+              message: `No handler registered for scheduled lane: ${row.id}`,
+            });
+        }
+      });
+
+      const dispatch = Effect.fn("ThreadMaintenance.dispatch")(function* (
         yieldAfter: DateTime.Utc,
         dispatchUntil: DateTime.Utc,
         observed: MaintenanceObservation,
-      ): Effect.fn.Return<MaintenancePassReport, MaintenancePassFailure, Scope.Scope> {
+      ) {
         // Subscribe before the first snapshot. Durable enrollment recovers eviction;
         // producer completion and wake hints make work visible during this incarnation.
         const notified = (yield* Stream.toPull(wakes.wakes)).pipe(
@@ -1935,7 +1971,10 @@ export class ThreadMaintenance extends Context.Service<
                   await transaction.put(
                     MAINTENANCE_STATE_KEY,
                     encodeMaintenanceState(
-                      ThreadMaintenanceState.make({ ...state, lastRecoveredThreadId: threadId }),
+                      ThreadMaintenanceState.make({
+                        ...state,
+                        lastRecoveredThreadId: threadId,
+                      }),
                     ),
                   );
                 }),
@@ -2068,33 +2107,15 @@ export class ThreadMaintenance extends Context.Service<
           const queued = yield* queueSnapshot;
           const producing = yield* mutations.activeLanes;
 
-          const ids = new Set([
-            DueQueue.Native,
-            DueQueue.Publication,
-            DueQueue.Projection,
-            DueQueue.Messages,
-          ]);
-
+          yield* validateLanes(lanes, queued);
           for (const lane of lanes) {
-            yield* Schema.decodeEffect(DueQueue.LaneId)(lane.id).pipe(
-              Effect.mapError(alarmFailure("maintenance lane ID")),
-            );
-            if (ids.has(lane.id))
-              return yield* DurableAlarmError.make({
-                operation: "maintenance lane ID",
-                message: `Duplicate maintenance lane: ${lane.id}`,
-              });
-            ids.add(lane.id);
-          }
-          for (const row of queued) {
-            if (row.dueAt !== null && !ids.has(row.id))
-              return yield* DurableAlarmError.make({
-                operation: "maintenance lane ID",
-                message: `No handler registered for scheduled lane: ${row.id}`,
-              });
-          }
-          for (const lane of lanes) {
-            if (lane.fiber !== undefined || lane.exhausted || producing.has(lane.id)) continue;
+            if (
+              lane.phase === "after-native" ||
+              lane.fiber !== undefined ||
+              lane.exhausted ||
+              producing.has(lane.id)
+            )
+              continue;
             const row = queued.find((row) => row.id === lane.id);
 
             if (row === undefined || row.dueAt === null || row.dueAt > now) continue;
@@ -2271,6 +2292,77 @@ export class ThreadMaintenance extends Context.Service<
           if (result.phase === "actionable") phase = "actionable";
         }
         yield* Scope.close(auxiliaryScope, Exit.void);
+
+        return { result, phase, recovered: recovery.recovered, settled: dispatch.settled };
+      });
+
+      const pass = Effect.fn("ThreadMaintenance.pass")(function* (
+        yieldAfter: DateTime.Utc,
+        dispatchUntil: DateTime.Utc,
+        observed: MaintenanceObservation,
+      ): Effect.fn.Return<MaintenancePassReport, MaintenancePassFailure, Scope.Scope> {
+        const concurrent = yield* Effect.exit(
+          Effect.scoped(dispatch(yieldAfter, dispatchUntil, observed)),
+        );
+
+        // Closing the concurrent scope first releases every native Attempt and its resources.
+        // Select fresh revisions: finalizers may have retained the last host obligation.
+        const afterNative = yield* Effect.gen(function* () {
+          const lanes = [recoveryEventLane, ...framework.lanes, ...host.lanes];
+          const selected = lanes.filter((lane) => lane.phase === "after-native");
+
+          if (selected.length === 0) return [];
+          const queued = yield* queueSnapshot;
+          const producing = yield* mutations.activeLanes;
+          const dispatchEnd = DateTime.toEpochMillis(dispatchUntil);
+
+          yield* validateLanes(lanes, queued);
+
+          return yield* Effect.forEach(
+            selected,
+            (lane) =>
+              Effect.gen(function* () {
+                const row = queued.find((row) => row.id === lane.id);
+                const now = yield* Clock.currentTimeMillis;
+
+                if (
+                  row === undefined ||
+                  row.dueAt === null ||
+                  row.dueAt > now ||
+                  producing.has(lane.id)
+                )
+                  return;
+                yield* Schema.decodeEffect(AuxiliaryDispatchMillis)(
+                  lane.dispatchTimeoutMillis,
+                ).pipe(Effect.mapError(alarmFailure("host dispatch allowance")));
+                if (now + lane.dispatchTimeoutMillis > dispatchEnd) return;
+                yield* runQueued(row, lane.run.pipe(Effect.scoped), observed).pipe(
+                  Effect.timeoutOrElse({
+                    duration: lane.dispatchTimeoutMillis,
+                    orElse: () =>
+                      DurableAlarmError.make({
+                        operation: "host dispatch allowance",
+                        message:
+                          "The admitted host wave exceeded its allowance; durable work remains pending",
+                      }),
+                  }),
+                );
+              }).pipe(Effect.exit),
+            { concurrency: "unbounded" },
+          );
+        }).pipe(Effect.exit);
+
+        let failure = Exit.isFailure(concurrent) ? concurrent.cause : Cause.empty;
+
+        if (Exit.isFailure(afterNative)) failure = Cause.combine(failure, afterNative.cause);
+        else
+          for (const exit of afterNative.value) {
+            if (Exit.isFailure(exit)) failure = Cause.combine(failure, exit.cause);
+          }
+        if (Exit.isFailure(concurrent) || failure.reasons.length > 0)
+          return yield* Effect.failCause(failure);
+        const { result, phase, recovered, settled } = concurrent.value;
+
         yield* failpoint.hit("maintenance:finish:before");
 
         const disposition = yield* mutations.withSnapshot((active) =>
@@ -2310,8 +2402,8 @@ export class ThreadMaintenance extends Context.Service<
 
         const report = MaintenancePassReport.make({
           phase,
-          recovered: recovery.recovered,
-          settled: dispatch.settled,
+          recovered,
+          settled,
           nonterminal: result.nonterminal,
           alarm: disposition,
         });

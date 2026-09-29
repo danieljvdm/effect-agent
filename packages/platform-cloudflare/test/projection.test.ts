@@ -10,6 +10,8 @@ import {
   SubmissionLedger,
   SubmissionLookupById,
   type AbortIntent,
+  type AdmissionRequest,
+  type SettlementFinalization,
 } from "effect-agent/submission-ledger";
 import {
   FencedAppendRequest,
@@ -54,6 +56,7 @@ import {
 } from "./harness.ts";
 import {
   hostMaintenanceControls,
+  hostMutationControls,
   ProjectionIndex,
   projectionControls,
 } from "./projection-fixture.ts";
@@ -101,6 +104,7 @@ const withThread = (
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
           hostMaintenanceControls.delete(thread);
+          hostMutationControls.delete(thread);
           projectionControls.delete(thread);
           maintenanceClocks.delete(thread);
           releaseMaintenancePause(thread);
@@ -154,6 +158,62 @@ const append = (thread: string, request: FencedAppendRequest) =>
   );
 
 describe("live Thread projection and alarm backfill", () => {
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/0e83011e
+  it("enrolls native admission, replayed finalization and stop without another append", () =>
+    withThread(async (thread) => {
+      let admission: AdmissionRequest | undefined;
+      let settlement: SettlementFinalization | undefined;
+
+      hostMutationControls.set(thread, (mutation) => {
+        if (mutation._tag === "Admission") admission = mutation.request;
+        if (mutation._tag === "Settlement") settlement = mutation.request;
+
+        return [`test:${mutation._tag}`];
+      });
+      const receipt = await submit(thread, plannerDefinition);
+
+      const rows = () =>
+        runInDurableObject(stub(thread), (_, state) =>
+          state.storage.sql
+            .exec<{ id: string; revision: number; dueAt: number | null }>(
+              "SELECT id, revision, dueAt FROM platform_cloudflare_due_queue WHERE id LIKE 'test:%' ORDER BY id",
+            )
+            .toArray(),
+        );
+
+      expect(await rows()).toEqual([
+        { id: "test:Admission", revision: 1, dueAt: expect.any(Number) },
+      ]);
+      await runInDurableObject(stub(thread), (instance) =>
+        instance[DurableObject.RunSymbol](
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            const runtime = yield* DurableAgentRuntime;
+
+            expect(admission).toBeDefined();
+            if (admission === undefined) return;
+            const replay = yield* ledger.admit(admission);
+
+            expect(replay.submissionId).toBe(receipt.submissionId);
+            yield* runtime.processThreadHead(decodeThreadId(thread));
+            expect(settlement).toBeDefined();
+            if (settlement === undefined) return;
+            yield* ledger.finalizeSettlement(settlement);
+            yield* ledger.stopWorker!({
+              threadId: decodeThreadId(thread),
+              author: admission.principal,
+            });
+          }),
+        ),
+      );
+      expect(await rows()).toEqual([
+        { id: "test:Admission", revision: 2, dueAt: expect.any(Number) },
+        { id: "test:Settlement", revision: 2, dueAt: expect.any(Number) },
+        { id: "test:WorkerStop", revision: 1, dueAt: expect.any(Number) },
+      ]);
+      expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
+    }));
+
   // Regression: https://github.com/danieljvdm/effect-agent/commit/b0a978cbf654962a42d8a794c2e826cc23a4c625
   it("includes interruptible finalizers in the host lane's original allowance", () =>
     withThread(async (thread, _now, advance) => {

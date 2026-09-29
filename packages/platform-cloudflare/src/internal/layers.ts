@@ -81,6 +81,9 @@ import {
   LedgerError,
   SubmissionLedger,
   type SubmissionSnapshot,
+  type AdmissionRequest,
+  type SettlementFinalization,
+  type WorkerStopCommand,
 } from "effect-agent/submission-ledger";
 import { ThreadProjectionMaintenance } from "effect-agent/thread-projection-maintenance";
 import { ThreadStoreError, ThreadStore } from "effect-agent/thread-store";
@@ -423,7 +426,19 @@ export const layerHostConfig = (
     }),
   );
 
+/** Native source mutations which can create independently retained application obligations. */
+export type ThreadHostMutation =
+  | { readonly _tag: "Admission"; readonly request: AdmissionRequest }
+  | { readonly _tag: "Settlement"; readonly request: SettlementFinalization }
+  | { readonly _tag: "WorkerStop"; readonly request: WorkerStopCommand };
+
 export interface ThreadPublicationOptions<E = never, R = never, P = never> {
+  /** Pure, bounded selection of affected host lane IDs. The native owner prearms and guards
+   * these lanes through the source mutation, including replay and recovery-only finalization.
+   * Return only registered host IDs; do not perform I/O or acquire maintenance services here.
+   * Delivery is independent of lifecycle publication and remains at least once.
+   */
+  readonly hostLanesForMutation?: (mutation: ThreadHostMutation) => ReadonlyArray<string>;
   /** Per-Submission recovery fault transitions. Capture host services once per incarnation;
    * acknowledge only after durable application or outbox retention. Delivery runs in a
    * separate bounded maintenance lane and does not gate native execution.
@@ -636,6 +651,7 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
       const localPorts =
         options.publication === undefined &&
         options.projection === undefined &&
+        options.hostLanesForMutation === undefined &&
         options.lifecyclePublication === undefined
           ? rawLocalPorts
           : Layer.effectContext(
@@ -723,6 +739,7 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                 const observeIntent = <A, Failure>(
                   body: Effect.Effect<A, Failure>,
                   invalidatesRecovery = true,
+                  hostLanes: ReadonlyArray<string> = [],
                 ) =>
                   mutations
                     .withMutation(
@@ -731,8 +748,12 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                       ),
                       {
                         invalidatesRecovery,
-                        lanes:
-                          options.lifecyclePublication === undefined ? [] : [DueQueue.Lifecycle],
+                        lanes: [
+                          ...hostLanes,
+                          ...(options.lifecyclePublication === undefined
+                            ? []
+                            : [DueQueue.Lifecycle]),
+                        ],
                       },
                     )
                     .pipe(
@@ -745,11 +766,41 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                       ),
                     );
 
+                const observeMutation = <A, Failure>(
+                  mutation: ThreadHostMutation,
+                  body: Effect.Effect<A, Failure>,
+                  invalidatesRecovery: boolean,
+                ) =>
+                  Effect.suspend(() =>
+                    Schema.decodeUnknownEffect(Schema.Array(DueQueue.HostLaneId))([
+                      ...new Set(options.hostLanesForMutation?.(mutation) ?? []),
+                    ]),
+                  ).pipe(
+                    Effect.mapError((cause) =>
+                      LedgerError.make({
+                        operation: "select host maintenance lanes",
+                        message: "Native mutation selected an invalid host lane ID",
+                        cause,
+                      }),
+                    ),
+                    Effect.flatMap((lanes) => observeIntent(body, invalidatesRecovery, lanes)),
+                  );
+
                 const stopWorker = ledger.stopWorker;
 
                 return Context.make(ThreadStore, observedStore).pipe(
                   Context.add(SubmissionLedger, {
                     ...ledger,
+                    ...(options.hostLanesForMutation === undefined
+                      ? {}
+                      : {
+                          admit: (request: AdmissionRequest) =>
+                            observeMutation(
+                              { _tag: "Admission", request },
+                              ledger.admit(request),
+                              false,
+                            ),
+                        }),
                     ...(options.lifecyclePublication === undefined
                       ? {}
                       : {
@@ -759,8 +810,17 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                             observeIntent(ledger.markUnknown(request), false),
                           recordChildSettled: (request) =>
                             observeIntent(ledger.recordChildSettled(request), false),
-                          finalizeSettlement: (request) =>
-                            observeIntent(ledger.finalizeSettlement(request), false),
+                        }),
+                    ...(options.lifecyclePublication === undefined &&
+                    options.hostLanesForMutation === undefined
+                      ? {}
+                      : {
+                          finalizeSettlement: (request: SettlementFinalization) =>
+                            observeMutation(
+                              { _tag: "Settlement", request },
+                              ledger.finalizeSettlement(request),
+                              false,
+                            ),
                         }),
                     recordApprovalDecision: (request) =>
                       observeIntent(ledger.recordApprovalDecision(request)),
@@ -768,7 +828,11 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                       ? {}
                       : {
                           stopWorker: (request: Parameters<NonNullable<typeof stopWorker>>[0]) =>
-                            observeIntent(stopWorker(request)),
+                            observeMutation(
+                              { _tag: "WorkerStop", request },
+                              stopWorker(request),
+                              true,
+                            ),
                         }),
                     requestAbort: (request) => observeIntent(ledger.requestAbort(request)),
                     recordUnknownResolution: (request) =>
