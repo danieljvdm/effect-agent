@@ -1,7 +1,8 @@
 import { Data, Effect, Option, Schema, Stream } from "effect";
+import { PageCaptureTargetUrl } from "effect-agent/page-capture";
 
-export const PROOF_SOURCE_URL = "https://example.com/";
-export const PROOF_FACT = "Example Domain";
+export const PROOF_SOURCE_PATH = "/source";
+export const PROOF_FACT = "Browser Run proof fixture";
 
 export const BrowserRunProofStage = Schema.Literals([
   "capture",
@@ -101,7 +102,7 @@ const ScrapeProof = Schema.Struct({
 export class BrowserRunInteractiveProof extends Schema.Class<BrowserRunInteractiveProof>(
   "@effect-agent/example-browser-run-worker-proof/BrowserRunInteractiveProof",
 )({
-  finalUrl: Schema.Literal(PROOF_SOURCE_URL),
+  finalUrl: PageCaptureTargetUrl,
   readFact: Schema.Literal(PROOF_FACT),
   screenshot: ScreenshotProof,
   scrolled: Schema.Literal(true),
@@ -113,7 +114,7 @@ export class BrowserRunInteractiveProof extends Schema.Class<BrowserRunInteracti
 export class BrowserRunWorkerProofResult extends Schema.Class<BrowserRunWorkerProofResult>(
   "@effect-agent/example-browser-run-worker-proof/BrowserRunWorkerProofResult",
 )({
-  sourceUrl: Schema.Literal(PROOF_SOURCE_URL),
+  sourceUrl: PageCaptureTargetUrl,
   action: Schema.Literal("markdown"),
   fact: Schema.Literal(PROOF_FACT),
   scrape: ScrapeProof,

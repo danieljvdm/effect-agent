@@ -15,8 +15,8 @@ buyer → discover → cart → sign in → address / wallet verification → sh
       → request approval → separate user request → submit once → inspect order history
 ```
 
-This extends the existing hosted proof and replaces its Wrangler deployment script with Alchemy's
-test lifecycle. See the [browser guide](../../docs/guide/browser.md) for the production adapters.
+The binding proof serves its own source page so capture, scrape, screenshot and navigation checks
+do not depend on another site's markup. See the [browser guide](../../docs/guide/browser.md) for the production adapters.
 The example depends directly on `@cloudflare/puppeteer` for the binding proof and uses the public
 native `BrowserSessions` and `BrowserCredentialAccess` APIs for the buyer.
 

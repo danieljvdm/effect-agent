@@ -11,7 +11,7 @@ import {
   BrowserRunInteractiveHost,
   BrowserRunLiveViewRequest,
 } from "@effect-agent/platform-cloudflare/interactive-browser";
-import { Config, Duration, Effect, Layer, Option, Redacted, Schema, Stream } from "effect";
+import { Config, Duration, Effect, Layer, Option, Redacted, RegExp, Schema, Stream } from "effect";
 import {
   BrowserNavigateRequest,
   BrowserReadTextRequest,
@@ -38,49 +38,16 @@ import {
   BrowserRunWorkerProofFailure,
   BrowserRunWorkerProofResult,
   PROOF_FACT,
-  PROOF_SOURCE_URL,
+  PROOF_SOURCE_PATH,
 } from "./contract.ts";
 import { credentialFixture, runCredentialProof } from "./credentials.ts";
 import { uploadFixture, runUploadProof } from "./uploads.ts";
 
-const proofCapture = WebCapture.make("capture_example_domain", {
-  description: "Read the fixed Example Domain proof page as Markdown.",
-  urls: ["example.com"],
-  actions: ["markdown"],
-  maxResponseBytes: 4 * 1_024,
-});
-
 const PROOF_SCRAPE_SELECTORS = ["h1", "a"] as const;
-
-const proofScrape = WebCapture.makeScrape("scrape_example_domain", {
-  description: "Scrape the fixed Example Domain proof page by selector.",
-  urls: ["example.com"],
-  maxResponseBytes: 16 * 1_024,
-});
-
 const SCREENSHOT_MAX_OUTPUT_BYTES = 256 * 1_024;
 const INTERACTIVE_MAX_TEXT_BYTES = 4 * 1_024;
 const QUICK_ACTION_PACING_DELAY = Duration.seconds(11);
 const PNG_SIGNATURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-const EXAMPLE_DOMAIN_REQUEST_PATTERN = "^https://example\\.com(?::[0-9]+)?(?:[/?#]|$)";
-
-const screenshotRequest = PageScreenshotRequest.make({
-  target: PageUrlTarget.make({ url: PROOF_SOURCE_URL }),
-  engine: "chromium",
-  limits: PageScreenshotLimits.make({ maxOutputBytes: SCREENSHOT_MAX_OUTPUT_BYTES }),
-  fullPage: false,
-  viewport: { width: 1_280, height: 720 },
-  resourcePolicy: { allowRequestPatterns: [EXAMPLE_DOMAIN_REQUEST_PATTERN] },
-});
-
-const interactivePolicy = InteractiveBrowserPolicy.make({
-  network: { _tag: "ExactHosts", allowedHosts: ["example.com"] },
-  maxActions: 7,
-  maxElapsedMillis: 90_000,
-  maxReturnedBytes: SCREENSHOT_MAX_OUTPUT_BYTES,
-});
-
-const interactiveNavigateRequest = BrowserNavigateRequest.make({ url: PROOF_SOURCE_URL });
 const interactiveReadTextRequest = BrowserReadTextRequest.make({});
 
 const hasPngSignature = (bytes: Uint8Array): boolean =>
@@ -115,23 +82,58 @@ const proofLayer = Layer.unwrap(
       ...lifecycleConfig,
     }).pipe(Layer.provide(FetchHttpClient.layer));
 
-    const browserRunLayer = Layer.mergeAll(quickActionLayer, interactiveLayer, sessionLayer);
-
-    return Layer.merge(
-      CloudflareBrowser.layer(proofCapture, { browser: env.BROWSER }),
-      CloudflareBrowser.layer(proofScrape, { browser: env.BROWSER }),
-    ).pipe(Layer.provideMerge(browserRunLayer));
+    return Layer.mergeAll(quickActionLayer, interactiveLayer, sessionLayer);
   }),
 );
 
 const runProof = Effect.gen(function* () {
+  const request = yield* Worker.NativeRequest;
+  const env = yield* WorkerEnvironment;
+  const source = new URL(PROOF_SOURCE_PATH, request.url);
+  const sourceUrl = source.href;
+
+  const proofCapture = WebCapture.make("capture_proof_page", {
+    description: "Read the owned proof page as Markdown.",
+    urls: [source.hostname],
+    actions: ["markdown"],
+    maxResponseBytes: 4 * 1_024,
+  });
+
+  const proofScrape = WebCapture.makeScrape("scrape_proof_page", {
+    description: "Scrape the owned proof page by selector.",
+    urls: [source.hostname],
+    maxResponseBytes: 16 * 1_024,
+  });
+
+  const captureLayer = Layer.merge(
+    CloudflareBrowser.layer(proofCapture, { browser: env.BROWSER }),
+    CloudflareBrowser.layer(proofScrape, { browser: env.BROWSER }),
+  );
+
+  const screenshotRequest = PageScreenshotRequest.make({
+    target: PageUrlTarget.make({ url: sourceUrl }),
+    engine: "chromium",
+    limits: PageScreenshotLimits.make({ maxOutputBytes: SCREENSHOT_MAX_OUTPUT_BYTES }),
+    fullPage: false,
+    viewport: { width: 1_280, height: 720 },
+    resourcePolicy: { allowRequestPatterns: [`^${RegExp.escape(source.origin)}(?:[/?#]|$)`] },
+  });
+
+  const interactivePolicy = InteractiveBrowserPolicy.make({
+    network: { _tag: "ExactHosts", allowedHosts: [source.hostname] },
+    maxActions: 7,
+    maxElapsedMillis: 90_000,
+    maxReturnedBytes: SCREENSHOT_MAX_OUTPUT_BYTES,
+  });
+
+  const interactiveNavigateRequest = BrowserNavigateRequest.make({ url: sourceUrl });
   let stage: typeof BrowserRunProofStage.Type = "capture";
 
   return yield* Effect.gen(function* () {
     const toolkit = yield* Toolkit.make(proofCapture.tool);
 
-    const results = yield* toolkit.handle("capture_example_domain", {
-      url: PROOF_SOURCE_URL,
+    const results = yield* toolkit.handle("capture_proof_page", {
+      url: sourceUrl,
       action: "markdown",
     });
 
@@ -153,8 +155,8 @@ const runProof = Effect.gen(function* () {
     stage = "scrape";
     const scrapeToolkit = yield* Toolkit.make(proofScrape.tool);
 
-    const scrapeResults = yield* scrapeToolkit.handle("scrape_example_domain", {
-      url: PROOF_SOURCE_URL,
+    const scrapeResults = yield* scrapeToolkit.handle("scrape_proof_page", {
+      url: sourceUrl,
       selectors: PROOF_SCRAPE_SELECTORS,
     });
 
@@ -202,7 +204,7 @@ const runProof = Effect.gen(function* () {
         stage = "navigate";
         const navigation = yield* handle.navigate(interactiveNavigateRequest);
 
-        if (navigation.url !== PROOF_SOURCE_URL) {
+        if (navigation.url !== sourceUrl) {
           return yield* WorkerCaptureProofError.make({
             message: "The interactive browser did not finish at the expected URL",
           });
@@ -224,7 +226,7 @@ const runProof = Effect.gen(function* () {
           BrowserScrollRequest.make({ deltaX: 0, deltaY: 128 }),
         );
 
-        if (scrolled.url !== PROOF_SOURCE_URL) {
+        if (scrolled.url !== sourceUrl) {
           return yield* WorkerCaptureProofError.make({
             message: "The interactive scroll changed the expected page URL",
           });
@@ -278,7 +280,7 @@ const runProof = Effect.gen(function* () {
         }
 
         return BrowserRunInteractiveProof.make({
-          finalUrl: PROOF_SOURCE_URL,
+          finalUrl: sourceUrl,
           readFact: PROOF_FACT,
           screenshot: { mediaType: "image/png", pngSignatureValid: true },
           scrolled: true,
@@ -290,7 +292,6 @@ const runProof = Effect.gen(function* () {
     );
 
     stage = "browser-credentials";
-    const request = yield* Worker.NativeRequest;
     const browserCredentials = yield* runCredentialProof(new URL(request.url).origin);
 
     stage = "file-upload";
@@ -298,7 +299,7 @@ const runProof = Effect.gen(function* () {
 
     return Response.json(
       BrowserRunWorkerProofResult.make({
-        sourceUrl: PROOF_SOURCE_URL,
+        sourceUrl,
         action: "markdown",
         fact: PROOF_FACT,
         scrape: {
@@ -315,6 +316,7 @@ const runProof = Effect.gen(function* () {
       }),
     );
   }).pipe(
+    Effect.provide(captureLayer),
     Effect.catch((error) =>
       Effect.succeed(
         Response.json(
@@ -343,6 +345,11 @@ export default Worker.make(
   Effect.gen(function* () {
     const request = yield* Worker.NativeRequest;
 
+    if (new URL(request.url).pathname === PROOF_SOURCE_PATH)
+      return new Response(
+        `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${PROOF_FACT}</title></head><body style="min-height:200vh"><h1 id="proof">${PROOF_FACT}</h1><p>This page belongs to the isolated browser proof.</p><a href="#proof">Proof heading</a></body></html>`,
+        { headers: { "content-type": "text/html; charset=utf-8" } },
+      );
     if (new URL(request.url).pathname.startsWith("/uploads/")) return yield* uploadFixture(request);
 
     return yield* new URL(request.url).pathname.startsWith("/credentials/")

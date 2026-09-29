@@ -239,7 +239,10 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
               shopOrigin: origin,
               processorOrigin: this.env.PROCESSOR_ORIGIN,
             }).pipe(Layer.provide(owner)),
-            OpenAiLanguageModel.model(this.env.CHECKOUT_MODEL, { max_output_tokens: 4_096 }).pipe(
+            OpenAiLanguageModel.model(this.env.CHECKOUT_MODEL, {
+              max_output_tokens: 4_096,
+              service_tier: "priority",
+            }).pipe(
               Layer.provide(
                 OpenAiClient.layer({ apiKey: Redacted.make(this.env.OPENAI_API_KEY) }).pipe(
                   Layer.provide(FetchHttpClient.layer),

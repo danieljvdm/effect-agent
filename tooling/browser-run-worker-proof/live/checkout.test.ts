@@ -27,6 +27,7 @@ import { assertPurchase, expectedQuote, sameQuote } from "../src/checkout-store.
 import {
   BrowserRunWorkerProofResult,
   describeBrowserRunProofFailureFromStream,
+  PROOF_SOURCE_PATH,
 } from "../src/contract.ts";
 
 // Only prove:live collects this file. The same stage is reusable only for explicit retirement.
@@ -345,9 +346,15 @@ const proof = Effect.gen(function* () {
           ),
         );
       }
-      yield* bindingResponse.json.pipe(
+
+      const result = yield* bindingResponse.json.pipe(
         Effect.flatMap(Schema.decodeUnknownEffect(BrowserRunWorkerProofResult)),
       );
+
+      const expectedSource = new URL(PROOF_SOURCE_PATH, bindingUrl).href;
+
+      if (result.sourceUrl !== expectedSource || result.interactive.finalUrl !== expectedSource)
+        return yield* failure("binding-proof", "The browser proof used a different source page");
       yield* updateReport((report) => ({ ...report, bindingProof: true }));
     }),
   );
