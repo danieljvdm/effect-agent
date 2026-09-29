@@ -519,6 +519,8 @@ interface NativeDispatch {
 }
 
 const nativeDispatchConcurrency = 2;
+/** Post-native delivery shares a finite connection budget across independent host lanes. */
+const afterNativeDispatchConcurrency = 2;
 
 /** Event-local observations only; durable ingress keeps racing mutations dirty. */
 interface NativeRecovery {
@@ -2348,7 +2350,7 @@ export class ThreadMaintenance extends Context.Service<
                   }),
                 );
               }).pipe(Effect.exit),
-            { concurrency: "unbounded" },
+            { concurrency: afterNativeDispatchConcurrency },
           );
         }).pipe(Effect.exit);
 
