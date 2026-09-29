@@ -2,10 +2,11 @@ import { Context, Effect, Option, Schema } from "effect";
 
 import type * as Agent from "../core/Agent.ts";
 import type { AgentPolicy } from "../core/AgentPolicy.ts";
-import type { SubmissionId, ThreadId } from "../core/Identifiers.ts";
+import type { AgentId, SubmissionId, ThreadId } from "../core/Identifiers.ts";
 import type { SubagentBudgetReservation } from "../core/SubagentContract.ts";
 import { WorkerError, type WorkerRef, type WorkerSource } from "../core/Worker.ts";
 import type {
+  CanonicalSequence,
   DefinitionDigests,
   Digest,
   PersistedJson,
@@ -13,6 +14,24 @@ import type {
   WorkerContinuation,
 } from "./Records.ts";
 import type { Principal, SubmissionSnapshot } from "./SubmissionLedger.ts";
+
+/**
+ * One successful start authorization at an exact source tail. This host-created hint is
+ * available only during that start's preparation and synchronous admission; it is never
+ * persisted or transported. Hooks may reuse their admission decision, but must retain
+ * current access checks at commit boundaries. A retry or changed tail gets no old grant.
+ */
+export interface WorkerStartAdmission {
+  readonly sourceThreadId: ThreadId;
+  readonly sourceSubmissionId?: SubmissionId;
+  readonly requestedPrincipal: Principal;
+  readonly principal: Principal;
+  readonly targetAgentId: AgentId;
+  readonly continuationOf?: WorkerContinuation;
+  readonly access: "send";
+  readonly tailSequence: CanonicalSequence;
+  readonly tailDigest: Digest;
+}
 
 /** Host-verified source input; absence never means the latest input in the Thread. */
 export interface WorkerPolicySource {
@@ -30,6 +49,7 @@ export type WorkerPolicyTarget = {
 } & (
   | {
       readonly _tag: "InitialInput";
+      readonly admission?: WorkerStartAdmission;
       readonly continuationOf?: WorkerContinuation;
       readonly sourceSubmission?: SubmissionSnapshot;
       readonly input: PersistedJson;
@@ -136,6 +156,7 @@ export const WorkerHostConfig = Context.Reference<WorkerHostLimits>(
  * identifiers alone never confer any of them.
  */
 export interface WorkerHostAuthorizationRequest {
+  readonly admission?: WorkerStartAdmission;
   readonly sourceThreadId: ThreadId;
   /** An explicitly selected owner input; authorize this locator as well as the Thread. */
   readonly sourceSubmissionId?: SubmissionId;
@@ -170,6 +191,7 @@ export const WorkerHostAuthorizer = Context.Reference<{
 export const WorkerBudgetAuthorizer = Context.Reference<{
   readonly authorize: (request: {
     readonly source: WorkerSource;
+    readonly admission?: WorkerStartAdmission;
     readonly principal: Principal;
     readonly worker: WorkerRef;
     readonly continuationOf?: WorkerContinuation;

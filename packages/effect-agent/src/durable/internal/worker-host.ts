@@ -128,6 +128,7 @@ import {
   WorkerHostConfig,
   WorkerPolicyResolver,
   type WorkerPolicyTarget,
+  type WorkerStartAdmission,
 } from "../WorkerHost.ts";
 import {
   definitionDigestsEqual,
@@ -263,6 +264,20 @@ export class WorkerInputControl extends Context.Service<
   }
 >()("@effect-agent/thread/internal/WorkerInputControl") {}
 
+const CurrentStartPreparation = Context.Reference<WorkerStartAdmission | undefined>(
+  "@effect-agent/thread/internal/CurrentStartPreparation",
+  { defaultValue: () => undefined },
+);
+
+const CurrentStartDelivery = Context.Reference<
+  | {
+      readonly authorization: WorkerStartAdmission;
+      readonly admission: WorkerAdmission;
+      readonly inputDigest: Digest;
+    }
+  | undefined
+>("@effect-agent/thread/internal/CurrentStartDelivery", { defaultValue: () => undefined });
+
 /** No in-memory ownership: every mutation is reserved in source canonical history with CAS. */
 export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
   options: WorkerRuntimeOptions,
@@ -290,9 +305,40 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
   const withCrypto = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>) =>
     Effect.provideService(effect, Crypto.Crypto, deps.crypto);
 
+  const currentStart = Effect.fnUntraced(function* (
+    admission: WorkerStartAdmission | undefined,
+    sourceThreadId: ThreadId,
+    sourceSubmissionId: SubmissionId | undefined,
+    principal: Principal,
+    targetAgentId: AgentId,
+    continuationOf: WorkerContinuation | undefined,
+  ) {
+    if (
+      admission === undefined ||
+      admission.sourceThreadId !== sourceThreadId ||
+      admission.sourceSubmissionId !== sourceSubmissionId ||
+      (admission.principal !== principal && admission.requestedPrincipal !== principal) ||
+      admission.targetAgentId !== targetAgentId ||
+      !Schema.toEquivalence(Schema.UndefinedOr(WorkerContinuation))(
+        admission.continuationOf,
+        continuationOf,
+      )
+    )
+      return undefined;
+
+    const tail = yield* deps.store
+      .inspectTail(ThreadTailRequest.make({ threadId: sourceThreadId }))
+      .pipe(Effect.mapError(storageFailure("start")));
+
+    return tail.tailSequence === admission.tailSequence && tail.tailDigest === admission.tailDigest
+      ? admission
+      : undefined;
+  });
+
   const authorizeBudget = Effect.fn("WorkerHost.authorizeBudget")(function* (
     origin: WorkerOrigin,
     principal: Principal,
+    admission?: WorkerStartAdmission,
   ) {
     yield* verifyContinuation(origin);
     if (origin.budgetScope !== "worker-run") return;
@@ -300,6 +346,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     if (origin.depth !== 1) return yield* failure("start", "denied");
 
     yield* deps.budgetAuthorizer.authorize({
+      ...(admission === undefined ? {} : { admission }),
       source: origin.source,
       principal,
       worker: origin.worker,
@@ -1049,6 +1096,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     input: PersistedJson,
     principal: Principal,
     retainedFrameworkInput: boolean,
+    authorization?: WorkerStartAdmission,
   ): Effect.fn.Return<void, WorkerError> {
     const origin = admission.origin;
 
@@ -1133,6 +1181,11 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
           ? {
               ...targetRequest,
               _tag: "InitialInput",
+              ...(authorization === undefined ||
+              authorization.tailSequence !== current.tailSequence ||
+              authorization.tailDigest !== current.tailDigest
+                ? {}
+                : { admission: authorization }),
               ...(origin.continuationOf === undefined
                 ? {}
                 : { continuationOf: origin.continuationOf }),
@@ -1351,7 +1404,24 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     }
 
     yield* verifyContinuation(admission.origin);
+    const delivery = yield* CurrentStartDelivery;
+
+    const authorization =
+      delivery !== undefined &&
+      sameAdmission(delivery.admission, admission) &&
+      delivery.inputDigest === inputDigest
+        ? yield* currentStart(
+            delivery.authorization,
+            admission.origin.source.threadId,
+            admission.sourceSubmissionId,
+            options.principal,
+            agentId,
+            admission.origin.continuationOf,
+          )
+        : undefined;
+
     yield* deps.authorizer.authorize({
+      ...(authorization === undefined ? {} : { admission: authorization }),
       sourceThreadId: admission.origin.source.threadId,
       ...(admission.sourceSubmissionId === undefined
         ? {}
@@ -1364,7 +1434,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         ? {}
         : { continuationOf: admission.origin.continuationOf }),
     });
-    yield* authorizeBudget(admission.origin, options.principal);
+    yield* authorizeBudget(admission.origin, options.principal, authorization);
     if (
       admission.origin.worker.threadId !== options.threadId ||
       admission.origin.worker.targetAgentId !== agentId ||
@@ -1378,7 +1448,14 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
     if (retainedFrameworkInput && admission.reportKind !== "update")
       yield* validateCompletion(options.messageAdmission, options, agentId, inputDigest);
-    yield* reservation(admission, inputDigest, input, options.principal, retainedFrameworkInput);
+    yield* reservation(
+      admission,
+      inputDigest,
+      input,
+      options.principal,
+      retainedFrameworkInput,
+      authorization,
+    );
 
     return admission;
   });
@@ -1866,13 +1943,17 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     principal: Principal,
     sourceSubmissionId?: SubmissionId,
   ): SubagentHost["Service"] => {
+    const requestedPrincipal = principal;
+
     const authorize = (
       operation: WorkerError["operation"],
       access: "context" | "read" | "send" | "control",
       worker?: WorkerRef,
       continuationOf?: WorkerContinuation,
+      admission?: WorkerStartAdmission,
     ) =>
       deps.authorizer.authorize({
+        ...(admission === undefined ? {} : { admission }),
         sourceThreadId: context.source.threadId,
         ...(sourceSubmissionId === undefined ? {} : { sourceSubmissionId }),
         principal,
@@ -1894,6 +1975,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       target: Agent.AnyDefinition,
       encodedInput: unknown,
       continuationOf?: WorkerContinuation,
+      authorization?: WorkerStartAdmission,
     ) {
       const resolved = yield* binding(target, "start");
 
@@ -1908,8 +1990,18 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
       const source = yield* sourceAuthority(context.source.threadId, sourceSubmissionId);
 
+      const admission = yield* currentStart(
+        authorization,
+        context.source.threadId,
+        sourceSubmissionId,
+        principal,
+        target.id,
+        continuationOf,
+      );
+
       const policy = yield* resolveTargetPolicy({
         _tag: "InitialInput",
+        ...(admission === undefined ? {} : { admission }),
         ...(continuationOf === undefined ? {} : { continuationOf }),
         definition: resolved.definition,
         definitions: resolved.digests,
@@ -2064,6 +2156,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       encodedParameters: unknown,
       principal: Principal,
       operation: "start" | "followUp",
+      authorization?: WorkerStartAdmission,
     ) {
       if (Option.isNone(deps.deliveries)) return yield* failure(operation, "unavailable");
       const deliveries = deps.deliveries.value;
@@ -2146,17 +2239,25 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         Effect.provideService(MessageDeliveryStore, deliveries),
         Effect.provideService(PreparedInputAdmission, {
           submit: (prepared) =>
-            deps
-              .submit(prepared)
-              .pipe(
-                Effect.mapError((error) =>
-                  error._tag === "AdmissionConflict" || error._tag === "AgentInputError"
-                    ? ScheduledInputRefused.make({ code: error._tag, cause: error })
-                    : error._tag === "AdmissionPolicyError" && error.reason === "refused"
-                      ? ScheduledInputRefused.make({ code: error.code, cause: error })
-                      : ScheduledInputRetryable.make({ reason: "storage", cause: error }),
-                ),
+            deps.submit(prepared).pipe(
+              Effect.provideService(
+                CurrentStartDelivery,
+                authorization !== undefined &&
+                  prepared.workerAdmission !== undefined &&
+                  prepared.admissionKey === messageId &&
+                  prepared.inputDigest === inputDigest &&
+                  sameOrigin(prepared.workerAdmission.origin, origin)
+                  ? { authorization, admission: prepared.workerAdmission, inputDigest }
+                  : undefined,
               ),
+              Effect.mapError((error) =>
+                error._tag === "AdmissionConflict" || error._tag === "AgentInputError"
+                  ? ScheduledInputRefused.make({ code: error._tag, cause: error })
+                  : error._tag === "AdmissionPolicyError" && error.reason === "refused"
+                    ? ScheduledInputRefused.make({ code: error.code, cause: error })
+                    : ScheduledInputRetryable.make({ reason: "storage", cause: error }),
+              ),
+            ),
           submissionStatus: (receipt) =>
             deps
               .status(receipt)
@@ -2393,10 +2494,23 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
                 request.continuationOf.delegationId,
               );
 
-        yield* authorize("start", "send", undefined, previous?.evidence);
+        const admission = yield* currentStart(
+          yield* CurrentStartPreparation,
+          context.source.threadId,
+          sourceSubmissionId,
+          principal,
+          request.target.id,
+          previous?.evidence,
+        );
 
-        return (yield* preparedTarget(request.target, request.encodedInput, previous?.evidence))
-          .policy;
+        yield* authorize("start", "send", undefined, previous?.evidence, admission);
+
+        return (yield* preparedTarget(
+          request.target,
+          request.encodedInput,
+          previous?.evidence,
+          admission,
+        )).policy;
       }),
       start: Effect.fn("WorkerHost.start")(function* <E = never, R = never>(
         command: StartWorkerRequest | DeferredStartWorkerRequest<E, R>,
@@ -2412,6 +2526,22 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
               );
 
         const principal = yield* authorize("start", "send", undefined, previous?.evidence);
+
+        const tail = yield* deps.store
+          .inspectTail(ThreadTailRequest.make({ threadId: context.source.threadId }))
+          .pipe(Effect.mapError(storageFailure("start")));
+
+        const startAdmission: WorkerStartAdmission = {
+          sourceThreadId: context.source.threadId,
+          ...(sourceSubmissionId === undefined ? {} : { sourceSubmissionId }),
+          requestedPrincipal,
+          principal,
+          targetAgentId: command.target.id,
+          ...(previous === undefined ? {} : { continuationOf: previous.evidence }),
+          access: "send",
+          tailSequence: tail.tailSequence,
+          tailDigest: tail.tailDigest,
+        };
 
         if (context.depth !== 0 && sourceSubmissionId === undefined)
           return yield* failure("start", "denied");
@@ -2507,7 +2637,14 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
         return yield* Effect.gen(function* () {
           const request =
-            "prepare" in command ? { ...(yield* command.prepare), ...command } : command;
+            "prepare" in command
+              ? {
+                  ...(yield* command.prepare.pipe(
+                    Effect.provideService(CurrentStartPreparation, startAdmission),
+                  )),
+                  ...command,
+                }
+              : command;
 
           const currentPrevious =
             command.continuationOf === undefined
@@ -2535,6 +2672,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
             request.target,
             request.encodedInput,
             currentPrevious?.evidence,
+            startAdmission,
           );
 
           const resolved = prepared.resolved;
@@ -2596,7 +2734,18 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
             "start",
           );
 
-          yield* authorizeBudget(origin, principal);
+          yield* authorizeBudget(
+            origin,
+            principal,
+            yield* currentStart(
+              startAdmission,
+              context.source.threadId,
+              sourceSubmissionId,
+              principal,
+              request.target.id,
+              currentPrevious?.evidence,
+            ),
+          );
 
           const targetPolicy = Option.isSome(prepared.policy)
             ? prepared.policy.value
@@ -2623,6 +2772,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
             request.encodedParameters,
             principal,
             "start",
+            startAdmission,
           );
 
           return { worker: origin.worker, delivery };

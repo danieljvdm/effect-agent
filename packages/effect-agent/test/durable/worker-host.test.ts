@@ -752,6 +752,47 @@ const harness = Effect.fn("workerHostHarness")(function* (
 });
 
 layer(NodeCrypto.layer)((it) => {
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/4ff21e2a4
+  it.effect(
+    "reuses one start admission through preparation and rejects a later revoked start",
+    () =>
+      Effect.gen(function* () {
+        let sourceReads = 0;
+
+        const h = yield* harness({
+          authorize: (request) => {
+            if (
+              request.operation === "start" &&
+              request.access === "send" &&
+              !("admission" in request)
+            )
+              sourceReads++;
+
+            return Effect.succeed(principal);
+          },
+        });
+
+        const command = request("one-admission");
+
+        const started = yield* h.host.start({
+          ...command,
+          prepare: Effect.gen(function* () {
+            yield* h.host.resolveTargetPolicy({ target, encodedInput: command.encodedInput });
+
+            return { encodedInput: command.encodedInput, policy, budget: command.budget };
+          }),
+        });
+
+        expect(started.delivery.status).toBe("accepted");
+        expect(sourceReads).toBe(1);
+        h.deny("send");
+        const denied = yield* h.host.start(command).pipe(Effect.flip);
+
+        expect(denied.reason).toBe("denied");
+        expect(h.submissions.size).toBe(1);
+      }),
+  );
+
   // Regression: https://github.com/danieljvdm/effect-agent/pull/621
   for (const advance of ["tail", "epoch"] as const)
     it.effect(`origin establishment retries a ${advance} advance after its identity snapshot`, () =>
