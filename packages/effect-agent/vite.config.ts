@@ -11,6 +11,7 @@ export default defineConfig({
       "src/core/AgentUpdates.ts",
       "src/capabilities/Approval.ts",
       "src/capabilities/Budget.ts",
+      "src/capabilities/BrowserUse.ts",
       "src/sandbox/CodeExecutor.ts",
       "src/capabilities/CodeMode.ts",
       "src/capabilities/Commands.ts",

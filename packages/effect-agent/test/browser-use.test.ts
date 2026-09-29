@@ -3,11 +3,13 @@ import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import { AiError, DecisionModel } from "effect/unstable/ai";
 
-import { type Observation } from "../src/browser.ts";
-import { type LabError } from "../src/contract.ts";
-import { selectTargets } from "../src/grounding.ts";
+import {
+  type Observation,
+  type BrowserUseError,
+  selectTargets,
+} from "../src/capabilities/BrowserUse.ts";
 
-expectTypeOf<Effect.Error<ReturnType<typeof selectTargets>>>().toEqualTypeOf<LabError>();
+expectTypeOf<Effect.Error<ReturnType<typeof selectTargets>>>().toEqualTypeOf<BrowserUseError>();
 expectTypeOf<
   Effect.Services<ReturnType<typeof selectTargets>>
 >().toEqualTypeOf<DecisionModel.DecisionModel>();

@@ -4,6 +4,7 @@ export * as AgentPolicy from "./core/AgentPolicy.ts";
 export * as AgentRuntime from "./engine/AgentRuntime.ts";
 export * as AgentUpdates from "./core/AgentUpdates.ts";
 export * as Approval from "./capabilities/Approval.ts";
+export * as BrowserUse from "./capabilities/BrowserUse.ts";
 export * as Budget from "./capabilities/Budget.ts";
 export * as CodeExecutor from "./sandbox/CodeExecutor.ts";
 export * as CodeMode from "./capabilities/CodeMode.ts";

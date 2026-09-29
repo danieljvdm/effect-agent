@@ -25,6 +25,7 @@
     "./agent-runtime": "./src/engine/AgentRuntime.ts",
     "./agent-updates": "./src/core/AgentUpdates.ts",
     "./approval": "./src/capabilities/Approval.ts",
+    "./browser-use": "./src/capabilities/BrowserUse.ts",
     "./budget": "./src/capabilities/Budget.ts",
     "./code-executor": "./src/sandbox/CodeExecutor.ts",
     "./code-mode": "./src/capabilities/CodeMode.ts",

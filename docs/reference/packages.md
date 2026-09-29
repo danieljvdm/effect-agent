@@ -222,6 +222,10 @@ Start with `Agent`, `AgentRuntime`, and `InMemory.layer`.
 For storage-backed history, use the root namespace `PersistentHistory.layer`.
 Models, provider clients, credentials, tool handlers, and durable hosts remain application choices.
 
+`BrowserUse` (`effect-agent/browser-use`) provides direct and decision-grounded browser toolkits.
+Applications supply observed controls and guarded actions through `BrowserActions`; the optional
+`TargetSelector.layer` consumes a native Effect `DecisionModel`. See [browser tools](../guide/browser.md#opt-into-decision-grounded-browser-tools).
+
 Sandbox contracts including `Sandbox`, `CodeExecutor`, `PageCapture`, and `InteractiveBrowser`
 are part of this package; concrete executors and browser adapters are separate. See
 [sandbox execution](../guide/sandbox) and [browser tools](../guide/browser).

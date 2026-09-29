@@ -6,9 +6,18 @@ import {
 import { TypeSafeClient, TypeSafeDecisionModel } from "@effect/ai-typesafe";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { Agent, AgentRuntime, InMemory } from "effect-agent";
+import * as BrowserUse from "effect-agent/browser-use";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 
-import { batchTools, singleTools, scripted, Observation, TaskResult, Browser } from "./browser.ts";
+import {
+  batchTools,
+  singleTools,
+  scripted,
+  Observation,
+  TaskResult,
+  Browser,
+  completionLayer,
+} from "./browser.ts";
 import {
   defaultChallenge,
   LabError,
@@ -182,6 +191,16 @@ export const executeTask = Effect.fnUntraced(function* (
 
     const grounded = yield* makeGroundedLayers(initial);
 
+    const directSingle = Layer.merge(
+      BrowserUse.singleLayer.pipe(Layer.provide(browser.actionsLayer)),
+      completionLayer,
+    );
+
+    const directBatch = Layer.merge(
+      BrowserUse.batchLayer.pipe(Layer.provide(browser.actionsLayer)),
+      completionLayer,
+    );
+
     // Supply only DecisionModel: Model's shared identity services belong to the planner.
     const run = wiki
       ? runWikipedia(input.wikipedia ?? defaultChallenge, input.grounding === "jev").pipe(
@@ -196,8 +215,8 @@ export const executeTask = Effect.fnUntraced(function* (
               )
           ).pipe(Effect.provide(decisionLayer))
         : input.mode === "batched"
-          ? AgentRuntime.run(batchedAgent, message).pipe(Effect.provide(browser.batchLayer))
-          : AgentRuntime.run(individualAgent, message).pipe(Effect.provide(browser.singleLayer));
+          ? AgentRuntime.run(batchedAgent, message).pipe(Effect.provide(directBatch))
+          : AgentRuntime.run(individualAgent, message).pipe(Effect.provide(directSingle));
 
     const result = yield* traceModels(run.pipe(Effect.provide([InMemory.layer, modelLayer]))).pipe(
       Effect.mapError(

@@ -1,5 +1,7 @@
 import type { BrowserSession } from "@effect-agent/platform-cloudflare/browser-session";
-import { Context, Effect, Schema } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
+import * as BrowserUse from "effect-agent/browser-use";
+import { Action, Observation, ActionResult } from "effect-agent/browser-use";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import type { Page } from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 
@@ -7,42 +9,7 @@ import { Board, LabError, type Scenario } from "./contract.ts";
 import { fixtureHtml } from "./fixture.ts";
 import { Trace } from "./telemetry.ts";
 
-const Ref = Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9-]{0,50}$/));
-
-export const Action = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("click"), ref: Ref }),
-  Schema.Struct({
-    kind: Schema.Literal("fill"),
-    ref: Ref,
-    value: Schema.String.check(Schema.isMaxLength(120)),
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("select"),
-    ref: Ref,
-    value: Schema.String.check(Schema.isMaxLength(120)),
-  }),
-]);
-
-export type Action = typeof Action.Type;
-
-export const Observation = Schema.Struct({
-  text: Schema.String,
-  controls: Schema.Array(
-    Schema.Struct({
-      ref: Ref,
-      kind: Schema.String,
-      name: Schema.String,
-      value: Schema.String,
-      options: Schema.Array(Schema.String),
-    }),
-  ),
-});
-
-export const ActionResult = Schema.Struct({
-  completed: Schema.Natural,
-  error: Schema.NullOr(Schema.String),
-  observation: Schema.NullOr(Observation),
-});
+export { Action, Observation, ActionResult };
 
 export const TaskResult = Schema.Struct({ message: Schema.String });
 
@@ -53,45 +20,10 @@ export const finishTool = Tool.make("finish", {
   success: TaskResult,
 });
 
-export const singleTools = Toolkit.make(
-  finishTool,
-  Tool.make("observe", {
-    description: "Read the visible page and controls. Use the returned refs exactly.",
-    parameters: Tool.EmptyParams,
-    success: Observation,
-    failure: LabError,
-    failureMode: "return",
-  }),
-  Tool.make("act", {
-    description:
-      "Perform one UI action on an observed ref and return the next observation. If completed=1, never repeat the action just because its observation failed.",
-    parameters: Schema.Struct({ action: Action }),
-    success: ActionResult,
-    failure: LabError,
-    failureMode: "return",
-  }),
-);
-
-export const batchTools = Toolkit.make(
-  finishTool,
-  Tool.make("observe", {
-    description: "Read the visible page and controls. Use the returned refs exactly.",
-    parameters: Tool.EmptyParams,
-    success: Observation,
-    failure: LabError,
-    failureMode: "return",
-  }),
-  Tool.make("act", {
-    description:
-      "Perform 1–8 sequential UI actions on already observed controls, then return an observation. Batch field edits and Save. Stop at page/dialog transitions; discover new controls before another batch. Execution stops at the first failure; completed is the count already executed. Never replay those actions.",
-    parameters: Schema.Struct({
-      actions: Schema.Array(Action).check(Schema.isMinLength(1), Schema.isMaxLength(8)),
-    }),
-    success: ActionResult,
-    failure: LabError,
-    failureMode: "return",
-  }),
-);
+export const completionTools = Toolkit.make(finishTool);
+export const completionLayer = completionTools.toLayer({ finish: Effect.succeed });
+export const singleTools = Toolkit.merge(completionTools, BrowserUse.singleTools);
+export const batchTools = Toolkit.merge(completionTools, BrowserUse.batchTools);
 
 export const makeBrowser = Effect.fnUntraced(function* (
   session: Pick<BrowserSession, "run">,
@@ -290,15 +222,13 @@ export const makeBrowser = Effect.fnUntraced(function* (
           () => new LabError({ code: "browser", message: "Could not validate the task ledger." }),
         ),
       ),
-    singleLayer: singleTools.toLayer({
-      finish: Effect.succeed,
-      observe,
-      act: ({ action }) => act([action]),
-    }),
-    batchLayer: batchTools.toLayer({
-      finish: Effect.succeed,
-      observe,
-      act: ({ actions }) => act(actions),
+    actionsLayer: Layer.succeed(BrowserUse.BrowserActions, {
+      observe: observe().pipe(
+        Effect.mapError(
+          (error) => new BrowserUse.BrowserUseError({ code: "browser", message: error.message }),
+        ),
+      ),
+      act,
     }),
   };
 });
