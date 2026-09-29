@@ -218,7 +218,8 @@ describe("maintenance retry deadlines", () => {
                               Effect.gen(function* () {
                                 if (memoryWaves === 1) {
                                   yield* Deferred.succeed(entered, undefined);
-                                  yield* Effect.never;
+
+                                  return yield* Effect.never;
                                 }
                                 memoryReceipts++;
 
