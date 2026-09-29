@@ -181,6 +181,9 @@ isolation, artifacts, evidence reuse and placement. Keep useful public-contract,
 recovery and authority checks at their strongest boundary; remove redundant
 matrices and implementation mirrors. The final `vp run ready` gate still applies.
 
+For audits of existing tests, use [test-audit](.agents/skills/test-audit/SKILL.md)
+for read-only discovery, candidate evidence, and retention checks before cleanup.
+
 Use [open-pull-request](.agents/skills/open-pull-request/SKILL.md) for concise
 PR descriptions. Add diagrams only for meaningful architecture changes and code
 examples only when they clarify the change.

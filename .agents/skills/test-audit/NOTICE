@@ -1,0 +1,11 @@
+Adapted from OpenClaw's test-audit skill and campaign guidance:
+https://github.com/openclaw/openclaw/tree/80930af448ebabc84174146b56bc106d37fab3b4/.agents/skills/test-audit
+
+Copyright (c) 2026 OpenClaw Foundation
+Licensed under the MIT License; see LICENSE.
+
+This repository adaptation replaces OpenClaw commands and unavailable skills with
+Effect Agent's Vite+ command authority and contributor testing policy. It keeps
+discovery read-only, makes campaign cutover scope explicit, and omits historical
+OpenClaw-specific campaign examples. It is repository-owned and is not managed
+by a Dev Kit origin receipt.
