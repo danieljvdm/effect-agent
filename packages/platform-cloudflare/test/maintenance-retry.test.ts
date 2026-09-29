@@ -46,6 +46,84 @@ const Generation = Schema.Struct({
 });
 
 describe("maintenance retry deadlines", () => {
+  // Regression: https://github.com/danieljvdm/effect-agent/pull/694
+  it("gives each due post-native lane a turn across full passes and coordinator rebuilds", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const thread = `maintenance-after-native-fairness-${crypto.randomUUID()}`;
+
+        yield* TestClock.setTime(Date.now() + 86_400_000);
+        maintenanceClocks.set(thread, yield* Clock.Clock);
+        yield* Effect.addFinalizer(() => Effect.sync(() => maintenanceClocks.delete(thread)));
+        yield* Effect.promise(() =>
+          runInDurableObject(stubFor(thread), (instance) =>
+            instance[DurableObject.RunSymbol](
+              Effect.gen(function* () {
+                yield* TestClock.setTime(Date.now() + 86_400_000);
+                const gate = yield* ThreadMutationGate;
+                const selected: Array<string> = [];
+                let active = 0;
+                let maximum = 0;
+                let began = yield* Deferred.make<void>();
+                let paired = yield* Deferred.make<void>();
+                const ids = ["test:a", "test:b", "test:c"];
+
+                const host = ThreadHostMaintenance.of({
+                  lanes: ids.map((id) => ({
+                    id,
+                    phase: "after-native",
+                    dispatchTimeoutMillis: 180_001,
+                    run: Effect.acquireRelease(
+                      Effect.gen(function* () {
+                        selected.push(id);
+                        active++;
+                        maximum = Math.max(maximum, active);
+                        if (active === 2) yield* Deferred.succeed(paired, undefined);
+                      }),
+                      () =>
+                        Effect.sync(() => {
+                          active--;
+                        }),
+                    ).pipe(Effect.andThen(Effect.sleep("3 minutes")), Effect.as(Option.some(0))),
+                  })),
+                });
+
+                for (const id of ids) yield* gate.schedule(id, 0);
+                for (let pass = 0; pass < 2; pass++) {
+                  began = yield* Deferred.make<void>();
+                  paired = yield* Deferred.make<void>();
+                  yield* Effect.gen(function* () {
+                    const maintenance = yield* ThreadMaintenance;
+                    const running = yield* Effect.forkChild(maintenance.pass);
+
+                    yield* Deferred.await(began);
+                    yield* TestClock.adjust("10 minutes");
+                    yield* Deferred.await(paired);
+                    yield* TestClock.adjust("3 minutes");
+                    yield* Fiber.join(running);
+                  }).pipe(
+                    Effect.provide(Layer.fresh(ThreadMaintenance.layer)),
+                    Effect.provideService(ThreadHostMaintenance, host),
+                    Effect.provideService(ThreadMaintenanceFailpoint, {
+                      hit: (location) =>
+                        location === "maintenance:begin:before"
+                          ? Deferred.succeed(began, undefined).pipe(
+                              Effect.andThen(Effect.sleep("10 minutes")),
+                            )
+                          : Effect.void,
+                    }),
+                  );
+                }
+                expect(selected).toEqual(["test:a", "test:b", "test:c", "test:a"]);
+                expect(maximum).toBe(2);
+                expect(active).toBe(0);
+              }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+            ),
+          ),
+        );
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    ));
+
   // Regression: https://github.com/danieljvdm/effect-agent/commit/0e83011e
   it.each([false, true])("runs one post-native wave after attempt cleanup (failed: %s)", (failed) =>
     Effect.runPromise(

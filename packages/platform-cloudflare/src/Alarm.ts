@@ -565,6 +565,8 @@ class ThreadMaintenanceState extends Schema.Class<ThreadMaintenanceState>(
   lastServedThreadId: Schema.optionalKey(ThreadId),
   /** Rotate old recovery independently of dispatch, including after eviction or timeout. */
   lastRecoveredThreadId: Schema.optionalKey(ThreadId),
+  /** Rotate bounded post-native admission across full events and Object eviction. */
+  lastAfterNativeLaneId: Schema.optionalKey(DueQueue.LaneId),
   bindingRetries: Schema.optionalKey(Schema.Array(BindingRetry)),
   recoveryEventSequence: Schema.optionalKey(MaintenanceGeneration),
   recoveryEventAcknowledged: Schema.optionalKey(MaintenanceGeneration),
@@ -2320,8 +2322,26 @@ export class ThreadMaintenance extends Context.Service<
 
           yield* validateLanes(lanes, queued);
 
+          const cursor = yield* mutations.withSnapshot(() =>
+            runTransaction("read post-native dispatch cursor", () =>
+              ctx.storage.transaction(
+                async (transaction) =>
+                  (await readMaintenanceState(transaction)).state.lastAfterNativeLaneId,
+              ),
+            ),
+          );
+
+          const ordered = selected.toSorted((left, right) =>
+            left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
+          );
+
+          const after = cursor === undefined ? 0 : ordered.findIndex((lane) => lane.id > cursor);
+
+          const rotated =
+            after <= 0 ? ordered : [...ordered.slice(after), ...ordered.slice(0, after)];
+
           return yield* Effect.forEach(
-            selected,
+            rotated,
             (lane) =>
               Effect.gen(function* () {
                 const row = queued.find((row) => row.id === lane.id);
@@ -2338,7 +2358,30 @@ export class ThreadMaintenance extends Context.Service<
                   lane.dispatchTimeoutMillis,
                 ).pipe(Effect.mapError(alarmFailure("host dispatch allowance")));
                 if (now + lane.dispatchTimeoutMillis > dispatchEnd) return;
-                yield* runQueued(row, lane.run.pipe(Effect.scoped), observed).pipe(
+
+                // Persist admission, not completion: slow or failing early lanes must not
+                // monopolize the next event's remaining allowance. Domain receipts stay local
+                // to the lane and its due-queue revision still fences acknowledgement.
+                const admit = mutations.withSnapshot(() =>
+                  runTransaction("advance post-native dispatch cursor", () =>
+                    ctx.storage.transaction(async (transaction) => {
+                      const { state } = await readMaintenanceState(transaction);
+
+                      await transaction.put(
+                        MAINTENANCE_STATE_KEY,
+                        encodeMaintenanceState(
+                          ThreadMaintenanceState.make({ ...state, lastAfterNativeLaneId: lane.id }),
+                        ),
+                      );
+                    }),
+                  ),
+                );
+
+                yield* runQueued(
+                  row,
+                  admit.pipe(Effect.andThen(lane.run.pipe(Effect.scoped))),
+                  observed,
+                ).pipe(
                   Effect.timeoutOrElse({
                     duration: lane.dispatchTimeoutMillis,
                     orElse: () =>
