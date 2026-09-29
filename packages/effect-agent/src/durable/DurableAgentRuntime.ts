@@ -163,7 +163,7 @@ import {
 } from "./internal/journal-checkpoint.ts";
 import { makeJournalMetadata, type JournalMetadata } from "./internal/journal-metadata.ts";
 import { makeMessagingRuntime } from "./internal/messaging-host.ts";
-import { makeThreadInitializer } from "./internal/thread-initialization.ts";
+import * as ThreadInitialization from "./internal/thread-initialization.ts";
 import { makeWorkerRuntime, WorkerInputControl } from "./internal/worker-host.ts";
 import { WorkerRuntime } from "./internal/worker-runtime.ts";
 import {
@@ -2376,7 +2376,17 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       .materialize(ThreadMaterialization.make({ threadId, producerEpoch }))
       .pipe(Effect.catchTag("FenceRejected", () => Effect.void));
 
-  const ensureThreadCreated = makeThreadInitializer({ store, wake, ...config });
+  const ensureThreadCreated = (
+    threadId: ThreadId,
+    agentId: AgentId,
+    definitions: DefinitionDigests,
+  ) =>
+    ThreadInitialization.ensureThreadCreated(
+      { producerId: config.producerId, deploymentId: config.deploymentId },
+      threadId,
+      agentId,
+      definitions,
+    ).pipe(Effect.provideService(ThreadStore, store), Effect.provideService(WakeScheduler, wake));
 
   const attemptContextFor = Effect.fn("DurableAgentRuntime.attemptContextFor")(function* (
     threadId: ThreadId,

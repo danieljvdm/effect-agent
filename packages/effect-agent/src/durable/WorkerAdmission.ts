@@ -1,7 +1,7 @@
 import { Context, Effect, Schema } from "effect";
 
 import { DurableRuntimeFailpoint, DurableRuntimeFailpointError } from "./DurableFailpoint.ts";
-import { makeThreadInitializer, makeWorkerOriginWriter } from "./internal/thread-initialization.ts";
+import { ensureThreadCreated, ensureWorkerOrigin } from "./internal/thread-initialization.ts";
 import { ProducerEpoch, ProducerId, WorkerAdmission } from "./Records.ts";
 import {
   AdmissionConflict,
@@ -79,20 +79,13 @@ export const admitWorker = Effect.fn("WorkerAdmission.admitWorker")(function* (
     )
     .pipe(Effect.catchTag("FenceRejected", () => Effect.void));
 
-  const dependencies = {
-    store,
-    wake,
-    failpoint,
+  const config = {
     producerId: request.producerId,
     deploymentId: request.deploymentId,
   };
 
-  yield* makeThreadInitializer(dependencies)(
-    request.threadId,
-    request.agentId,
-    request.agentDigests,
-  );
-  yield* makeWorkerOriginWriter(dependencies)(origin).pipe(
+  yield* ensureThreadCreated(config, request.threadId, request.agentId, request.agentDigests);
+  yield* ensureWorkerOrigin(config, origin).pipe(
     Effect.mapError((cause) =>
       LedgerError.make({ operation: "worker-origin", message: cause.reason, cause }),
     ),

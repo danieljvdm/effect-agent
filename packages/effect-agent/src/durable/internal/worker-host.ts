@@ -136,7 +136,7 @@ import {
 } from "./agent-registration.ts";
 import { lastWorkerReportMessageId } from "./agent-updates.ts";
 import { messageStatus } from "./message-status.ts";
-import { makeWorkerOriginWriter } from "./thread-initialization.ts";
+import { ensureWorkerOrigin } from "./thread-initialization.ts";
 
 const failure = (
   operation: WorkerError["operation"],
@@ -1377,7 +1377,14 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     return yield* failure("start", "storage");
   });
 
-  const ensureOrigin = makeWorkerOriginWriter(deps);
+  const ensureOrigin = (origin: WorkerOrigin) =>
+    ensureWorkerOrigin(
+      { producerId: deps.producerId, deploymentId: deps.deploymentId },
+      origin,
+    ).pipe(
+      Effect.provideService(ThreadStore, deps.store),
+      Effect.provideService(DurableRuntimeFailpoint, deps.failpoint),
+    );
 
   const validateAdmission = Effect.fn("WorkerHost.validateAdmission")(function* (
     unvalidated: WorkerAdmission,
