@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/storage-postgres",
-  "version": "0.1.0-beta.148",
+  "version": "0.1.0-beta.149",
   "description": "Postgres persistence adapters for the Effect Agent durable runtime.",
   "license": "MIT",
   "repository": {

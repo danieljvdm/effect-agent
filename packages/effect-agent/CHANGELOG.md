@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.149
+
+### Patch Changes
+
+- [#685](https://github.com/danieljvdm/effect-agent/pull/685) [`08e4acf`](https://github.com/danieljvdm/effect-agent/commit/08e4acf1cd791b0a615f5ba751b698e915c3b8be) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Expose `priorRunPrefixLength` to durable context preparation hooks so applications can replace earlier runs' prompt history while preserving current-run recovery and canonical receipts.
+
 ## 0.1.0-beta.148
 
 ### Patch Changes
