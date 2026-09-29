@@ -350,13 +350,11 @@ export const Report = Schema.Struct({
   completed: Schema.Natural,
   attempted: Schema.Natural,
   completionRate: Schema.Finite,
-  // Retried infrastructure failures that provably had no effect. They never count as passes.
+  // Retried binding-proof provider failures, which open no browser session. Cases never retry.
   infrastructureRetries: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({
-        stage: Schema.Literals(["binding-proof", "case"]),
-        key: Schema.optionalKey(RunKey),
-        replacement: Schema.optionalKey(RunKey),
+        stage: Schema.Literal("binding-proof"),
         failure: Schema.String,
       }),
     ),

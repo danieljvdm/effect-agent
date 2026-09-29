@@ -146,26 +146,7 @@ const awaitOrigin = Effect.fnUntraced(function* (url: URL, marker: string) {
   );
 });
 
-/**
- * Session creation failed before the agent ran: no browser action, payment attempt or order
- * exists, so a fresh case cannot duplicate an effect. Any other failure is a gate verdict.
- */
-const undispatched = (evidence: typeof RunEvidence.Type | null) =>
-  evidence !== null &&
-  evidence.control.closed &&
-  evidence.control.requests === 1 &&
-  /^BrowserSessionError reason=(?:timeout|provider|busy) dispatch=not-dispatched cleanup=(?:not-requested|confirmed)(?:\n|$)/.test(
-    evidence.control.failure ?? "",
-  ) &&
-  evidence.toolCalls.length === 0 &&
-  evidence.outputs.length === 0 &&
-  evidence.observations.length === 0 &&
-  (evidence.runs?.length ?? 0) === 0 &&
-  evidence.shop.attempts.length === 0 &&
-  evidence.shop.orders.length === 0;
-
 const bindingAttempts = 3;
-const maxCaseReplacements = 2;
 
 const call = Effect.fn("CheckoutProof.request")(function* <
   S extends Schema.Top & { readonly DecodingServices: never },
@@ -464,16 +445,12 @@ const proof = Effect.gen(function* () {
     ),
   ];
 
-  const admit = yield* makeCaseAdmission(startIntervalMillis);
-  let replacements = 0;
-
-  /** Returns the session failure when the attempt provably dispatched nothing. */
-  const attemptCase = Effect.fnUntraced(function* (
-    key: string,
-    item: Omit<(typeof scheduled)[number], "repetition">,
-  ) {
+  const runCase = Effect.fnUntraced(function* ({
+    repetition,
+    ...item
+  }: (typeof scheduled)[number]) {
+    const key = `${run}-${item.flow}-${item.scenario}-${repetition}`;
     const start = yield* Clock.monotonicTimeNanos;
-    let undispatchedFailure: string | undefined;
 
     yield* Console.log(`Checkout ${key}`);
     // Persist the denominator before dispatch: interruption cannot erase an unsuccessful attempt.
@@ -509,9 +486,6 @@ const proof = Effect.gen(function* () {
             closed.value !== null &&
             closed.value.control.closed;
 
-          if (!passed && undispatched(evidence))
-            undispatchedFailure = evidence?.control.failure?.split("\n")[0];
-
           const elapsedMillis = Math.max(
             0,
             Math.round(Number((yield* Clock.monotonicTimeNanos) - start) / 1_000_000),
@@ -543,37 +517,11 @@ const proof = Effect.gen(function* () {
       ),
       Effect.exit,
     );
-
-    return undispatchedFailure;
-  });
-
-  const runCase = Effect.fnUntraced(function* ({
-    repetition,
-    ...item
-  }: (typeof scheduled)[number]) {
-    const key = `${run}-${item.flow}-${item.scenario}-${repetition}`;
-    const undispatchedFailure = yield* attemptCase(key, item);
-
-    // One fresh case per automated attempt, within a small suite budget. A replacement is final.
-    if (
-      undispatchedFailure === undefined ||
-      item.scenario === "handoff" ||
-      replacements >= maxCaseReplacements
-    )
-      return;
-    replacements++;
-    yield* recordRetry({
-      stage: "case",
-      key,
-      replacement: `${key}-r`,
-      failure: undispatchedFailure,
-    });
-    yield* admit;
-    yield* attemptCase(`${key}-r`, item);
   });
 
   // Operator takeover is opt-in and stays outside the automated concurrent batch.
   for (const item of scheduled.filter((item) => item.scenario === "handoff")) yield* runCase(item);
+  const admit = yield* makeCaseAdmission(startIntervalMillis);
 
   yield* measure(
     "matrixMillis",
@@ -585,28 +533,11 @@ const proof = Effect.gen(function* () {
   );
   const report = yield* currentReport;
 
-  const passedKeys = new Set(
-    report?.results.flatMap((result) => (result.passed ? [result.key] : [])),
-  );
-
-  const replaced = new Map(
-    report?.infrastructureRetries?.flatMap((retry) =>
-      retry.key === undefined || retry.replacement === undefined
-        ? []
-        : [[retry.key, retry.replacement] as const],
-    ),
-  );
-
-  // Every failure must be a recorded undispatched case whose replacement passed.
-  if (
-    report === undefined ||
-    report.results.some(
-      (result) => !result.passed && !passedKeys.has(replaced.get(result.key) ?? result.key),
-    )
-  )
+  // A case can allocate a browser before it fails, so no case is ever replaced.
+  if (report?.completed !== report?.attempted)
     return yield* failure(
       "assertion",
-      "Checkout failures retained in .checkout-proof; only undispatched session failures are replaced",
+      "Checkout failures retained in .checkout-proof; cases are never retried",
     );
 }).pipe(
   Effect.tapCause((cause) =>

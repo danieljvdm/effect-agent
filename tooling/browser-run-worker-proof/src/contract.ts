@@ -43,7 +43,6 @@ export class BrowserRunWorkerProofFailure extends Schema.Class<BrowserRunWorkerP
   ),
   cleanupStatus: Schema.optionalKey(Schema.Int),
   providerTag: Schema.optionalKey(ProviderTag),
-  providerReason: Schema.optionalKey(Schema.Literals(["rate", "quota"])),
   retryAfterMillis: Schema.optionalKey(Schema.Natural),
 }) {}
 
@@ -61,10 +60,7 @@ export const describeBrowserRunProofFailure = (status: number, body: unknown): s
   const cleanupStatus =
     detail.cleanupStatus === undefined ? "" : `; cleanupStatus=${detail.cleanupStatus}`;
 
-  const provider =
-    detail.providerTag === undefined
-      ? ""
-      : `; provider=${detail.providerTag}${detail.providerReason === undefined ? "" : `/${detail.providerReason}`}`;
+  const provider = detail.providerTag === undefined ? "" : `; provider=${detail.providerTag}`;
 
   const retryAfter =
     detail.retryAfterMillis === undefined ? "" : `; retryAfterMillis=${detail.retryAfterMillis}`;
@@ -79,16 +75,13 @@ const quickActionStages = new Set<typeof BrowserRunProofStage.Type>([
   "screenshot",
 ]);
 
-const transientProviderTags = new Set([
-  "PageCaptureRateLimitedError",
-  "PageCaptureProtocolError",
-  "PageCaptureNavigationError",
-]);
+// Rate limits stay final: adapters cannot reliably tell a rate limit from exhausted quota.
+const transientProviderTags = new Set(["PageCaptureProtocolError", "PageCaptureNavigationError"]);
 
 /**
- * A provider rate, protocol or navigation failure in a Quick Action stage left no browser to
- * clean up and no fixture state, so the whole proof may run again. Quota exhaustion, long
- * backoff hints, product assertions and every later stage are final.
+ * A provider protocol or navigation failure in a Quick Action stage left no browser to clean up
+ * and no fixture state, so the whole proof may run again. Rate limits, long backoff hints,
+ * product assertions and every later stage are final.
  */
 export const transientBrowserRunProofFailure = (
   body: unknown,
@@ -99,7 +92,6 @@ export const transientBrowserRunProofFailure = (
         quickActionStages.has(detail.stage) &&
         detail.providerTag !== undefined &&
         transientProviderTags.has(detail.providerTag) &&
-        detail.providerReason !== "quota" &&
         (detail.retryAfterMillis ?? 0) <= 60_000,
     ),
   );

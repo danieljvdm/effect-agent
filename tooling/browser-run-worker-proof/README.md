@@ -101,17 +101,11 @@ stage retirement waits for all case fibers, including interrupted children. Repo
 serialized and published atomically. Adjust concurrency and admission spacing to the account's
 browser and model limits.
 
-Nothing that may have had an effect runs again. Only infrastructure failures that provably had
-none are retried, and `infrastructureRetries` in the report lists each one:
-
-- A provider rate, protocol or navigation failure in the binding proof's Quick Action stages
-  (capture, scrape, screenshot) reruns the proof, up to three attempts. These stages run before
-  any browser session opens.
-- A case whose browser session could not be created (`dispatch=not-dispatched`, before the agent
-  ran, with no payment attempt or order) is replaced once by a fresh case, at most twice per run.
-
-Typed quota failures, backoff hints over a minute, model, assertion and cleanup failures fail the
-run.
+Only the binding proof retries, and only when nothing can have taken effect. A provider protocol
+or navigation failure in its Quick Action stages (capture, scrape, screenshot) reruns the proof, up
+to three attempts; these stages run before any browser session opens. `infrastructureRetries` in
+the report lists each retry. Rate limits, later stages, and every checkout case failure fail the
+run: a case can allocate a browser before it fails, so it is never replaced.
 
 Human takeover is a separate, optional operator check. Set `CHECKOUT_HUMAN=true` explicitly to run
 it before the automated matrix. The runner prints the path to a temporary `live-view.txt` file. Open its private URL,

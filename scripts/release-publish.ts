@@ -432,8 +432,8 @@ export const publishRelease = Effect.fn("releasePublish.publishRelease")(functio
         "@effect-agent/example-browser-run-worker-proof",
         "prove:live",
       ]);
-    // Live gates take minutes; main must not have changed the release line meanwhile.
-    if ((checkContinuity || checkCheckout) && !dryRun) yield* verifyBuild;
+    // Recheck at the point of publication: a newer release line must never be overtaken.
+    yield* verifyBuild;
     yield* withPublishManifests(root, (directories) =>
       dryRun
         ? Effect.forEach(

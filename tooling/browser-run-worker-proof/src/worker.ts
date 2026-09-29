@@ -339,14 +339,15 @@ const runProof = Effect.gen(function* () {
   }).pipe(
     Effect.provide(captureLayer),
     Effect.catch((error) => {
-      const rateLimited =
-        stage === "screenshot" && Schema.is(PageCaptureRateLimitedError)(error) ? error : undefined;
-
       const providerTag =
         provider?.errorTag ??
         (stage === "screenshot" && Predicate.hasProperty(error, "_tag") ? error._tag : undefined);
 
-      const retryAfterMillis = provider?.retryAfterMillis ?? rateLimited?.retryAfterMillis;
+      const retryAfterMillis =
+        provider?.retryAfterMillis ??
+        (stage === "screenshot" && Schema.is(PageCaptureRateLimitedError)(error)
+          ? error.retryAfterMillis
+          : undefined);
 
       return Effect.succeed(
         Response.json(
@@ -363,7 +364,6 @@ const runProof = Effect.gen(function* () {
                 }
               : {}),
             ...(Schema.is(ProviderTag)(providerTag) ? { providerTag } : {}),
-            ...(rateLimited === undefined ? {} : { providerReason: rateLimited.reason }),
             ...(retryAfterMillis === undefined ? {} : { retryAfterMillis }),
           }),
           { status: 502 },
