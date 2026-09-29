@@ -232,6 +232,7 @@
     "quiet-browsers-watch",
     "quiet-cloudflare-due-queue",
     "quiet-host-maintenance",
+    "quiet-host-obligations",
     "quiet-hosted-completion",
     "quiet-local-submission",
     "quiet-model-parameter-rejections",

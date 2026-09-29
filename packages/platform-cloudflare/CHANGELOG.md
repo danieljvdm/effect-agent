@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.150
+
+### Patch Changes
+
+- [#694](https://github.com/danieljvdm/effect-agent/pull/694) [`2d79cfd`](https://github.com/danieljvdm/effect-agent/commit/2d79cfd806492fbb3c4cf54f482e08ef898411e7) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Enroll host maintenance lanes around native admissions, settlement finalization, and worker stops with `hostLanesForMutation`. Add `phase: "after-native"` for one independently checkpointed host wave after native attempt cleanup, including failed attempts.
+
+- Updated dependencies []:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.150
+  - effect-agent@0.1.0-beta.150
+
 ## 0.1.0-beta.149
 
 ### Patch Changes
