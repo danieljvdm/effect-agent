@@ -97,7 +97,13 @@ const finalParts = (text: string): ReadonlyArray<Response.StreamPartEncoded> => 
  * Scripted model whose call counter and captured request prompts live OUTSIDE the Model Layer,
  * so they survive Layer rebuilds across Attempts (each Attempt provides the Model afresh).
  */
-const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.StreamPartEncoded>) =>
+const makeScriptedModel = (
+  script: (
+    call: number,
+  ) =>
+    | ReadonlyArray<Response.StreamPartEncoded>
+    | Effect.Effect<ReadonlyArray<Response.StreamPartEncoded>>,
+) =>
   Effect.gen(function* () {
     const calls = yield* Ref.make(0);
     const prompts: Array<Prompt.Prompt> = [];
@@ -112,10 +118,13 @@ const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.Stre
           streamText: (request) =>
             Stream.unwrap(
               Ref.getAndUpdate(calls, (call) => call + 1).pipe(
-                Effect.map((call) => {
+                Effect.flatMap((call) => {
                   prompts.push(request.prompt);
+                  const parts = script(call);
 
-                  return Stream.fromIterable(script(call));
+                  return Effect.isEffect(parts)
+                    ? Effect.map(parts, Stream.fromIterable)
+                    : Effect.succeed(Stream.fromIterable(parts));
                 }),
               ),
             ),
@@ -367,6 +376,119 @@ layer(Layer.mergeAll(baseLayer, publicationStorageLayer))("asynchronous lifecycl
   );
 });
 layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
+  // Regression: f0c51b92 still drains an unserviceable burst after a final text response.
+  it.effect("leaves a final-turn text response's follow-ups ready for independent Runs", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const thread = "last-text-turn-join";
+      const followUps: Array<Effect.Success<ReturnType<typeof runtime.submit>>> = [];
+
+      const scripted = yield* makeScriptedModel(
+        (call): Effect.Effect<ReadonlyArray<Response.StreamPartEncoded>> =>
+          Effect.gen(function* () {
+            if (call === 0) {
+              for (const question of ["second", "third"]) {
+                followUps.push(
+                  yield* runtime
+                    .submit(agent, { question }, submitOptions(thread, question))
+                    .pipe(Effect.orDie),
+                );
+              }
+            }
+
+            return finalParts('"answered"');
+          }),
+      );
+
+      const agent = Agent.withModel(
+        Agent.make("last-text-turn-join", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: Schema.String,
+          instructions: "Answer as JSON.",
+          toolkit: Toolkit.empty,
+          policy: { maxTurns: 1, onExhaustion: "fail" },
+        }),
+        scripted.model,
+      );
+
+      const host = yield* runtime.submit(
+        agent,
+        { question: "initial" },
+        submitOptions(thread, "host"),
+      );
+
+      const settlements = yield* runtime.processThread(agent, host.threadId);
+
+      expect(settlements.map((settled) => settled.outcome)).toEqual(["completed", "completed"]);
+      for (const receipt of [host, ...followUps]) {
+        expect((yield* runtime.awaitSettlement(receipt)).outcome).toBe("completed");
+      }
+      expect(scripted.prompts).toHaveLength(2);
+    }),
+  );
+
+  // Regression: f0c51b92 treats the exact tool-call cap as blocking a text-only turn.
+  it.effect("joins at the tool-call cap when an optional completion can continue in text", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+
+      const toolkit = Toolkit.make(
+        Tool.make("answer", { parameters: Schema.Struct({}), success: Schema.String }),
+      );
+
+      const scripted = yield* makeScriptedModel((call) =>
+        call === 0
+          ? [
+              { type: "tool-call", id: "answer-0", name: "answer", params: {} },
+              { type: "finish", reason: "tool-calls", usage },
+            ]
+          : finalParts('"covered"'),
+      );
+
+      const agent = Agent.withModel(
+        Agent.make("exact-call-cap-join", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: Schema.String,
+          instructions: "Answer the question.",
+          toolkit,
+          completion: { tool: "answer", project: ({ result }) => result },
+          policy: { maxTurns: 3, maxToolCalls: 1, onExhaustion: "fail" },
+        }),
+        scripted.model,
+      );
+
+      const thread = "exact-call-cap-join";
+
+      const host = yield* runtime.submit(
+        agent,
+        { question: "initial" },
+        submitOptions(thread, "host"),
+      );
+
+      let followUp: typeof host | undefined;
+
+      const settlements = yield* runtime.processThread(agent, host.threadId).pipe(
+        Effect.provide(
+          toolkit.toLayer({
+            answer: () =>
+              Effect.gen(function* () {
+                followUp = yield* runtime
+                  .submit(agent, { question: "follow-up" }, submitOptions(thread, "later"))
+                  .pipe(Effect.orDie);
+
+                return "answered";
+              }),
+          }),
+        ),
+      );
+
+      expect(settlements).toHaveLength(1);
+      expect((yield* runtime.awaitSettlement(followUp!)).outcome).toBe("completed");
+      expect(scripted.prompts).toHaveLength(2);
+      expect(promptOccurrences(scripted.prompts[1]!, "follow-up")).toBe(1);
+    }),
+  );
+
   // Regression: 625c5595 claims follow-ups even when the completing Run has no turns left.
   it.effect("leaves a last-turn follow-up ready for its own successful Run", () =>
     Effect.gen(function* () {

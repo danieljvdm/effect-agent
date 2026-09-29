@@ -6801,7 +6801,16 @@ const makeTurn = <
           const settleOrFollowUp = (history: Prompt.Prompt) =>
             Effect.gen(function* () {
               yield* advanceHistory(context, history, options);
-              const steering = yield* drainInputs(context, options);
+
+              // Do not consume durable receipts that this completed Turn cannot cover.
+              // Final-answer mode permits one grace Turn, but never a second finalization.
+              const turnsBlocked =
+                policy.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
+
+              const steering =
+                turnsBlocked || context.finalizationUsed
+                  ? []
+                  : yield* drainInputs(context, options);
 
               const queued =
                 steering.length > 0
@@ -6813,9 +6822,6 @@ const makeTurn = <
                 // `maxTurns` (RUN-019): `turn > maxTurns` can only be
                 // `maxTurns + 1`, so a second grace is structurally
                 // impossible.
-                const turnsBlocked =
-                  policy.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
-
                 if (turnsBlocked) {
                   return failRunEventStream(
                     AgentPolicyError.make({
@@ -7235,7 +7241,9 @@ const toolBatchContinuation = <
 
       const canContinue =
         turn < bounds.maxTurns &&
-        toolCalls + context.programmaticToolCalls < bounds.maxToolCalls &&
+        (completion?.required === true
+          ? toolCalls + context.programmaticToolCalls < bounds.maxToolCalls
+          : toolCalls + context.programmaticToolCalls <= bounds.maxToolCalls) &&
         !context.tokenExhausted &&
         !context.finalizationUsed &&
         (yield* Clock.currentTimeMillis) < context.durationDeadlineMillis;
