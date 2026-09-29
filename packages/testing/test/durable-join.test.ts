@@ -61,7 +61,14 @@ import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
-import { LanguageModel, Model, Toolkit, type Prompt, type Response } from "effect/unstable/ai";
+import {
+  LanguageModel,
+  Model,
+  Tool,
+  Toolkit,
+  type Prompt,
+  type Response,
+} from "effect/unstable/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable-join");
@@ -359,6 +366,115 @@ layer(Layer.mergeAll(baseLayer, publicationStorageLayer))("asynchronous lifecycl
   );
 });
 layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
+  // https://github.com/danieljvdm/effect-agent/blob/e40e0574/packages/effect-agent/src/engine/internal/agent-runtime.ts
+  // A live provider cannot deterministically admit input inside the completion Tool boundary.
+  it.effect(
+    "covers a queued burst and a follow-up arriving inside a completion tool in one Run",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+
+        const toolkit = Toolkit.make(
+          Tool.make("handoff", { parameters: Schema.Struct({}), success: Schema.String }),
+          Tool.make("answer", { parameters: Schema.Struct({}), success: Schema.String }),
+        );
+
+        const scripted = yield* makeScriptedModel((call) => [
+          {
+            type: "tool-call",
+            id: `call-${call}`,
+            name: call === 0 ? "handoff" : "answer",
+            params: {},
+          },
+          { type: "finish", reason: "tool-calls", usage },
+        ]);
+
+        const agent = Agent.withModel(
+          Agent.make("completion-join", {
+            input: Schema.Struct({ question: Schema.String }),
+            output: Schema.String,
+            instructions: "Hand off, then acknowledge any new instructions.",
+            toolkit,
+            completion: { tool: "answer", required: true, project: ({ result }) => result },
+            completionFromTools: [
+              { tool: "handoff", project: ({ result }) => Option.some(result) },
+            ],
+            policy: { maxTurns: 4, maxToolCalls: 4, maxDuration: "30 seconds" },
+          }),
+          scripted.model,
+        );
+
+        const thread = "completion-join-burst";
+
+        const host = yield* runtime.submit(
+          agent,
+          { question: "initial" },
+          submitOptions(thread, "host"),
+        );
+
+        const second = yield* runtime.submit(
+          agent,
+          { question: "second" },
+          submitOptions(thread, "second"),
+        );
+
+        const third = yield* runtime.submit(
+          agent,
+          { question: "third" },
+          submitOptions(thread, "third"),
+        );
+
+        let followUp: typeof host | undefined;
+        let handoffs = 0;
+
+        const settlements = yield* runtime.processThread(agent, host.threadId).pipe(
+          Effect.provide(
+            toolkit.toLayer({
+              handoff: () =>
+                Effect.gen(function* () {
+                  handoffs++;
+                  followUp = yield* runtime
+                    .submit(
+                      agent,
+                      { question: "during-handoff" },
+                      submitOptions(thread, "follow-up"),
+                    )
+                    .pipe(Effect.orDie);
+
+                  return "delegated";
+                }),
+              answer: () => Effect.succeed("all covered"),
+            }),
+          ),
+        );
+
+        expect(settlements).toHaveLength(1);
+        expect(scripted.prompts).toHaveLength(2);
+        expect(promptOccurrences(scripted.prompts[0]!, "second")).toBe(1);
+        expect(promptOccurrences(scripted.prompts[0]!, "third")).toBe(1);
+        expect(promptOccurrences(scripted.prompts[1]!, "during-handoff")).toBe(1);
+        expect(handoffs).toBe(1);
+        expect(followUp).toBeDefined();
+        const records = recordsById(yield* readLog(thread));
+
+        for (const receipt of [host, second, third, followUp!]) {
+          const settled = yield* runtime.awaitSettlement(receipt);
+
+          expect(settled.outcome).toBe("completed");
+          const record = records.get(`settlement:${receipt.submissionId}`)?.record.payload;
+
+          expect(record?._tag === "SubmissionSettled" ? record.runId : undefined).toBe(
+            runIdForSubmission(host.submissionId),
+          );
+        }
+        const hostResult = records.get(`settlement:${host.submissionId}`)?.record.payload;
+
+        expect(hostResult?._tag === "SubmissionSettled" ? hostResult.result : undefined).toBe(
+          "all covered",
+        );
+      }),
+  );
+
   it.effect("a lost join marker is repaired by the resuming host Attempt without recovery", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;

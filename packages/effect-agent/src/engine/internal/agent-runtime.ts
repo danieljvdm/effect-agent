@@ -7229,7 +7229,11 @@ const toolBatchContinuation = <
         }
       }
 
-      if (Option.isSome(selectedOutput)) {
+      // A completion Tool can admit new steering while its handler is running.
+      // Cover that input in the next Turn before allowing this Run to settle.
+      const steering = yield* drainInputs(context, options);
+
+      if (Option.isSome(selectedOutput) && steering.length === 0) {
         const output = selectedOutput.value;
         const bounds = effectiveRunBounds(agent.definition.policy, options);
 
@@ -7267,7 +7271,6 @@ const toolBatchContinuation = <
           ),
         );
       }
-      const steering = yield* drainInputs(context, options);
       const nextPrompt = yield* appendInputs(context, history, steering, options);
 
       return nextTurn(nextPrompt, turn + 1, toolCalls);
