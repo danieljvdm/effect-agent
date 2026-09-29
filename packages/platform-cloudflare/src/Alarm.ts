@@ -330,6 +330,8 @@ export interface ThreadHostMaintenanceLane {
   /** Omission runs concurrently with native work. After-native lanes get one due wave
    * after all admitted native Attempts and their scoped cleanup, even on native failure.
    * They share the event deadline and remain inside the maintenance pass permit.
+   * Newly enrolled concurrent work yields this phase after scoped cleanup; unfinished
+   * waves retain their due revision and domain receipts for the next alarm.
    */
   readonly phase?: "concurrent" | "after-native";
   readonly dispatchTimeoutMillis: number;
@@ -945,6 +947,7 @@ export class ThreadMaintenance extends Context.Service<
         row: DueQueue.DueLane,
         work: Effect.Effect<Option.Option<number>, E, R>,
         observed: MaintenanceObservation,
+        yielded?: () => boolean,
       ) =>
         Effect.suspend(() => {
           // Include mid-pass enrollments in failure rearming if their checkpoint is
@@ -953,8 +956,20 @@ export class ThreadMaintenance extends Context.Service<
 
           return work;
         }).pipe(
-          Effect.onExit((exit) =>
-            mutations
+          Effect.onExit((exit) => {
+            if (
+              yielded?.() === true &&
+              Exit.isFailure(exit) &&
+              Cause.hasInterruptsOnly(exit.cause)
+            ) {
+              // A promptness yield is neither completion nor a failed delivery. Keep the
+              // exact due revision; pass-level failure rearming must not back off this wave.
+              observed.queue.delete(row.id);
+
+              return Effect.void;
+            }
+
+            return mutations
               .withSnapshot(() =>
                 Effect.gen(function* () {
                   const active = (yield* mutations.activeLanes).has(row.id);
@@ -979,8 +994,8 @@ export class ThreadMaintenance extends Context.Service<
                 // An interrupted checkpoint leaves its revision due for event rearming;
                 // the short storage transaction itself remains atomic.
                 Effect.interruptible,
-              ),
-          ),
+              );
+          }),
         );
 
       const appendRecoveryEvents = async (
@@ -2344,6 +2359,40 @@ export class ThreadMaintenance extends Context.Service<
           const queued = yield* queueSnapshot;
           const producing = yield* mutations.activeLanes;
           const dispatchEnd = DateTime.toEpochMillis(dispatchUntil);
+          const until = DateTime.toEpochMillis(yieldAfter);
+          const afterNativeIds = new Set(selected.map((lane) => lane.id));
+          const completed: Array<Exit.Exit<void, DurableAlarmError>> = [];
+          let yielded = false;
+
+          // Subscribe by revision before reading the queue, so an enrollment racing the
+          // snapshot cannot be lost. Only producer notifications rescan scheduling state;
+          // there is no timer or application deadline read. New arrivals renew no budget.
+          const yieldToConcurrent = Effect.gen(function* () {
+            while (true) {
+              const revision = yield* mutations.revision;
+              const now = yield* Clock.currentTimeMillis;
+
+              if (now >= until) return yield* Effect.never;
+              const current = yield* queueSnapshot;
+              const active = yield* mutations.activeLanes;
+
+              if (
+                current.some(
+                  (row) =>
+                    !afterNativeIds.has(row.id) &&
+                    !active.has(row.id) &&
+                    row.dueAt !== null &&
+                    row.dueAt <= now &&
+                    row.revision !== observed.queue.get(row.id)?.revision,
+                )
+              ) {
+                yielded = true;
+
+                return completed;
+              }
+              yield* mutations.awaitChange(revision);
+            }
+          });
 
           yield* validateLanes(lanes, queued);
 
@@ -2365,7 +2414,7 @@ export class ThreadMaintenance extends Context.Service<
           const rotated =
             after <= 0 ? ordered : [...ordered.slice(after), ...ordered.slice(0, after)];
 
-          return yield* Effect.forEach(
+          const waves = Effect.forEach(
             rotated,
             (lane) =>
               Effect.gen(function* () {
@@ -2406,6 +2455,7 @@ export class ThreadMaintenance extends Context.Service<
                   row,
                   admit.pipe(Effect.andThen(lane.run.pipe(Effect.scoped))),
                   observed,
+                  () => yielded,
                 ).pipe(
                   Effect.timeoutOrElse({
                     duration: lane.dispatchTimeoutMillis,
@@ -2417,9 +2467,21 @@ export class ThreadMaintenance extends Context.Service<
                       }),
                   }),
                 );
-              }).pipe(Effect.exit),
+              }).pipe(
+                Effect.exit,
+                Effect.tap((exit) =>
+                  Effect.sync(() => {
+                    if (!yielded || Exit.isSuccess(exit) || !Cause.hasInterruptsOnly(exit.cause))
+                      completed.push(exit);
+                  }),
+                ),
+              ),
             { concurrency: afterNativeDispatchConcurrency },
-          );
+          ).pipe(Effect.as(completed));
+
+          // raceFirst waits for interrupted wave scopes to close before the alarm can
+          // retire and admit native work in its next event. Finished receipts stay finished.
+          return yield* Effect.raceFirst(waves, yieldToConcurrent);
         }).pipe(Effect.exit);
 
         let failure = Exit.isFailure(concurrent) ? concurrent.cause : Cause.empty;

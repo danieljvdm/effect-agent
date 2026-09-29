@@ -413,6 +413,10 @@ failure. Selection uses the final queue revisions; idle lanes do not run. The ph
 the same pass permit and fourteen-minute event deadline. Its failures retain independent retries
 and are reported together with any native failure.
 
+Newly enrolled concurrent work yields an active post-native phase. Its wave scopes close before
+the alarm retires, allowing the next alarm to admit input promptly. Unfinished waves retain their
+due revision and exact delivery receipts; completed waves stay acknowledged.
+
 A registered host lane starts idle. Producers name only the lanes receiving work, and the gate
 prearms those entries before the mutation body. A failed mutation can leave a discovery wave;
 validation and authorization should precede enrollment when they establish that no work is needed.
