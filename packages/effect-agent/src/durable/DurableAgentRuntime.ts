@@ -5517,17 +5517,20 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       // Current instructions govern the continuation; the original user intent, steering and
       // committed history survive. The pending Turn re-enters through the batch continuation,
       // without duplicating the engine's freshly rendered input.
+      // Retained immediate history can contain system messages. Its prefix stays untouched;
+      // only this Run's instruction slots receive the freshly evaluated instructions.
       const instructionView = (
         messages: ReadonlyArray<Prompt.Message>,
         instructions: ReadonlyArray<Prompt.Message>,
         insertWhenAbsent: boolean,
+        priorRunPrefixLength: number,
       ) => {
         const projected: Array<Prompt.Message> = [];
         const lengths = [0];
         let inserted = false;
 
-        for (const message of messages) {
-          if (message.role === "system") {
+        for (const [index, message] of messages.entries()) {
+          if (index >= priorRunPrefixLength && message.role === "system") {
             if (!inserted) projected.push(...instructions);
             inserted = true;
           } else projected.push(message);
@@ -5548,9 +5551,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               const view = instructionView(
                 resumeProjection.prompt.content,
                 source.content
-                  .slice(0, state.baseLen)
+                  .slice(resumeProjection.historyBefore.content.length, state.baseLen)
                   .filter((message) => message.role === "system"),
                 true,
+                resumeProjection.historyBefore.content.length,
               );
 
               return {
@@ -5881,9 +5885,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             const comparisonView = instructionView(
               sourceJournal.prompt.content,
               state.history?.content
-                .slice(0, state.baseLen)
+                .slice(resumeProjection.historyBefore.content.length, state.baseLen)
                 .filter((message) => message.role === "system") ?? [],
               false,
+              sourceJournal.historyBefore.content.length,
             );
 
             // Compare each visible message once. A transformed source can authorize only its
