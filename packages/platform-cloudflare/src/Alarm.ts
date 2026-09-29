@@ -534,7 +534,7 @@ interface NativeRecovery {
 }
 
 interface MaintenanceObservation {
-  queue?: ReadonlyArray<DueQueue.DueLane>;
+  readonly queue: Map<string, DueQueue.DueLane>;
   generation?: bigint;
   nativeOnly: boolean;
 }
@@ -929,8 +929,15 @@ export class ThreadMaintenance extends Context.Service<
       const runQueued = <E, R>(
         row: DueQueue.DueLane,
         work: Effect.Effect<Option.Option<number>, E, R>,
+        observed: MaintenanceObservation,
       ) =>
-        work.pipe(
+        Effect.suspend(() => {
+          // Include mid-pass enrollments in failure rearming if their checkpoint is
+          // interrupted. CAS still protects completed waves and racing producers.
+          observed.queue.set(row.id, row);
+
+          return work;
+        }).pipe(
           Effect.onExit((exit) =>
             mutations
               .withSnapshot(() =>
@@ -1307,7 +1314,7 @@ export class ThreadMaintenance extends Context.Service<
                 );
                 // Defer only the unacknowledged observations from this failed event. A
                 // completed wave or racing enrollment has a different revision.
-                for (const row of observed.queue ?? []) {
+                for (const row of observed.queue.values()) {
                   if (row.id !== DueQueue.Native && row.dueAt !== null && row.dueAt <= now)
                     dueQueue.complete(row, now + backoffDelay(row.stalls, jitter), true);
                 }
@@ -1446,7 +1453,7 @@ export class ThreadMaintenance extends Context.Service<
           publicationRow.dueAt !== null &&
           publicationRow.dueAt <= (yield* Clock.currentTimeMillis)
         ) {
-          yield* runQueued(publicationRow, publication.drain);
+          yield* runQueued(publicationRow, publication.drain, observed);
           publicationRow = (yield* queueSnapshot).find((row) => row.id === DueQueue.Publication);
         }
         const pending = Option.fromNullishOr(publicationRow?.dueAt);
@@ -1882,7 +1889,7 @@ export class ThreadMaintenance extends Context.Service<
         // Its completion must retain the original actionable observation for acknowledgement.
         const started = yield* beginNative(observed);
 
-        observed.queue = yield* queueSnapshot;
+        for (const row of yield* queueSnapshot) observed.queue.set(row.id, row);
 
         // This scope owns every admitted finite wave, including native advancement.
         // Close it before final alarm rearming, including on failure or event interruption.
@@ -1957,6 +1964,7 @@ export class ThreadMaintenance extends Context.Service<
             return yield* runQueued(
               row,
               projection.drain.pipe(Effect.andThen(projection.pendingDeadline)),
+              observed,
             ).pipe(Effect.timeoutOption(config.projectionDispatchTimeoutMillis));
           }),
         );
@@ -2105,7 +2113,7 @@ export class ThreadMaintenance extends Context.Service<
                   return Option.some(dueAt);
                 }
 
-                return yield* runQueued(row, lane.run.pipe(Effect.scoped)).pipe(
+                return yield* runQueued(row, lane.run.pipe(Effect.scoped), observed).pipe(
                   Effect.timeoutOrElse({
                     duration: lane.dispatchTimeoutMillis,
                     orElse: () =>
@@ -2143,7 +2151,7 @@ export class ThreadMaintenance extends Context.Service<
                 messageExhausted = true;
               } else {
                 // No second timeout: the driver owes the Claim's timeout/retry commit.
-                delivery = yield* fork(runQueued(row, wave.run).pipe(Effect.asVoid));
+                delivery = yield* fork(runQueued(row, wave.run, observed).pipe(Effect.asVoid));
               }
             }
           }
@@ -2325,7 +2333,7 @@ export class ThreadMaintenance extends Context.Service<
           const now = yield* Clock.currentTimeMillis;
           const yieldAfter = DateTime.makeUnsafe(now + 10 * 60_000);
           const dispatchUntil = DateTime.makeUnsafe(now + 14 * 60_000);
-          const observed: MaintenanceObservation = { nativeOnly: false };
+          const observed: MaintenanceObservation = { nativeOnly: false, queue: new Map() };
 
           return yield* alarm.withWakesDeferred(
             maintenancePassGate.withPermit(
