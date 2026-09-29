@@ -144,12 +144,12 @@ describe("maintenance retry deadlines", () => {
                     ...runtime,
                     processThreadHead: (...args) =>
                       runtime.processThreadHead(...args).pipe(
-                        Effect.flatMap((value) =>
-                          failed
-                            ? Effect.failCause(
-                                Cause.combine(Cause.fail(nativeFailure), Cause.die(defect)),
-                              )
-                            : Effect.succeed(value),
+                        Effect.filterOrElse(
+                          () => !failed,
+                          () =>
+                            Effect.failCause(
+                              Cause.combine(Cause.fail(nativeFailure), Cause.die(defect)),
+                            ),
                         ),
                         Effect.ensuring(
                           gate.schedule("test:after-native", 0).pipe(

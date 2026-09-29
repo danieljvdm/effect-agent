@@ -772,7 +772,7 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                   invalidatesRecovery: boolean,
                 ) =>
                   Effect.suspend(() =>
-                    Schema.decodeUnknownEffect(Schema.Array(DueQueue.HostLaneId))([
+                    Schema.decodeEffect(Schema.Array(DueQueue.HostLaneId))([
                       ...new Set(options.hostLanesForMutation?.(mutation) ?? []),
                     ]),
                   ).pipe(
