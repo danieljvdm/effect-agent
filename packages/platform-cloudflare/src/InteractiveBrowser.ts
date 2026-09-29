@@ -44,7 +44,9 @@ import {
   type Browser,
   type BrowserContext,
   type CDPSession,
+  ElementHandle,
   type HTTPRequest,
+  type JSHandle,
   type Page,
 } from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 
@@ -1133,6 +1135,41 @@ const observePage = (
   return observed > maximum ? { _tag: "OverLimit", observed } : { _tag: "Text", text };
 };
 
+// Actions require one CSS match. Resolve that node directly in Puppeteer's
+// isolated realm instead of materializing and transferring an entire handle list.
+const resolveActionTarget = async (page: Page, selector: string) => {
+  const frame = page.mainFrame();
+
+  const target: JSHandle<unknown> = await frame
+    .isolatedRealm()
+    .evaluateHandle((requestedSelector) => {
+      const pageDocument = Reflect.get(globalThis, "document");
+
+      const matches = Reflect.apply(Reflect.get(pageDocument, "querySelectorAll"), pageDocument, [
+        requestedSelector,
+      ]);
+
+      if (typeof matches !== "object" || matches === null) throw new Error("Invalid query result");
+      const count = Reflect.get(matches, "length");
+
+      return count === 1 ? Reflect.get(matches, 0) : Math.min(10_000, count);
+    }, selector);
+
+  try {
+    if (!(target instanceof ElementHandle)) {
+      return {
+        matchCount: Schema.decodeUnknownSync(Schema.Natural)(await target.jsonValue()),
+        element: undefined,
+      };
+    }
+
+    // Guarded input observes identity in the main realm, as Puppeteer's $$ does.
+    return { matchCount: 1, element: await frame.mainRealm().adoptHandle(target) };
+  } finally {
+    await disposeActionHandles([target]);
+  }
+};
+
 const runObservedPageAction = async (
   page: Page,
   selector: string,
@@ -1151,11 +1188,12 @@ const runObservedPageAction = async (
   if (before.matchCount !== 1 || before.invalidSelector === true) {
     throw new BrowserRunActionUndispatched(before.matchCount);
   }
-  const matches = await page.$$(selector);
+  const target = await resolveActionTarget(page, selector);
+  const matches = target.element === undefined ? [] : [target.element];
 
   if (matches.length !== 1 || matches[0] === undefined) {
     await disposeActionHandles(matches);
-    throw new BrowserRunActionUndispatched(Math.min(10_000, matches.length));
+    throw new BrowserRunActionUndispatched(target.matchCount);
   }
   if (signal.aborted) {
     await disposeActionHandles(matches);

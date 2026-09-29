@@ -14,10 +14,14 @@ import { afterEach, beforeEach, vi } from "vite-plus/test";
 import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";
 import { browserResponse } from "./browser-response.ts";
 
-const sdk = vi.hoisted(() => ({ connect: vi.fn<() => Promise<object>>() }));
+const sdk = vi.hoisted(() => ({
+  connect: vi.fn<() => Promise<object>>(),
+  ElementHandle: class {},
+}));
 
 vi.mock("puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js", () => ({
   default: sdk,
+  ElementHandle: sdk.ElementHandle,
 }));
 
 // Node's virtual timers cover the SDK boundary's quiet/deadline windows without
@@ -53,7 +57,6 @@ const fixture = (
       evaluate: (selector: string) => unknown,
       selector: string,
     ) => Promise<unknown>;
-    readonly matches?: number;
     readonly action?: () => Promise<void>;
     readonly dispose?: () => Promise<void>;
   } = {},
@@ -72,15 +75,26 @@ const fixture = (
   const page = {
     browser: () => ({ isConnected: () => true }),
     evaluate: options.state ?? (async () => emptyState),
-    $$: async () =>
-      Array.from({ length: options.matches ?? 1 }, () => ({
-        click: action,
-        evaluate: action,
-        dispose: async () => {
-          events.push("dispose");
-          await options.dispose?.();
-        },
-      })),
+    mainFrame: () => ({
+      isolatedRealm: () => ({
+        evaluateHandle: async () =>
+          Object.assign(new sdk.ElementHandle(), {
+            dispose: async () => {
+              events.push("lookup-dispose");
+            },
+          }),
+      }),
+      mainRealm: () => ({
+        adoptHandle: async () => ({
+          click: action,
+          evaluate: action,
+          dispose: async () => {
+            events.push("dispose");
+            await options.dispose?.();
+          },
+        }),
+      }),
+    }),
     url: () => "https://example.com/private",
     close: async () => {
       events.push("close");

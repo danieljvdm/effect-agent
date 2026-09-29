@@ -16,7 +16,7 @@ import {
   InteractiveBrowser,
   InteractiveBrowserPolicy,
 } from "effect-agent/interactive-browser";
-import nativePuppeteer from "puppeteer-core";
+import nativePuppeteer, { type ElementHandle as NativeElementHandle } from "puppeteer-core";
 import { vi } from "vite-plus/test";
 
 import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";
@@ -24,9 +24,19 @@ import { browserResponse } from "./browser-response.ts";
 
 const sdk = vi.hoisted(() => ({ connect: vi.fn<() => Promise<object>>() }));
 
-vi.mock("puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js", () => ({
-  default: { ...sdk, acquire: async () => ({ sessionId: "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99" }) },
-}));
+vi.mock("puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js", async () => {
+  const { ElementHandle } = await vi.importActual<{
+    readonly ElementHandle: typeof NativeElementHandle;
+  }>("puppeteer-core");
+
+  return {
+    ElementHandle,
+    default: {
+      ...sdk,
+      acquire: async () => ({ sessionId: "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99" }),
+    },
+  };
+});
 
 class NativeProbeError extends Schema.TaggedError<NativeProbeError>()("NativeProbeError", {
   cause: Schema.Defect(),
