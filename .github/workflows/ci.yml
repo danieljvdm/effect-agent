@@ -319,6 +319,16 @@ jobs:
           path: node_modules/.vite/task-cache
           key: ${{ steps.task-cache.outputs.cache-primary-key }}
 
+  # Paid acceptance runs on the exact version PR head before it can merge.
+  # Publication reuses the result for an identical merged tree.
+  release-gates:
+    name: Release gates
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.ref == 'changeset-release/main' && github.event.pull_request.head.repo.full_name == github.repository }}
+    uses: ./.github/workflows/release-gates.yml
+    with:
+      ref: ${{ github.event.pull_request.head.sha }}
+    secrets: inherit
+
   publish-action:
     name: Publish Action
     needs: [release-proof, checks, test, build]
@@ -381,7 +391,7 @@ jobs:
   # It runs even after a PR gate fails, and never posts a main-push ready check.
   ready:
     name: ready
-    needs: [release-proof, checks, test, build]
+    needs: [release-proof, checks, test, build, release-gates]
     if: ${{ always() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -403,3 +413,10 @@ jobs:
             test "$CHECKS_RESULT" = "success"
             test "$TEST_RESULT" = "success"
           fi
+
+      # Publication reads this exact step as the version PR's gate evidence.
+      - name: Verify release gates passed
+        if: ${{ github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.ref == 'changeset-release/main' && github.event.pull_request.head.repo.full_name == github.repository }}
+        env:
+          GATES_RESULT: ${{ needs.release-gates.result }}
+        run: test "$GATES_RESULT" = "success"

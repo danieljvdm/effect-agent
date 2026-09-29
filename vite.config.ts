@@ -219,6 +219,10 @@ export default defineConfig({
         cache: false,
         command: "bun scripts/bundle-size.ts",
       },
+      "release:plan": {
+        cache: false,
+        command: "bun scripts/release-plan.ts",
+      },
       "release:publish": {
         cache: false,
         command: "bun scripts/release-publish.ts",

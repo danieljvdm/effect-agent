@@ -80,7 +80,7 @@ const PrereleaseState = Schema.StructWithRest(
 
 const decodeManifest = Schema.decodeUnknownEffect(Schema.fromJsonString(PublishManifest));
 
-const readWorkspacePackages = Effect.fn("releasePublish.readWorkspacePackages")(function* (
+export const readWorkspacePackages = Effect.fn("releasePublish.readWorkspacePackages")(function* (
   root: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -107,41 +107,48 @@ const readWorkspacePackages = Effect.fn("releasePublish.readWorkspacePackages")(
 
 const RegistryVersion = Schema.Struct({ name: Schema.String, version: Schema.String });
 
+/** Registry failures stop the decision; they never read as "already published". */
+export const hasUnpublishedRelease = Effect.fn("releasePublish.hasUnpublishedRelease")(function* (
+  packages: ReadonlyArray<typeof PublishManifest.Type>,
+) {
+  const client = yield* HttpClient.HttpClient;
+
+  const pending = yield* Effect.forEach(
+    packages.filter((pkg) => pkg.private !== true),
+    Effect.fn(function* (pkg) {
+      const response = yield* client.get(
+        `https://registry.npmjs.org/${encodeURIComponent(pkg.name)}/${encodeURIComponent(pkg.version)}`,
+      );
+
+      if (response.status === 404) return true;
+      if (response.status !== 200)
+        return yield* ReleaseError.make({
+          package: pkg.name,
+          reason: `Cannot determine release status: npm returned ${response.status}`,
+        });
+      const published = yield* HttpClientResponse.schemaBodyJson(RegistryVersion)(response);
+
+      if (published.name !== pkg.name || published.version !== pkg.version)
+        return yield* ReleaseError.make({
+          package: pkg.name,
+          reason: "npm returned a different package or version",
+        });
+
+      return false;
+    }),
+    { concurrency: 3 },
+  ).pipe(Effect.timeout("30 seconds"));
+
+  return pending.some(Boolean);
+});
+
 /** Changesets invokes its publish hook even when nothing remains to publish. */
 export const withUnpublishedRelease = <E, R>(
   packages: ReadonlyArray<typeof PublishManifest.Type>,
   release: Effect.Effect<void, E, R>,
 ) =>
   Effect.gen(function* () {
-    const client = yield* HttpClient.HttpClient;
-
-    const pending = yield* Effect.forEach(
-      packages.filter((pkg) => pkg.private !== true),
-      Effect.fn(function* (pkg) {
-        const response = yield* client.get(
-          `https://registry.npmjs.org/${encodeURIComponent(pkg.name)}/${encodeURIComponent(pkg.version)}`,
-        );
-
-        if (response.status === 404) return true;
-        if (response.status !== 200)
-          return yield* ReleaseError.make({
-            package: pkg.name,
-            reason: `Cannot determine release status: npm returned ${response.status}`,
-          });
-        const published = yield* HttpClientResponse.schemaBodyJson(RegistryVersion)(response);
-
-        if (published.name !== pkg.name || published.version !== pkg.version)
-          return yield* ReleaseError.make({
-            package: pkg.name,
-            reason: "npm returned a different package or version",
-          });
-
-        return false;
-      }),
-      { concurrency: 3 },
-    ).pipe(Effect.timeout("30 seconds"));
-
-    if (!pending.some(Boolean)) {
+    if (!(yield* hasUnpublishedRelease(packages))) {
       yield* Console.log(
         "All public versions are already published; skipping the live gates and publication.",
       );
@@ -399,12 +406,12 @@ export const publishRelease = Effect.fn("releasePublish.publishRelease")(functio
         (yield* readCommand(root, "git", ["rev-parse", "HEAD"])).trim(),
         yield* Config.String("RELEASE_BUILD_TOKEN"),
       );
+      // CI validated these exact digest-verified bytes; restoring them needs no repeat check.
       yield* restoreReleaseBuild(root, path.join(root, ".release-build", "build.json"), {
         runId: buildRun.value,
         runAttempt: yield* Config.Number("RELEASE_BUILD_ATTEMPT"),
         commit: (yield* readCommand(root, "git", ["rev-parse", "HEAD"])).trim(),
       });
-      yield* runCommand(root, "vp", ["run", "ci:release-packages"]);
     } else yield* runCommand(root, "vp", ["run", "build"]);
     if (checkContinuity && !dryRun)
       yield* runCommand(root, "vp", [
@@ -425,7 +432,8 @@ export const publishRelease = Effect.fn("releasePublish.publishRelease")(functio
         "@effect-agent/example-browser-run-worker-proof",
         "prove:live",
       ]);
-    yield* verifyBuild;
+    // Live gates take minutes; main must not have changed the release line meanwhile.
+    if ((checkContinuity || checkCheckout) && !dryRun) yield* verifyBuild;
     yield* withPublishManifests(root, (directories) =>
       dryRun
         ? Effect.forEach(

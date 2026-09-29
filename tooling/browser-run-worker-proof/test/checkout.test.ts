@@ -28,7 +28,7 @@ it("retains safe failure stages and browser session reasons in checkout evidence
       cleanupReason: "timeout",
       cleanupStatus: 504,
     }),
-    "HTTP 502; stage=handoff; cleanup=timeout; cleanupStatus=504; invocation was not retried",
+    "HTTP 502; stage=handoff; cleanup=timeout; cleanupStatus=504",
   );
   assert.strictEqual(
     describeBrowserRunProofFailure(502, {
@@ -36,11 +36,11 @@ it("retains safe failure stages and browser session reasons in checkout evidence
       stage: "handoff",
       cleanupStatus: 504,
     }),
-    "HTTP 502; stage=handoff; cleanupStatus=504; invocation was not retried",
+    "HTTP 502; stage=handoff; cleanupStatus=504",
   );
   assert.strictEqual(
     describeBrowserRunProofFailure(502, { error: "private provider response" }),
-    "HTTP 502; invocation was not retried",
+    "HTTP 502",
   );
   assert.strictEqual(
     browserSessionFailure(
@@ -61,13 +61,13 @@ it.effect("bounds the binding failure response body", () =>
     const response = (body: string) =>
       describeBrowserRunProofFailureFromStream(502, Stream.make(new TextEncoder().encode(body)));
 
-    const fallback = "HTTP 502; invocation was not retried";
+    const fallback = "HTTP 502";
 
     assert.strictEqual(
       yield* response(
         JSON.stringify({ error: "The Browser Run binding proof failed", stage: "handoff" }),
       ),
-      "HTTP 502; stage=handoff; invocation was not retried",
+      "HTTP 502; stage=handoff",
     );
     assert.strictEqual(yield* response("x".repeat(4_097)), fallback);
     assert.strictEqual(yield* response("{"), fallback);

@@ -667,6 +667,78 @@ export const proveMergedReleaseCi = Effect.fn("releaseCi.proveMerged")(function*
   );
 });
 
+/**
+ * Publication reuses the paid gates only from the merged version PR whose head
+ * has exactly the release tree. `ready` records their result as a named step.
+ */
+export const proveGatedRelease = Effect.fn("releaseCi.proveGatedRelease")(function* (
+  root: string,
+  sha: string,
+  token: string,
+) {
+  yield* Schema.decodeEffect(Sha)(sha);
+  const get = githubGet(token);
+
+  const git = (...args: ReadonlyArray<string>) =>
+    readCommand(root, "git", args).pipe(Effect.map((output) => output.trim()));
+
+  const pulls = yield* get(
+    `commits/${sha}/pulls?per_page=100`,
+    Schema.Array(Schema.Struct({ number: Schema.Int })),
+  );
+
+  yield* requireProof(pulls.length === 1, "Ambiguous merged PR");
+  const pull = yield* get(`pulls/${pulls[0]?.number}`, Pull);
+
+  yield* requireProof(
+    pull.merged &&
+      pull.merge_commit_sha === sha &&
+      pull.base.repo.full_name === repository &&
+      pull.head.repo.full_name === repository &&
+      pull.base.ref === "main" &&
+      pull.head.ref === "changeset-release/main",
+    "Release commit is not a merged version PR",
+  );
+  yield* git("fetch", "--no-tags", "origin", pull.head.sha);
+  yield* requireProof(
+    (yield* git("rev-parse", `${sha}^{tree}`)) ===
+      (yield* git("rev-parse", `${pull.head.sha}^{tree}`)),
+    "Release tree differs from the gated version PR head",
+  );
+
+  const workflow = yield* get("actions/workflows/ci.yml", Workflow);
+
+  yield* requireProof(
+    workflow.path === workflowPath && workflow.state === "active",
+    "Workflow identity",
+  );
+
+  const runs = yield* get(
+    `actions/workflows/${workflow.id}/runs?head_sha=${pull.head.sha}&event=pull_request&per_page=100`,
+    Schema.Struct({ total_count: Schema.Int, workflow_runs: Schema.Array(Run) }),
+  );
+
+  yield* requireProof(
+    runs.total_count === runs.workflow_runs.length && runs.total_count <= 100,
+    "Incomplete gate run listing",
+  );
+  const run = runs.workflow_runs.toSorted((a, b) => b.id - a.id)[0];
+
+  if (run === undefined) return yield* new ProofUnavailable({ message: "No version PR CI" });
+
+  const jobs = yield* get(
+    `actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`,
+    Jobs,
+  );
+
+  yield* verifyBuildEvidence(pull.head.sha, workflow.id, run, jobs, "pull_request");
+  yield* verifyJobs(pull.head.sha, run.id, jobs, [["ready", "Verify release gates passed"]]).pipe(
+    Effect.mapError(() =>
+      ProofUnavailable.make({ message: "The version PR has no passing release gates" }),
+    ),
+  );
+});
+
 /** A timeout, API/schema error or defect is an ordinary-CI decision, never success evidence. */
 export const decideReleaseCi = <A, E, R>(proof: Effect.Effect<A, E, R>) =>
   proof.pipe(

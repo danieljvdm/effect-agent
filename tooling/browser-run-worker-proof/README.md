@@ -95,11 +95,23 @@ vp run --no-cache -F @effect-agent/example-browser-run-worker-proof prove:live
 ```
 
 The automated matrix runs four isolated checkouts at a time, admitting at most one new case per
-second. Actions and approval continuations within each checkout remain sequential. Deployment and
-the binding proof finish before the matrix starts; stage retirement waits for all case fibers,
-including interrupted children. Report updates are serialized and published atomically. Adjust
-concurrency and admission spacing to the account's browser and model limits; failed requests are
-not retried automatically.
+second. Actions and approval continuations within each checkout remain sequential. The binding
+proof starts once all three origins serve their fixtures, and finishes before the matrix starts;
+stage retirement waits for all case fibers, including interrupted children. Report updates are
+serialized and published atomically. Adjust concurrency and admission spacing to the account's
+browser and model limits.
+
+Nothing that may have had an effect runs again. Only infrastructure failures that provably had
+none are retried, and `infrastructureRetries` in the report lists each one:
+
+- A provider rate, protocol or navigation failure in the binding proof's Quick Action stages
+  (capture, scrape, screenshot) reruns the proof, up to three attempts. These stages run before
+  any browser session opens.
+- A case whose browser session could not be created (`dispatch=not-dispatched`, before the agent
+  ran, with no payment attempt or order) is replaced once by a fresh case, at most twice per run.
+
+Typed quota failures, backoff hints over a minute, model, assertion and cleanup failures fail the
+run.
 
 Human takeover is a separate, optional operator check. Set `CHECKOUT_HUMAN=true` explicitly to run
 it before the automated matrix. The runner prints the path to a temporary `live-view.txt` file. Open its private URL,
@@ -167,15 +179,17 @@ are outside this fixture.
 ## CI policy
 
 Ordinary PR CI runs deterministic state tests, lifecycle failure/interruption tests, and the local
-workerd receiver checks without credentials or deployment. After a Changesets version PR merges
-and its exact revision passes CI, `release:checked-publish` runs the hosted matrix before publishing.
-It skips paid work when every public version is already on npm. Adding a changeset or opening a PR
-does not trigger a hosted run. Checkout or cleanup failure blocks publication.
+workerd receiver checks without credentials or deployment. The Changesets version PR runs this proof
+as a release gate on its exact head commit through the reusable `release-gates.yml` workflow, with
+one repetition (six cases); its `ready` check requires the gate. See
+[Releasing to npm](../../docs/TOOLCHAIN.md#releasing-to-npm) for how publication reuses that result.
+Adding a changeset or opening an ordinary PR does not trigger a hosted run. Checkout or cleanup
+failure blocks the release.
 
 For an on-demand run, select **Manual hosted checkout** in GitHub Actions and choose a trusted
-branch or tag. It checks out that dispatch's exact commit. Both workflows use `gpt-6-luna`, two
-repetitions (12 cases), concurrency four, one-second admission spacing, and `CHECKOUT_HUMAN=false`.
-Only an explicit local operator run establishes human takeover coverage.
+branch or tag. It checks out that dispatch's exact commit and sets its own repetitions. Both
+workflows use `gpt-6-luna`, concurrency four, one-second admission spacing, and
+`CHECKOUT_HUMAN=false`. Only an explicit local operator run establishes human takeover coverage.
 
 Configure the `OPENAI_API_KEY`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, and narrow
 `BROWSER_RENDERING_API_TOKEN` repository secrets, plus the `CLOUDFLARE_WORKERS_SUBDOMAIN` variable.

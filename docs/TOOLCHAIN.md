@@ -209,16 +209,24 @@ version PR. Its source baseline is already complete when the PR's release metada
 After that PR merges and its exact main revision passes CI, the workflow publishes through npm
 trusted publishing with provenance. PR updates and publication use separate queues.
 
-Publication first runs `release:checked-publish`, which checks npm for unpublished public versions.
-If all versions already exist, it skips publication and the paid evaluations. Registry failures
-stop the attempt before inference. A pending release requires fresh, uncached continuity and
-hosted checkout checks on the exact clean candidate checkout. Missing credentials, incomplete runs,
-model failures, or failed assertions stop publication.
+```text
+version PR head ──► CI + release gates (continuity, hosted checkout) ──► ready ──► merge
+merged main ──► CI ──► release:plan ──► gates only if the tree is not the gated head ──► npm
+```
+
+The paid release gates run on the version PR, before merge, from
+`.github/workflows/release-gates.yml`. Each gate is its own job, so rerunning failed jobs repeats
+only the failed gate. The `ready` check records their result, and a failed or missing gate blocks
+the merge. After merge, `release:plan` checks npm for unpublished public versions. If all versions
+already exist, nothing runs. Otherwise it reuses the gate result only when the merged commit
+belongs to the version PR and has exactly that PR head's tree. Any other tree, such as a version
+PR merged while behind `main`, runs both gates again before publication. Registry failures stop
+the attempt. Missing credentials, incomplete runs, model failures, or failed assertions fail a gate.
 
 For the [context continuity evaluation](../tooling/context-continuity-eval/README.md), configure
 `OPENAI_API_KEY` as a repository secret and optionally `CONTEXT_EVAL_MODEL`
 as a repository variable; the workflow explicitly selects `gpt-6-astra` by default. Each suite has a
-conservative $10 spending limit. Nightly and release jobs select one existing explicit-rollover
+conservative $10 spending limit. Nightly and release gate jobs select one existing explicit-rollover
 profile; manual dispatch may select one bounded SQLite pressure/restart profile. Cloudflare and
 full-capacity coverage require separate explicit preparation. PR checks are deterministic and
 never call a model.
@@ -226,14 +234,13 @@ Each attempt preserves its own evidence artifact, including failures. This gate 
 documented continuity scenario; it does not certify large-history startup or Cloudflare host
 performance.
 
-The [hosted checkout gate](../tooling/browser-run-worker-proof/README.md#ci-policy) runs 12 automated
-cases with `gpt-6-luna`, four concurrently, before npm publication. Checkout or cleanup failure
-blocks the release. Configure the `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` and narrow
+The [hosted checkout gate](../tooling/browser-run-worker-proof/README.md#ci-policy) runs six automated
+cases with `gpt-6-luna`, four concurrently. Checkout or cleanup failure blocks the release. Configure the `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` and narrow
 `BROWSER_RENDERING_API_TOKEN` repository secrets and the `CLOUDFLARE_WORKERS_SUBDOMAIN` variable;
 it reuses `OPENAI_API_KEY`. Its report is retained for 30 days and recorded cleanup is retried after
 failure or cancellation. **Manual hosted checkout** also runs on demand for a selected revision.
-Neither changeset additions nor ordinary PRs trigger this paid matrix, and CI never waits for human
-verification.
+Only the version PR and an ungated publication trigger this paid matrix; changeset additions and
+ordinary PRs do not, and CI never waits for human verification.
 
 The release PR always runs candidate builds and the required `ready` gate. It can reuse
 proven ordinary source checks through the [release metadata proof](#release-metadata-ci).
@@ -243,7 +250,8 @@ the `EFFECT_AGENT_APP_ID` and `EFFECT_AGENT_APP_PRIVATE_KEY` repository secrets.
 The checkout disables persisted credentials so Changesets uses the App token.
 
 After merge, Changesets handles registry version checks, publishing, package tags, and GitHub
-releases. CI transfers the exact validated package build to publication; manual releases build locally.
+releases. CI transfers the exact validated package build to publication without repeating its
+package checks; manual releases build locally.
 The publisher temporarily prepares npm-ready manifests:
 source exports point at built files, `workspace:*` dependencies use the current workspace
 versions, and `catalog:` dependencies use the root catalog. All source manifests are restored
@@ -263,7 +271,7 @@ For an authenticated manual release:
 2. Run `vp run changeset:version`, then `vp install`.
 3. Run `vp run ready`.
 4. Supply the continuity and [checkout environment](../tooling/browser-run-worker-proof/README.md#run)
-   for the exact clean candidate. Use two checkout repetitions and `CHECKOUT_HUMAN=false`.
+   for the exact clean candidate. Use one checkout repetition and `CHECKOUT_HUMAN=false`.
 5. Run `vp run release:publish --dry-run`, then
    `EFFECT_AGENT_LIVE=1 vp run --no-cache release:checked-publish`.
    Add `--otp <code>` if npm requests it.
@@ -535,7 +543,7 @@ Candidate files are read as Git objects; the proof does not execute candidate co
 ```text
 main push -> ordinary source CI -> version PR: proof or ordinary CI + build + package checks
 successful source + PR CI -> version merge: proof + restore PR build + package checks
-successful main CI -> publication: restore main build + package checks + live gate -> npm
+successful main CI -> publication: restore main build + reuse or rerun release gates -> npm
 ```
 
 The supported delta is deliberately narrow: every public package in the single fixed group
@@ -563,7 +571,7 @@ export, purity and package checks after restoring that exact build. Package insp
 same npm-ready manifests used by publication and checks `npm pack --dry-run --ignore-scripts`
 for the actual version and every exported JavaScript and declaration file. Source manifests and
 prerelease state are restored. A failed retained check fails `ready`. This path neither publishes
-nor calls paid models; the separate paid gates in `release:checked-publish` remain intact.
+nor calls paid models; the separate release gates remain required.
 
 Release PR generation runs on `push` alongside main CI and skips superseded main revisions.
 If ordinary source CI is still running when the PR proof checks it, the PR runs ordinary CI.

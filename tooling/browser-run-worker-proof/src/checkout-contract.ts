@@ -350,6 +350,17 @@ export const Report = Schema.Struct({
   completed: Schema.Natural,
   attempted: Schema.Natural,
   completionRate: Schema.Finite,
+  // Retried infrastructure failures that provably had no effect. They never count as passes.
+  infrastructureRetries: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        stage: Schema.Literals(["binding-proof", "case"]),
+        key: Schema.optionalKey(RunKey),
+        replacement: Schema.optionalKey(RunKey),
+        failure: Schema.String,
+      }),
+    ),
+  ),
   cleanup: Schema.Literals(["pending", "browsers-closed", "confirmed", "failed"]),
   providerCompatibility: Schema.Literal("not-established"),
 });

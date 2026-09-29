@@ -11,7 +11,18 @@ import {
   BrowserRunInteractiveHost,
   BrowserRunLiveViewRequest,
 } from "@effect-agent/platform-cloudflare/interactive-browser";
-import { Config, Duration, Effect, Layer, Option, Redacted, RegExp, Schema, Stream } from "effect";
+import {
+  Config,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  Redacted,
+  RegExp,
+  Schema,
+  Stream,
+} from "effect";
 import {
   BrowserNavigateRequest,
   BrowserReadTextRequest,
@@ -20,14 +31,18 @@ import {
   InteractiveBrowserPolicy,
   InteractiveBrowserActionError,
 } from "effect-agent/interactive-browser";
-import { PageUrlTarget } from "effect-agent/page-capture";
+import { PageCaptureRateLimitedError, PageUrlTarget } from "effect-agent/page-capture";
 import {
   PageScreenshot,
   PageScreenshotLimits,
   PageScreenshotRequest,
 } from "effect-agent/page-screenshot";
 import * as WebCapture from "effect-agent/web-capture";
-import { WebCaptureScrapeSuccess, WebCaptureSuccess } from "effect-agent/web-capture";
+import {
+  WebCaptureFailure,
+  WebCaptureScrapeSuccess,
+  WebCaptureSuccess,
+} from "effect-agent/web-capture";
 import { Worker, WorkerEnvironment } from "effect-cf";
 import { Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
@@ -39,6 +54,7 @@ import {
   BrowserRunWorkerProofResult,
   PROOF_FACT,
   PROOF_SOURCE_PATH,
+  ProviderTag,
 } from "./contract.ts";
 import { credentialFixture, runCredentialProof } from "./credentials.ts";
 import { uploadFixture, runUploadProof } from "./uploads.ts";
@@ -128,6 +144,8 @@ const runProof = Effect.gen(function* () {
 
   const interactiveNavigateRequest = BrowserNavigateRequest.make({ url: sourceUrl });
   let stage: typeof BrowserRunProofStage.Type = "capture";
+  // A capture tool returns its provider failure as a result; keep only the tag and backoff hint.
+  let provider: Pick<WebCaptureFailure, "errorTag" | "retryAfterMillis"> | undefined;
 
   return yield* Effect.gen(function* () {
     const toolkit = yield* Toolkit.make(proofCapture.tool);
@@ -146,6 +164,7 @@ const runProof = Effect.gen(function* () {
     }
     const result = last.value.result;
 
+    if (Schema.is(WebCaptureFailure)(result)) provider = result;
     if (!Schema.is(WebCaptureSuccess)(result) || !result.markdown?.includes(PROOF_FACT)) {
       return yield* WorkerCaptureProofError.make({
         message: "The Markdown capture did not contain the expected stable fact",
@@ -168,6 +187,8 @@ const runProof = Effect.gen(function* () {
       });
     }
     const scrapeResult = scrapeLast.value.result;
+
+    if (Schema.is(WebCaptureFailure)(scrapeResult)) provider = scrapeResult;
 
     const heading = Schema.is(WebCaptureScrapeSuccess)(scrapeResult)
       ? scrapeResult.groups.find((group) => group.selector === "h1")
@@ -317,8 +338,17 @@ const runProof = Effect.gen(function* () {
     );
   }).pipe(
     Effect.provide(captureLayer),
-    Effect.catch((error) =>
-      Effect.succeed(
+    Effect.catch((error) => {
+      const rateLimited =
+        stage === "screenshot" && Schema.is(PageCaptureRateLimitedError)(error) ? error : undefined;
+
+      const providerTag =
+        provider?.errorTag ??
+        (stage === "screenshot" && Predicate.hasProperty(error, "_tag") ? error._tag : undefined);
+
+      const retryAfterMillis = provider?.retryAfterMillis ?? rateLimited?.retryAfterMillis;
+
+      return Effect.succeed(
         Response.json(
           BrowserRunWorkerProofFailure.make({
             error: "The Browser Run binding proof failed",
@@ -332,11 +362,14 @@ const runProof = Effect.gen(function* () {
                     : { cleanupStatus: error.cause.status }),
                 }
               : {}),
+            ...(Schema.is(ProviderTag)(providerTag) ? { providerTag } : {}),
+            ...(rateLimited === undefined ? {} : { providerReason: rateLimited.reason }),
+            ...(retryAfterMillis === undefined ? {} : { retryAfterMillis }),
           }),
           { status: 502 },
         ),
-      ),
-    ),
+      );
+    }),
   );
 });
 

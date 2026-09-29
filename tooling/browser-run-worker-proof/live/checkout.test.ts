@@ -1,6 +1,18 @@
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Test from "alchemy/Test/Vitest";
-import { Cause, Clock, Config, Console, Effect, Exit, FileSystem, Layer, Schema } from "effect";
+import {
+  Cause,
+  Clock,
+  Config,
+  Console,
+  Effect,
+  Exit,
+  FileSystem,
+  Layer,
+  Option,
+  Schedule,
+  Schema,
+} from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
@@ -26,8 +38,11 @@ import { checkoutStack } from "../src/checkout-stack.ts";
 import { assertPurchase, expectedQuote, sameQuote } from "../src/checkout-store.ts";
 import {
   BrowserRunWorkerProofResult,
-  describeBrowserRunProofFailureFromStream,
+  describeBrowserRunProofFailure,
+  PROOF_FACT,
   PROOF_SOURCE_PATH,
+  readBrowserRunProofFailure,
+  transientBrowserRunProofFailure,
 } from "../src/contract.ts";
 
 // Only prove:live collects this file. The same stage is reusable only for explicit retirement.
@@ -62,6 +77,12 @@ const updateReport = Effect.fnUntraced(function* (
 ) {
   yield* (yield* CheckoutReport).update((report) => (report === undefined ? undefined : f(report)));
 });
+
+const recordRetry = (retry: NonNullable<typeof Report.Type.infrastructureRetries>[number]) =>
+  updateReport((report) => ({
+    ...report,
+    infrastructureRetries: [...(report.infrastructureRetries ?? []), retry],
+  }));
 
 const measure = Effect.fnUntraced(function* <A, E, R>(
   phase: keyof typeof Timings.Type,
@@ -100,6 +121,51 @@ const workerStatus = Effect.fnUntraced(function* (name: string) {
 
   return response.status;
 });
+
+/** New workers.dev routes can lag deployment; each origin must serve its own fixture first. */
+const awaitOrigin = Effect.fnUntraced(function* (url: URL, marker: string) {
+  const client = yield* HttpClient.HttpClient;
+
+  yield* client.get(url).pipe(
+    Effect.filterOrFail(
+      (response) => response.status === 200,
+      (response) => failure("deployment", `${url.origin} returned HTTP ${response.status}`),
+    ),
+    Effect.flatMap((response) => response.text),
+    Effect.filterOrFail(
+      (text) => text.includes(marker),
+      () => failure("deployment", `${url.origin} did not serve its fixture`),
+    ),
+    Effect.timeout("10 seconds"),
+    Effect.retry({ schedule: Schedule.spaced("2 seconds") }),
+    Effect.timeoutOrElse({
+      duration: "2 minutes",
+      orElse: () =>
+        failure("deployment", `${url.origin} did not serve its fixture within two minutes`),
+    }),
+  );
+});
+
+/**
+ * Session creation failed before the agent ran: no browser action, payment attempt or order
+ * exists, so a fresh case cannot duplicate an effect. Any other failure is a gate verdict.
+ */
+const undispatched = (evidence: typeof RunEvidence.Type | null) =>
+  evidence !== null &&
+  evidence.control.closed &&
+  evidence.control.requests === 1 &&
+  /^BrowserSessionError reason=(?:timeout|provider|busy) dispatch=not-dispatched cleanup=(?:not-requested|confirmed)(?:\n|$)/.test(
+    evidence.control.failure ?? "",
+  ) &&
+  evidence.toolCalls.length === 0 &&
+  evidence.outputs.length === 0 &&
+  evidence.observations.length === 0 &&
+  (evidence.runs?.length ?? 0) === 0 &&
+  evidence.shop.attempts.length === 0 &&
+  evidence.shop.orders.length === 0;
+
+const bindingAttempts = 3;
+const maxCaseReplacements = 2;
 
 const call = Effect.fn("CheckoutProof.request")(function* <
   S extends Schema.Top & { readonly DecodingServices: never },
@@ -329,33 +395,56 @@ const proof = Effect.gen(function* () {
   shopUrl = deployed.shopUrl;
   const bindingUrl = deployed.bindingUrl;
 
-  yield* measure("readinessMillis", Effect.sleep("15 seconds"));
+  const merchant = new URL("/ready", deployed.processorUrl);
+
+  merchant.searchParams.set("merchant", new URL("/s/readiness", shopUrl).href);
+  yield* measure(
+    "readinessMillis",
+    Effect.all(
+      [
+        awaitOrigin(new URL(PROOF_SOURCE_PATH, bindingUrl), PROOF_FACT),
+        awaitOrigin(new URL("/health", shopUrl), "checkout-v1"),
+        awaitOrigin(merchant, "Card ready"),
+      ],
+      { concurrency: "unbounded", discard: true },
+    ),
+  );
   const client = yield* HttpClient.HttpClient;
 
   yield* measure(
     "bindingProofMillis",
     Effect.gen(function* () {
-      const bindingResponse = yield* client.get(bindingUrl).pipe(Effect.timeout("150 seconds"));
+      for (let attempt = 1; ; attempt++) {
+        const bindingResponse = yield* client.get(bindingUrl).pipe(Effect.timeout("150 seconds"));
 
-      if (bindingResponse.status !== 200) {
-        return yield* failure(
-          "binding-proof",
-          yield* describeBrowserRunProofFailureFromStream(
-            bindingResponse.status,
-            bindingResponse.stream,
-          ),
-        );
+        if (bindingResponse.status === 200) {
+          const result = yield* bindingResponse.json.pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(BrowserRunWorkerProofResult)),
+          );
+
+          const expectedSource = new URL(PROOF_SOURCE_PATH, bindingUrl).href;
+
+          if (result.sourceUrl !== expectedSource || result.interactive.finalUrl !== expectedSource)
+            return yield* failure(
+              "binding-proof",
+              "The browser proof used a different source page",
+            );
+
+          return yield* updateReport((report) => ({ ...report, bindingProof: true }));
+        }
+        const body = yield* readBrowserRunProofFailure(bindingResponse.stream);
+        const description = describeBrowserRunProofFailure(bindingResponse.status, body);
+        const transient = transientBrowserRunProofFailure(body);
+
+        if (Option.isNone(transient) || attempt === bindingAttempts)
+          return yield* failure(
+            "binding-proof",
+            `${description}; ${Option.isNone(transient) ? "not retryable" : "transient retries exhausted"}${attempt > 1 ? ` after ${attempt} attempts` : ""}`,
+          );
+        yield* recordRetry({ stage: "binding-proof", failure: description });
+        // Stay above the Worker's Quick Action pacing and honor the provider's own hint.
+        yield* Effect.sleep(Math.max(15_000 * attempt, transient.value.retryAfterMillis ?? 0));
       }
-
-      const result = yield* bindingResponse.json.pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(BrowserRunWorkerProofResult)),
-      );
-
-      const expectedSource = new URL(PROOF_SOURCE_PATH, bindingUrl).href;
-
-      if (result.sourceUrl !== expectedSource || result.interactive.finalUrl !== expectedSource)
-        return yield* failure("binding-proof", "The browser proof used a different source page");
-      yield* updateReport((report) => ({ ...report, bindingProof: true }));
     }),
   );
 
@@ -375,12 +464,16 @@ const proof = Effect.gen(function* () {
     ),
   ];
 
-  const runCase = Effect.fnUntraced(function* ({
-    repetition,
-    ...item
-  }: (typeof scheduled)[number]) {
-    const key = `${run}-${item.flow}-${item.scenario}-${repetition}`;
+  const admit = yield* makeCaseAdmission(startIntervalMillis);
+  let replacements = 0;
+
+  /** Returns the session failure when the attempt provably dispatched nothing. */
+  const attemptCase = Effect.fnUntraced(function* (
+    key: string,
+    item: Omit<(typeof scheduled)[number], "repetition">,
+  ) {
     const start = yield* Clock.monotonicTimeNanos;
+    let undispatchedFailure: string | undefined;
 
     yield* Console.log(`Checkout ${key}`);
     // Persist the denominator before dispatch: interruption cannot erase an unsuccessful attempt.
@@ -416,6 +509,9 @@ const proof = Effect.gen(function* () {
             closed.value !== null &&
             closed.value.control.closed;
 
+          if (!passed && undispatched(evidence))
+            undispatchedFailure = evidence?.control.failure?.split("\n")[0];
+
           const elapsedMillis = Math.max(
             0,
             Math.round(Number((yield* Clock.monotonicTimeNanos) - start) / 1_000_000),
@@ -447,11 +543,37 @@ const proof = Effect.gen(function* () {
       ),
       Effect.exit,
     );
+
+    return undispatchedFailure;
+  });
+
+  const runCase = Effect.fnUntraced(function* ({
+    repetition,
+    ...item
+  }: (typeof scheduled)[number]) {
+    const key = `${run}-${item.flow}-${item.scenario}-${repetition}`;
+    const undispatchedFailure = yield* attemptCase(key, item);
+
+    // One fresh case per automated attempt, within a small suite budget. A replacement is final.
+    if (
+      undispatchedFailure === undefined ||
+      item.scenario === "handoff" ||
+      replacements >= maxCaseReplacements
+    )
+      return;
+    replacements++;
+    yield* recordRetry({
+      stage: "case",
+      key,
+      replacement: `${key}-r`,
+      failure: undispatchedFailure,
+    });
+    yield* admit;
+    yield* attemptCase(`${key}-r`, item);
   });
 
   // Operator takeover is opt-in and stays outside the automated concurrent batch.
   for (const item of scheduled.filter((item) => item.scenario === "handoff")) yield* runCase(item);
-  const admit = yield* makeCaseAdmission(startIntervalMillis);
 
   yield* measure(
     "matrixMillis",
@@ -463,10 +585,28 @@ const proof = Effect.gen(function* () {
   );
   const report = yield* currentReport;
 
-  if (report?.completed !== report?.attempted)
+  const passedKeys = new Set(
+    report?.results.flatMap((result) => (result.passed ? [result.key] : [])),
+  );
+
+  const replaced = new Map(
+    report?.infrastructureRetries?.flatMap((retry) =>
+      retry.key === undefined || retry.replacement === undefined
+        ? []
+        : [[retry.key, retry.replacement] as const],
+    ),
+  );
+
+  // Every failure must be a recorded undispatched case whose replacement passed.
+  if (
+    report === undefined ||
+    report.results.some(
+      (result) => !result.passed && !passedKeys.has(replaced.get(result.key) ?? result.key),
+    )
+  )
     return yield* failure(
       "assertion",
-      "Checkout failures retained in .checkout-proof; no attempts were retried",
+      "Checkout failures retained in .checkout-proof; only undispatched session failures are replaced",
     );
 }).pipe(
   Effect.tapCause((cause) =>
