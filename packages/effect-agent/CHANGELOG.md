@@ -1,5 +1,7 @@
 # effect-agent
 
+## 0.1.0-beta.155
+
 ## 0.1.0-beta.154
 
 ### Minor Changes

@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.155
+
+### Patch Changes
+
+- [#710](https://github.com/danieljvdm/effect-agent/pull/710) [`a10dca2`](https://github.com/danieljvdm/effect-agent/commit/a10dca207ed5c1a40d0c9590cc294cdb54b1b998) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Yield post-native maintenance when newly enrolled concurrent work becomes due, so saved input can be admitted promptly. Retain unfinished delivery obligations and their exact receipts for the next alarm.
+
+- Updated dependencies []:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.155
+  - effect-agent@0.1.0-beta.155
+
 ## 0.1.0-beta.154
 
 ### Patch Changes
