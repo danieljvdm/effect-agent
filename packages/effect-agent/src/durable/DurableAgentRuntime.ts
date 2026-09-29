@@ -6275,7 +6275,14 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       // Claims are authority, wakes are hints. A cancelled waiter retains every claim
       // for the seam drain; it never appends input while an old response can still commit.
-      const pendingJoinClaims: Array<JoiningClaim> = [];
+      type PreparedJoin = {
+        readonly claim: JoiningClaim;
+        readonly input: Pick<UserInputRecorded, "input" | "messageAdmission">;
+        readonly rendered: Prompt.RawInput;
+      };
+
+      const pendingJoinClaims: Array<{ readonly claim: JoiningClaim; prepared?: PreparedJoin }> =
+        [];
 
       const claimInputs = Effect.fnUntraced(function* (maxCount: number) {
         const ownershipToken = yield* Ref.get(tokenRef);
@@ -6289,8 +6296,66 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           }),
         );
 
-        pendingJoinClaims.push(...claims);
+        pendingJoinClaims.push(...claims.map((claim) => ({ claim })));
+
+        return claims.length;
       }, Effect.uninterruptible);
+
+      const revertClaims = Effect.fnUntraced(function* (
+        claims: ReadonlyArray<(typeof pendingJoinClaims)[number]>,
+      ) {
+        for (const pending of claims) {
+          yield* ledger.revertJoining(
+            RevertJoiningRequest.make({ submissionId: pending.claim.submissionId }),
+          );
+          pendingJoinClaims.splice(pendingJoinClaims.indexOf(pending), 1);
+        }
+      }, Effect.uninterruptible);
+
+      // Preparation remains interruptible; a completed render stays with its claim so
+      // cancellation of the waiter cannot lose it or invoke the callback again at the seam.
+      const prepareInputs = Effect.fnUntraced(function* (limit: number, firstReady = false) {
+        if (
+          pendingJoinClaims.length < limit &&
+          (yield* claimInputs(limit - pendingJoinClaims.length)) > 0
+        )
+          yield* hit("join:after-claim");
+        const prepared: Array<PreparedJoin> = [];
+
+        for (const pending of pendingJoinClaims.slice(0, limit)) {
+          const claim = pending.claim;
+
+          const snapshot = yield* ledger.loadRecoverySnapshot(
+            RecoverySnapshotRequest.make({ submissionId: claim.submissionId }),
+          );
+
+          if (snapshot.abortIntent !== undefined) {
+            yield* revertClaims([pending]);
+            continue;
+          }
+          if (pending.prepared === undefined) {
+            const input = {
+              input: claim.inputPayload,
+              ...(snapshot.submission.messageAdmission === undefined
+                ? {}
+                : { messageAdmission: snapshot.submission.messageAdmission }),
+            };
+
+            const rendered = yield* Effect.result(renderJoinedInput(input));
+
+            if (Result.isFailure(rendered)) {
+              // A rejected prompt and its suffix retain their own Runs in queue order.
+              yield* revertClaims(pendingJoinClaims.slice(pendingJoinClaims.indexOf(pending)));
+              break;
+            }
+            pending.prepared = { claim, input, rendered: rendered.success };
+          }
+          prepared.push(pending.prepared);
+          if (firstReady) break;
+        }
+
+        return prepared;
+      });
 
       const awaitJoin = recordHalt(
         Effect.gen(function* () {
@@ -6299,8 +6364,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               Effect.gen(function* () {
                 const notified = yield* wake.subscribe(submission.threadId);
 
-                if (pendingJoinClaims.length === 0) yield* claimInputs(MAX_JOIN_DRAIN);
-                if (pendingJoinClaims.length > 0) return true;
+                if ((yield* prepareInputs(MAX_JOIN_DRAIN, true)).length > 0) return true;
                 yield* notified;
 
                 return false;
@@ -6336,8 +6400,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
                   joinBacklog = hostSnapshot.joins;
                 }
+                // These inputs were already consumed by an earlier attempt. Restore the
+                // entire uncovered prompt; only fresh claims are subject to the drain bound.
                 for (const join of joinBacklog) {
-                  if (joinedInputs.length >= limit) break;
                   const joinId = join.submissionId;
 
                   if (deliveredJoinInputs.has(joinId)) continue;
@@ -6372,104 +6437,62 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                   yield* preserveToolResults;
                   joinedInputs.push(payload);
                 }
-                if (joinedInputs.length < limit) {
-                  const remaining = limit - joinedInputs.length;
+                const claims = yield* prepareInputs(limit);
 
-                  if (pendingJoinClaims.length < remaining)
-                    yield* claimInputs(remaining - pendingJoinClaims.length);
-                  const claims = pendingJoinClaims.splice(0, remaining);
+                pendingJoinClaims.splice(0, claims.length);
+                for (const { claim, input: payload, rendered } of claims) {
+                  yield* preserveToolResults;
+                  const recordId = submissionInputRecordId(claim.submissionId);
+                  let sequence: CanonicalSequence;
+                  const existing = joinedInputEnvelopes.get(claim.submissionId);
 
-                  if (claims.length > 0) {
-                    yield* hit("join:after-claim");
-                  }
-                  for (const claim of claims) {
-                    const claimSnapshot = yield* ledger.loadRecoverySnapshot(
-                      RecoverySnapshotRequest.make({ submissionId: claim.submissionId }),
-                    );
-
-                    if (claimSnapshot.abortIntent !== undefined) {
-                      // Aborted before the host consumed the input: honor the intent by
-                      // returning the claim to ready (revert-then-abort, plan §2.5); it settles
-                      // aborted once it heads the lane.
-                      yield* ledger.revertJoining(
-                        RevertJoiningRequest.make({ submissionId: claim.submissionId }),
-                      );
-                      continue;
-                    }
-
-                    const payload = {
-                      input: claim.inputPayload,
-                      ...(claimSnapshot.submission.messageAdmission === undefined
-                        ? {}
-                        : { messageAdmission: claimSnapshot.submission.messageAdmission }),
-                    };
-
-                    const rendered = yield* Effect.result(renderJoinedInput(payload));
-
-                    if (Result.isFailure(rendered)) {
-                      // The rejecting input gets its own Run and normal typed failure.
-                      // Leave it and the unconsumed suffix ready, preserving queue order
-                      // and preventing one invalid prompt from failing unrelated receipts.
-                      for (const remaining of claims.slice(claims.indexOf(claim))) {
-                        yield* ledger.revertJoining(
-                          RevertJoiningRequest.make({ submissionId: remaining.submissionId }),
-                        );
-                      }
-                      break;
-                    }
-                    yield* preserveToolResults;
-                    const recordId = submissionInputRecordId(claim.submissionId);
-                    let sequence: CanonicalSequence;
-                    const existing = joinedInputEnvelopes.get(claim.submissionId);
-
-                    if (existing !== undefined) {
-                      // Defensive reattach: the exact record is already canonical, so only the
-                      // marker and the delivery remain (DUR-016 — never a duplicate append).
-                      sequence = existing.sequence;
-                    } else {
-                      const envelope = yield* makeEnvelope(
-                        recordId,
-                        UserInputRecorded.make({
-                          submissionId: claim.submissionId,
-                          kind: "steering",
-                          runId,
-                          input: claim.inputPayload,
-                          ...(claimSnapshot.submission.messageAdmission === undefined
-                            ? {}
-                            : { messageAdmission: claimSnapshot.submission.messageAdmission }),
-                        }),
-                      );
-
-                      const result = yield* appendBatch(
-                        ctx,
-                        CanonicalBatch.make({
-                          batchId: submissionInputBatchId(claim.submissionId),
-                          producerId: config.producerId,
-                          records: [envelope],
-                        }),
-                      );
-
-                      sequence = result.firstSequence;
-                      knownIds.add(recordId);
-                      yield* hit("join:after-canonical-append");
-                    }
-                    // Re-read the token: the concurrent lease renewal may rotate it mid-batch.
-                    const markToken = yield* Ref.get(tokenRef);
-
-                    yield* ledger.markJoined(
-                      MarkJoinedRequest.make({
+                  if (existing !== undefined) {
+                    // Defensive reattach: the exact record is already canonical, so only the
+                    // marker and the delivery remain (DUR-016 — never a duplicate append).
+                    sequence = existing.sequence;
+                  } else {
+                    const envelope = yield* makeEnvelope(
+                      recordId,
+                      UserInputRecorded.make({
                         submissionId: claim.submissionId,
-                        ownershipToken: markToken,
-                        recordId,
-                        sequence,
+                        kind: "steering",
+                        runId,
+                        input: claim.inputPayload,
+                        ...(payload.messageAdmission === undefined
+                          ? {}
+                          : { messageAdmission: payload.messageAdmission }),
                       }),
                     );
-                    deliveredJoinInputs.add(claim.submissionId);
-                    joinedInputs.push({
-                      ...payload,
-                      rendered: rendered.success,
-                    });
+
+                    const result = yield* appendBatch(
+                      ctx,
+                      CanonicalBatch.make({
+                        batchId: submissionInputBatchId(claim.submissionId),
+                        producerId: config.producerId,
+                        records: [envelope],
+                      }),
+                    );
+
+                    sequence = result.firstSequence;
+                    knownIds.add(recordId);
+                    yield* hit("join:after-canonical-append");
                   }
+                  // Re-read the token: the concurrent lease renewal may rotate it mid-batch.
+                  const markToken = yield* Ref.get(tokenRef);
+
+                  yield* ledger.markJoined(
+                    MarkJoinedRequest.make({
+                      submissionId: claim.submissionId,
+                      ownershipToken: markToken,
+                      recordId,
+                      sequence,
+                    }),
+                  );
+                  deliveredJoinInputs.add(claim.submissionId);
+                  joinedInputs.push({
+                    ...payload,
+                    rendered,
+                  });
                 }
 
                 return joinedInputs;

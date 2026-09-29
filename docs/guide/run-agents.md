@@ -282,7 +282,9 @@ When the completing run has exhausted its budget, follow-ups stay queued for a n
 Durable runs drain the ready input prefix together, subject to the host ledger's
 joining policy and the runtime batch bound. Each joined input retains its receipt;
 only a later host response covers it. Inputs rejected by the prompt callback remain
-queued for their own run instead of failing the host or later queued inputs.
+queued for their own run without cancelling the host's model call. Recovery restores
+all previously consumed, uncovered joins before the next call; the batch bound applies
+to newly ready inputs.
 
 Set `policy: { restartOnJoinedInput: true }` on an agent to let eligible joined input
 replace a running model call. The first call starts immediately. The runtime cancels
