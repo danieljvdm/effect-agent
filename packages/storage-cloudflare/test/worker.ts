@@ -9,6 +9,8 @@ import { handleEncodedPortRequest } from "@effect-agent/storage-cloudflare/port-
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { DurableObject } from "cloudflare:workers";
 import { Effect, Layer } from "effect";
+import { DurableRuntimeFailpoint } from "effect-agent/durable-failpoint";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 
 /**
  * SQLite-backed Durable Object shell hosting the WP1/WP2 adapter suites. Tests use
@@ -28,6 +30,8 @@ export class ThreadStorageObject extends DurableObject {
     return Effect.runPromise(
       handleEncodedPortRequest(encoded).pipe(
         Effect.provide([
+          DurableRuntimeFailpoint.layer,
+          WakeScheduler.layerNoop,
           doMessageDeliveryStoreLayer().pipe(
             Layer.provide([
               storageConfigLayer({ storage: this.ctx.storage }),

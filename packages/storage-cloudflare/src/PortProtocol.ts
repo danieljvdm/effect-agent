@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
 import { ThreadId } from "effect-agent/identifiers";
 import {
   MessageDeliveryError,
@@ -43,6 +44,7 @@ import {
   FenceRejected,
   FencedAppendRequest,
 } from "effect-agent/thread-store";
+import { WorkerAdmissionRequest } from "effect-agent/worker-admission";
 
 /**
  * The cross-Durable-Object port protocol (plan §1.3, D-P6-3): Schema request/response/error
@@ -57,6 +59,7 @@ import {
  * child-settlement notification, and the child-thread store operations used by
  * establishment, `verifySettledChild`, and result projection):
  *
+ * - worker: `admitWorker` (ledger admission, materialization, creation, origin, readiness);
  * - ledger: `admit`, `markReady`, `lookup`, `resolveAdmission`, `requestAbort`,
  *   `recordChildSettled`;
  * - store: `materialize`, `append`, `read` (one page), `readIdentity`, `inspectTail`, `export`.
@@ -99,6 +102,11 @@ export class PortProtocolError extends Schema.TaggedError<PortProtocolError>()(
 // ---------------------------------------------------------------------------
 // Requests
 // ---------------------------------------------------------------------------
+
+/** One destination-owned worker admission, including canonical initialization and readiness. */
+export class WorkerAdmitCall extends Schema.TaggedClass<WorkerAdmitCall>()("WorkerAdmit", {
+  request: WorkerAdmissionRequest,
+}) {}
 
 /** Routed `SubmissionLedger.admit` — child establishment admits INTO the owning Object. */
 export class LedgerAdmitCall extends Schema.TaggedClass<LedgerAdmitCall>(
@@ -216,6 +224,7 @@ export class MessageDeliveryListCall extends Schema.TaggedClass<MessageDeliveryL
 
 /** Every request that may cross a Durable Object boundary — the CLOSED route-capable subset. */
 export const PortRequest = Schema.Union([
+  WorkerAdmitCall,
   MessageDeliveryListCall,
   LedgerAdmitCall,
   LedgerMarkReadyCall,
@@ -242,6 +251,13 @@ export type PortRequestEnvelope = typeof PortRequest.Encoded;
 // ---------------------------------------------------------------------------
 // Results
 // ---------------------------------------------------------------------------
+
+export class WorkerAdmitResult extends Schema.TaggedClass<WorkerAdmitResult>()(
+  "WorkerAdmitResult",
+  {
+    result: AdmissionResult,
+  },
+) {}
 
 export class LedgerAdmitResult extends Schema.TaggedClass<LedgerAdmitResult>(
   "@effect-agent/storage-cloudflare/LedgerAdmitResult",
@@ -325,6 +341,7 @@ export class MessageDeliveryListResult extends Schema.TaggedClass<MessageDeliver
 
 /** Every successful routed result. Callers narrow by the tag their request implies. */
 export const PortResult = Schema.Union([
+  WorkerAdmitResult,
   MessageDeliveryListResult,
   LedgerAdmitResult,
   LedgerMarkReadyResult,
@@ -355,6 +372,7 @@ export type PortResult = typeof PortResult.Type;
  * thread ports declare, so a routed caller observes identical error tags and fields.
  */
 export const PortFailure = Schema.Union([
+  DurableRuntimeFailpointError,
   MessageDeliveryError,
   AdmissionConflict,
   AdmissionPolicyError,

@@ -184,6 +184,7 @@ type ThreadObjectInitializationError =
 /** Classify only a decoded port request so new protocol members cannot bypass pre-arming. */
 const isMutatingPortRequest = (request: PortRequest): boolean => {
   switch (request._tag) {
+    case "WorkerAdmit":
     case "LedgerAdmit":
     case "LedgerMarkReady":
     case "LedgerStopWorker":
@@ -370,6 +371,7 @@ const requirePortThread = (request: PortRequest) => {
       return requireSubmissionThread(request.request.parentSubmissionId);
     case "LedgerInspectWorker":
     case "LedgerStopWorker":
+    case "WorkerAdmit":
     case "LedgerAdmit":
     case "LedgerResolveAdmission":
     case "StoreMaterialize":

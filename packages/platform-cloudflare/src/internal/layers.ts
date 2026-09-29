@@ -21,6 +21,7 @@ import {
   routedMessageDeliveryStoreLayer,
   routedThreadStoreLayer,
   routedSubmissionLedgerLayer,
+  routedWorkerAdmissionLayer,
 } from "@effect-agent/storage-cloudflare/port-routing";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
@@ -845,7 +846,11 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
       const portsEndpointLayer = Layer.effect(ThreadObjectPorts)(
         Effect.gen(function* () {
           const local = yield* Effect.context<
-            SubmissionLedger | ThreadStore | MessageDeliveryStore
+            | SubmissionLedger
+            | ThreadStore
+            | MessageDeliveryStore
+            | WakeScheduler
+            | DurableRuntimeFailpoint
           >();
 
           const lookupSubmission = makeLocalSubmissionLookup({ ownsThread });
@@ -856,11 +861,12 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
               lookupSubmission(submissionId).pipe(Effect.provide(local)),
           });
         }),
-      ).pipe(Layer.provide(localPorts), Layer.provide(messageStore));
+      ).pipe(Layer.provide(localPorts), Layer.provide(messageStore), Layer.provide(wakes));
 
       const routedPorts = Layer.mergeAll(
         routedSubmissionLedgerLayer({ ownsThread }),
         routedThreadStoreLayer({ ownsThread }),
+        routedWorkerAdmissionLayer({ ownsThread }),
       ).pipe(Layer.provide(localPorts), Layer.provide(threadPortTransportLayer));
 
       const routedMessages = routedMessageDeliveryStoreLayer({ ownsThread }).pipe(

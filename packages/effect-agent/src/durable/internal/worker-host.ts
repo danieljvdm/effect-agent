@@ -72,7 +72,6 @@ import {
   WorkerStopRequested,
   WorkerOrigin,
   WorkerContinuation,
-  WorkerOriginRecorded,
   WorkerInputCompleted,
   WorkerReportPrepared,
   WorkerReportRefused,
@@ -137,6 +136,7 @@ import {
 } from "./agent-registration.ts";
 import { lastWorkerReportMessageId } from "./agent-updates.ts";
 import { messageStatus } from "./message-status.ts";
+import { makeWorkerOriginWriter } from "./thread-initialization.ts";
 
 const failure = (
   operation: WorkerError["operation"],
@@ -570,14 +570,13 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       payload:
         | WorkerStopRequested
         | WorkerInputRequested
-        | WorkerOriginRecorded
         | WorkerInputCompleted
         | WorkerReportPrepared
         | WorkerReportRefused
         | SubtreeBudgetReserved,
       current: Pick<ThreadExport, "tailSequence" | "tailDigest" | "records"> &
         Partial<Pick<ThreadTail, "producerEpoch">>,
-      phase: "source" | "origin" | "completion" | "subtree" | "report" | "stop",
+      phase: "source" | "completion" | "subtree" | "report" | "stop",
       acknowledgements: ReadonlyArray<WorkerInputCompleted> = [],
     ) {
       const operation = "start";
@@ -612,11 +611,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
                   createdAt: DateTime.makeUnsafe(
                     payload._tag === "WorkerInputRequested"
                       ? payload.admission.createdAtMillis
-                      : payload._tag === "WorkerOriginRecorded"
-                        ? payload.origin.createdAtMillis
-                        : payload._tag === "WorkerInputCompleted"
-                          ? payload.completedAtMillis
-                          : yield* Clock.currentTimeMillis,
+                      : payload._tag === "WorkerInputCompleted"
+                        ? payload.completedAtMillis
+                        : yield* Clock.currentTimeMillis,
                   ),
                   deploymentId: deps.deploymentId,
                   payload,
@@ -654,49 +651,55 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       record.payload._tag === "WorkerInputRequested" ? [record.payload] : [],
     );
 
-  // Completion is published in the child's own journal. Only the source, while
-  // admitting work, reads those exact receipts to release its capacity reservations.
-  const completedInputs = Effect.fn("WorkerHost.completedInputs")(function* (
-    rows: ReadonlyArray<WorkerInputRequested>,
-    sourceRecords: ThreadExport["records"],
-  ) {
-    const completed = new Set<string>(
-      sourceRecords.flatMap(({ record }) =>
+  const completedMessageIds = (records: ThreadExport["records"]) =>
+    new Set<string>(
+      records.flatMap(({ record }) =>
         record.payload._tag === "WorkerInputCompleted" && record.payload.effectsResolved
           ? [record.payload.messageId]
           : [],
       ),
     );
 
-    const acknowledgements: Array<WorkerInputCompleted> = [];
+  // Read exact child receipts only under capacity pressure. Collect in source order so
+  // parallel foreign reads cannot change the canonical acknowledgement batch order.
+  const completedInputs = Effect.fn("WorkerHost.completedInputs")(function* (
+    rows: ReadonlyArray<WorkerInputRequested>,
+    sourceRecords: ThreadExport["records"],
+  ) {
+    const completed = completedMessageIds(sourceRecords);
 
-    for (const { admission } of rows) {
-      if (completed.has(admission.messageId)) continue;
+    const receipts = yield* Effect.forEach(
+      rows.filter(({ admission }) => !completed.has(admission.messageId)),
+      Effect.fnUntraced(function* ({ admission }) {
+        const receipt = Option.getOrUndefined(
+          yield* getRecord({
+            threadId: admission.origin.worker.threadId,
+            recordId: Schema.decodeSync(RecordId)(`worker-effects-resolved:${admission.messageId}`),
+          }).pipe(
+            Effect.provideService(ThreadStore, deps.store),
+            // An unmaterialized reservation still consumes capacity.
+            Effect.catchTag("ThreadNotMaterialized", () => Effect.succeed(Option.none())),
+            Effect.mapError(storageFailure("start")),
+          ),
+        )?.record.payload;
 
-      const receipt = Option.getOrUndefined(
-        yield* getRecord({
-          threadId: admission.origin.worker.threadId,
-          recordId: Schema.decodeSync(RecordId)(`worker-effects-resolved:${admission.messageId}`),
-        }).pipe(
-          Effect.provideService(ThreadStore, deps.store),
-          // A source reservation can precede child materialization. It still consumes
-          // capacity; absence of storage is never a completion acknowledgement.
-          Effect.catchTag("ThreadNotMaterialized", () => Effect.succeed(Option.none())),
-          Effect.mapError(storageFailure("start")),
-        ),
-      )?.record.payload;
+        if (receipt === undefined) return;
+        if (
+          receipt._tag !== "WorkerInputCompleted" ||
+          !receipt.effectsResolved ||
+          receipt.messageId !== admission.messageId ||
+          receipt.workerThreadId !== admission.origin.worker.threadId
+        )
+          return yield* failure("start", "corrupt");
 
-      if (receipt === undefined) continue;
-      if (
-        receipt._tag !== "WorkerInputCompleted" ||
-        !receipt.effectsResolved ||
-        receipt.messageId !== admission.messageId ||
-        receipt.workerThreadId !== admission.origin.worker.threadId
-      )
-        return yield* failure("start", "corrupt");
-      completed.add(admission.messageId);
-      acknowledgements.push(receipt);
-    }
+        return receipt;
+      }),
+      { concurrency: 8 },
+    );
+
+    const acknowledgements = receipts.filter((receipt) => receipt !== undefined);
+
+    for (const receipt of acknowledgements) completed.add(receipt.messageId);
 
     return { completed, acknowledgements };
   });
@@ -1047,33 +1050,40 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
       // Include unreconciled reservations conservatively; only canonical completion frees an
       // active slot. A worker Thread consumes one slot even when multiple inputs safely join it.
-      const completedWorkers = yield* completedInputs(
-        requests(source.current.records),
-        source.current.records,
-      );
-
       const completedAttached = new Set<string>(
         source.current.records.flatMap(({ record }) =>
           record.payload._tag === "SubagentJoined" ? [record.payload.reservationId] : [],
         ),
       );
 
-      const active = new Set(
-        rows
-          .filter((row) =>
-            row.lifetime === "background"
-              ? !completedWorkers.completed.has(row.reservationId)
-              : !completedAttached.has(row.reservationId),
-          )
-          .map((row) => row.childThreadId),
+      const activeLimit = Math.min(
+        caps.maxConcurrentChildren ?? Infinity,
+        source.policy.toolConcurrency,
       );
 
-      if (
-        !active.has(payload.childThreadId) &&
-        active.size >=
-          Math.min(caps.maxConcurrentChildren ?? Infinity, source.policy.toolConcurrency)
-      )
-        return yield* failure("start", "capacity");
+      const hasSlot = (completed: ReadonlySet<string>, conservative = false) => {
+        const active = new Set(
+          rows
+            .filter((row) =>
+              row.lifetime === "background"
+                ? !completed.has(row.reservationId)
+                : !completedAttached.has(row.reservationId),
+            )
+            .map((row) => row.childThreadId),
+        );
+
+        return active.has(payload.childThreadId)
+          ? !conservative || active.size <= activeLimit
+          : active.size < activeLimit;
+      };
+
+      const localCompletions = completedMessageIds(source.current.records);
+
+      const completedWorkers = hasSlot(localCompletions, true)
+        ? { completed: localCompletions, acknowledgements: [] }
+        : yield* completedInputs(requests(source.current.records), source.current.records);
+
+      if (!hasSlot(completedWorkers.completed)) return yield* failure("start", "capacity");
       if (
         yield* append(
           sourceThreadId,
@@ -1275,17 +1285,6 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
           return yield* failure("start", "capacity");
       }
 
-      const completed = yield* completedInputs(rows, current.records);
-
-      const pendingRows = rows.filter((row) => !completed.completed.has(row.admission.messageId));
-      const activeWorkers = new Set(pendingRows.map((row) => row.admission.origin.worker.threadId));
-
-      const pendingOwn = pendingRows.filter(
-        (row) =>
-          row.admission.origin.worker.threadId === origin.worker.threadId &&
-          row.admission.reportKind === admission.reportKind,
-      ).length;
-
       // Resolve inside the source CAS loop: independently delivered starts must compete
       // against one canonical prefix. A conflict repeats both authority and capacity reads.
       const selectedConcurrency = yield* deps.concurrencyResolver.resolve({
@@ -1301,21 +1300,48 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
             .maxActiveWorkersPerSource
         : Infinity;
 
-      if (
-        pendingOwn >=
-          (admission.reportKind === "update"
-            ? (deps.limits.maxPendingUpdateInputsPerWorker ?? 32)
-            : deps.limits.maxPendingInputsPerWorker) ||
-        (!activeWorkers.has(origin.worker.threadId) &&
-          activeWorkers.size >=
-            Math.min(
-              sourceConcurrency,
-              deps.limits.maxActiveWorkersPerSource ?? source.policy.toolConcurrency,
-              independent
-                ? Infinity
-                : Math.min(caps.maxConcurrentChildren ?? Infinity, source.policy.toolConcurrency),
-            ))
-      )
+      const activeLimit = Math.min(
+        sourceConcurrency,
+        deps.limits.maxActiveWorkersPerSource ?? source.policy.toolConcurrency,
+        independent
+          ? Infinity
+          : Math.min(caps.maxConcurrentChildren ?? Infinity, source.policy.toolConcurrency),
+      );
+
+      const hasCapacity = (completed: ReadonlySet<string>, conservative = false) => {
+        const pendingRows = rows.filter((row) => !completed.has(row.admission.messageId));
+
+        const activeWorkers = new Set(
+          pendingRows.map((row) => row.admission.origin.worker.threadId),
+        );
+
+        const pendingOwn = pendingRows.filter(
+          (row) =>
+            row.admission.origin.worker.threadId === origin.worker.threadId &&
+            row.admission.reportKind === admission.reportKind,
+        ).length;
+
+        return (
+          pendingOwn <
+            (admission.reportKind === "update"
+              ? (deps.limits.maxPendingUpdateInputsPerWorker ?? 32)
+              : deps.limits.maxPendingInputsPerWorker) &&
+          (activeWorkers.has(origin.worker.threadId)
+            ? !conservative || activeWorkers.size <= activeLimit
+            : activeWorkers.size < activeLimit)
+        );
+      };
+
+      // Unresolved inputs bound pending work from above. An apparently active destination
+      // could already be idle: after a limit reduction, prove activity before exempting its
+      // follow-up from acquiring a new slot.
+      const localCompletions = completedMessageIds(current.records);
+
+      const completed = hasCapacity(localCompletions, true)
+        ? { completed: localCompletions, acknowledgements: [] }
+        : yield* completedInputs(rows, current.records);
+
+      if (!hasCapacity(completed.completed))
         return yield* WorkerError.make({ operation: "start", reason: "capacity", retryable: true });
       if (!independent)
         yield* reserveSubtree(
@@ -1351,42 +1377,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     return yield* failure("start", "storage");
   });
 
-  const ensureOrigin = Effect.fn("WorkerHost.ensureOrigin")(function* (origin: WorkerOrigin) {
-    for (let attempt = 0; attempt < 16; attempt++) {
-      const current = yield* readIdentity(origin.worker.threadId, "start");
-
-      const existing = current.records.find(
-        ({ record }) => record.payload._tag === "WorkerOriginRecorded",
-      )?.record.payload;
-
-      if (existing?._tag === "WorkerOriginRecorded") {
-        if (!sameOrigin(existing.origin, origin)) return yield* failure("start", "worker-mismatch");
-
-        return;
-      }
-      const first = current.records[0]?.record.payload;
-
-      if (
-        first?._tag !== "ThreadCreated" ||
-        first.agentId !== origin.worker.targetAgentId ||
-        !definitionDigestsEqual(first.definitions, origin.targetDigests) ||
-        current.records.some(({ record }) => record.payload._tag === "SubagentLineageRecorded")
-      )
-        return yield* failure("start", "worker-mismatch");
-      if (
-        yield* append(
-          origin.worker.threadId,
-          workerOriginRecordId(origin.worker.threadId),
-          WorkerOriginRecorded.make({ origin }),
-          current,
-          "origin",
-        )
-      )
-        return;
-    }
-
-    return yield* failure("start", "storage");
-  });
+  const ensureOrigin = makeWorkerOriginWriter(deps);
 
   const validateAdmission = Effect.fn("WorkerHost.validateAdmission")(function* (
     unvalidated: WorkerAdmission,

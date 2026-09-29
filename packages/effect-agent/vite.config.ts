@@ -108,6 +108,7 @@ export default defineConfig({
       "src/durable/ToolReconciler.ts",
       "src/durable/WakeScheduler.ts",
       "src/durable/WorkerHost.ts",
+      "src/durable/WorkerAdmission.ts",
       "src/durable/ThreadContextHistory.ts",
       "src/durable/ThreadContextHistoryProjection.ts",
       "src/durable/MessageDeliveryStoreConformance.ts",

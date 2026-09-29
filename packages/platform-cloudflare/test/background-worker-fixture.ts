@@ -1,3 +1,4 @@
+import type { PortRequest } from "@effect-agent/storage-cloudflare/port-protocol";
 import { Duration, Effect, Layer, Option, Schema, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
@@ -19,6 +20,15 @@ import {
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import { TEST_DIGESTS, TEST_PRINCIPAL, finalParts } from "./fixtures.ts";
+
+/** Callee-side observation of real port RPCs for the worker launch budget proof. */
+export const workerLaunchProbe: {
+  current?: {
+    calls: Array<{ thread: string; request: PortRequest }>;
+    activeReads: number;
+    maxActiveReads: number;
+  };
+} = {};
 
 const definition = (name: string) =>
   Agent.make(name, {

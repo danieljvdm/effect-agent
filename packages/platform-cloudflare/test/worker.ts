@@ -13,6 +13,7 @@ import {
 } from "@effect-agent/platform-cloudflare/cloudflare-scheduling";
 import { makeSubscriptionPartitionObjectClass } from "@effect-agent/platform-cloudflare/cloudflare-subscriptions";
 import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
+import { PortRequest } from "@effect-agent/storage-cloudflare/port-protocol";
 import { Clock, Effect, Layer, Schema } from "effect";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { RecalledMemory } from "effect-agent/memory";
@@ -28,6 +29,7 @@ import {
   backgroundWorkerAuthority,
   backgroundWakeDropPrefixes,
   customRuntimeThreads,
+  workerLaunchProbe,
 } from "./background-worker-fixture.ts";
 import {
   THREADS_BINDING,
@@ -349,6 +351,34 @@ export class TestThreadObject extends ThreadObject.make(
     estimateCostMicrousd: () => Effect.succeed({ costMicrousd: 0 }),
   },
 ) {
+  override async portCall(encoded: unknown, traceContext?: unknown): Promise<unknown> {
+    const probe = workerLaunchProbe.current;
+
+    if (probe === undefined) return super.portCall(encoded, traceContext);
+
+    const request = Schema.decodeUnknownSync(PortRequest)(encoded);
+    const thread = this.ctx.id.name ?? "";
+
+    const completionRead =
+      request._tag === "StoreReadPage" &&
+      "selection" in request.request &&
+      request.request.selection._tag === "RecordId" &&
+      request.request.selection.recordId.startsWith("worker-effects-resolved:");
+
+    probe.calls.push({ thread, request });
+    if (completionRead) {
+      probe.activeReads++;
+      probe.maxActiveReads = Math.max(probe.maxActiveReads, probe.activeReads);
+      // Make overlap observable without depending on local SQLite latency.
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    try {
+      return await super.portCall(encoded, traceContext);
+    } finally {
+      if (completionRead) probe.activeReads--;
+    }
+  }
+
   override wake(): Promise<void> {
     const name = this.ctx.id.name ?? "";
 

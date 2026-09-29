@@ -34,6 +34,7 @@ import {
   backgroundUpdatePrompts,
   backgroundUpdateSource,
   backgroundUpdateWorkers,
+  workerLaunchProbe,
 } from "./background-worker-fixture.ts";
 import {
   decodeIdempotencyKey,
@@ -76,6 +77,101 @@ const withOwner = <A, E>(
       }),
     ),
   );
+
+// Requested proof seam: count actual cross-Object launch calls and pressure reads. Existing
+// lifecycle cases below retain authority, receipt, contention and eviction coverage.
+it("admits workers in one RPC and reads completions concurrently only at capacity", async () => {
+  const samples = [];
+
+  for (let sample = 0; sample < 5; sample++) {
+    const source = `background-cf-independent-${crypto.randomUUID()}`;
+
+    await runClient(
+      Effect.flatMap(CloudflareThreadClient, (client) =>
+        client.submit(
+          { definition: independentBudgetSource },
+          { question: "initialize" },
+          submitOptions(source, "source"),
+        ),
+      ),
+    );
+    await drainAlarmsUntil(source, allSettled(source));
+    independentBudgetGrants.add(source);
+    backgroundWakeDropPrefixes.add("worker:");
+    droppedMessageWakes.add(source);
+
+    const launch = (key: string) =>
+      withOwner(source, (host) =>
+        Subagent.start(
+          independentBudgetWorkers,
+          { question: `${source}:task:${key}` },
+          { idempotencyKey: decodeIdempotencyKey(key), budgetScope: "worker-run" },
+        ).pipe(Effect.provideService(SubagentHost, host)),
+      );
+
+    const measure = async (key: string) => {
+      const probe = { calls: [], activeReads: 0, maxActiveReads: 0 };
+
+      workerLaunchProbe.current = probe;
+      const start = performance.now();
+      const result = await launch(key);
+      const elapsedMs = performance.now() - start;
+
+      delete workerLaunchProbe.current;
+
+      return { result, elapsedMs, ...probe };
+    };
+
+    const children: Array<Awaited<ReturnType<typeof launch>>> = [];
+
+    try {
+      const first = await measure("1");
+
+      children.push(first.result);
+      const second = await measure("2");
+
+      children.push(second.result);
+      const pressure = await measure("3");
+      const replay = await launch("1");
+
+      expect(replay).toEqual(first.result);
+      expect(first.result.delivery.status).toBe("accepted");
+      expect(second.result.delivery.status).toBe("accepted");
+      expect(pressure.result.delivery.status).toBe("refused");
+      samples.push({
+        first: { ms: first.elapsedMs, calls: first.calls },
+        second: { ms: second.elapsedMs, calls: second.calls },
+        pressure: {
+          ms: pressure.elapsedMs,
+          calls: pressure.calls,
+          maxActiveReads: pressure.maxActiveReads,
+        },
+      });
+    } finally {
+      delete workerLaunchProbe.current;
+      for (const child of children) {
+        if (child.delivery.receipt === null) continue;
+        await withOwner(source, (host) =>
+          Subagent.cancel(independentBudgetWorkers, child.worker, child.delivery.receipt!).pipe(
+            Effect.provideService(SubagentHost, host),
+          ),
+        );
+        await drainAlarmsUntil(child.worker.threadId, allSettled(child.worker.threadId));
+      }
+      independentBudgetGrants.delete(source);
+      independentBudgetAuthorityCalls.delete(source);
+      backgroundWakeDropPrefixes.delete("worker:");
+      droppedMessageWakes.delete(source);
+    }
+  }
+  console.log("worker launch budget", JSON.stringify(samples));
+  for (const sample of samples) {
+    expect(sample.first.calls).toHaveLength(1);
+    expect(sample.second.calls).toHaveLength(1);
+    expect(sample.pressure.calls).toHaveLength(2);
+    expect(sample.pressure.maxActiveReads).toBe(2);
+  }
+}, 30_000);
 
 it("delivers an accepted worker update before completion after eviction with only alarms and no wake hints", async () => {
   const source = `background-cf-update-${crypto.randomUUID()}`;

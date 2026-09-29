@@ -163,6 +163,7 @@ import {
 } from "./internal/journal-checkpoint.ts";
 import { makeJournalMetadata, type JournalMetadata } from "./internal/journal-metadata.ts";
 import { makeMessagingRuntime } from "./internal/messaging-host.ts";
+import { makeThreadInitializer } from "./internal/thread-initialization.ts";
 import { makeWorkerRuntime, WorkerInputControl } from "./internal/worker-host.ts";
 import { WorkerRuntime } from "./internal/worker-runtime.ts";
 import {
@@ -181,7 +182,6 @@ import {
   CanonicalBatch,
   CanonicalSequence,
   CompactionCreated,
-  ThreadCreated,
   DefinitionDigests,
   ModelResponseInterrupted,
   PersistedJson,
@@ -357,6 +357,7 @@ import {
 } from "./ThreadStore.ts";
 import { PreparedToolCallEvidence, ToolReconciler } from "./ToolReconciler.ts";
 import { WakeScheduler } from "./WakeScheduler.ts";
+import { WorkerAdmissionPort, WorkerAdmissionRequest } from "./WorkerAdmission.ts";
 
 // Capture the tracing call site once; each application still creates a fresh Attempt span.
 const withThreadHeadSpan = Effect.withSpan("DurableAgentRuntime.processThreadHead");
@@ -536,13 +537,7 @@ const childUsageReportsOf = (state: SubagentCallRecords): ReadonlyArray<ChildRun
     });
   });
 
-/** Deterministic batch identity of one Thread's initial `ThreadCreated` append. */
-export const threadCreatedBatchId = (threadId: ThreadId): BatchId =>
-  decodeBatchId(`thread-created:${threadId}`);
-
-/** Deterministic record identity of one Thread's `ThreadCreated` record. */
-export const threadCreatedRecordId = (threadId: ThreadId): RecordId =>
-  decodeRecordId(`thread-created:${threadId}`);
+export { threadCreatedBatchId, threadCreatedRecordId } from "./internal/thread-initialization.ts";
 
 /** Deterministic batch identity of one executed recovery decision's audit append (DUR-013). */
 export const recoveryRepairBatchId = (submissionId: SubmissionId, decisionTag: string): BatchId =>
@@ -1262,6 +1257,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   bindings: ReadonlyArray<ResolvedBinding>,
 ) {
   const registeredBindings = [...bindings];
+  const workerAdmissionPort = yield* WorkerAdmissionPort;
   const ledger = yield* SubmissionLedger;
   const submissionScheduling = yield* SubmissionScheduling;
   const store = yield* ThreadStore;
@@ -2380,67 +2376,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       .materialize(ThreadMaterialization.make({ threadId, producerEpoch }))
       .pipe(Effect.catchTag("FenceRejected", () => Effect.void));
 
-  /**
-   * Coordinator invariant: every Thread's first canonical record is `ThreadCreated`,
-   * so `tailSequence >= 1` is the deterministic already-created check. A lost race (conflict or
-   * fence) is verified against that invariant instead of being trusted blindly. An admitted
-   * child can be claimed before it is runnable; that advances the shared storage fence without
-   * appending anything. Re-read and retry that initialization race with the current fence.
-   */
-  const ensureThreadCreated = Effect.fn("DurableAgentRuntime.ensureThreadCreated")(
-    function* (
-      threadId: ThreadId,
-      agentId: AgentId,
-      definitions: DefinitionDigests,
-    ): Effect.fn.Return<
-      void,
-      ThreadStoreError | ThreadNotMaterialized | AppendConflict | FenceRejected
-    > {
-      const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
-
-      if (tail.tailSequence > 0) return;
-
-      const record = yield* makeEnvelope(
-        threadCreatedRecordId(threadId),
-        ThreadCreated.make({ agentId, definitions }),
-      );
-
-      yield* store
-        .append(
-          FencedAppendRequest.make({
-            threadId,
-            batch: CanonicalBatch.make({
-              batchId: threadCreatedBatchId(threadId),
-              producerId: config.producerId,
-              records: [record],
-            }),
-            expectedTailSequence: tail.tailSequence,
-            expectedTailDigest: tail.tailDigest,
-            producerEpoch: tail.producerEpoch,
-          }),
-        )
-        .pipe(
-          Effect.catchTag(["AppendConflict", "FenceRejected"], (error) =>
-            store
-              .inspectTail(ThreadTailRequest.make({ threadId }))
-              .pipe(
-                Effect.flatMap((current) =>
-                  current.tailSequence > 0 ? Effect.void : Effect.fail(error),
-                ),
-              ),
-          ),
-          Effect.andThen(wake.notify(threadId)),
-          Effect.asVoid,
-        );
-    },
-    (effect) =>
-      effect.pipe(
-        Effect.retry({
-          times: 7,
-          while: (error) => error._tag === "AppendConflict" || error._tag === "FenceRejected",
-        }),
-      ),
-  );
+  const ensureThreadCreated = makeThreadInitializer({ store, wake, ...config });
 
   const attemptContextFor = Effect.fn("DurableAgentRuntime.attemptContextFor")(function* (
     threadId: ThreadId,
@@ -10109,40 +10045,63 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         });
     }
 
-    const admitted = yield* ledger.admit(
-      yield* Schema.decodeEffect(AdmissionRequest)({
-        threadId: options.threadId,
-        principal: options.principal,
-        idempotencyKey: options.idempotencyKey,
-        ...(options.admissionGroup === undefined ? {} : { admissionGroup: options.admissionGroup }),
-        ...(options.admissionFence === undefined ? {} : { admissionFence: options.admissionFence }),
-        agentId: agent.definition.id,
-        agentDigests: options.definitions,
-        deploymentId: config.deploymentId,
-        inputPayload,
-        inputDigest,
-        ...(workerAdmission === undefined
-          ? {}
-          : {
-              workerAdmission: yield* Schema.encodeEffect(WorkerAdmission)(workerAdmission).pipe(
-                Effect.mapError(() =>
-                  LedgerError.make({
-                    operation: "submit",
-                    message: "Worker admission cannot be encoded",
-                  }),
-                ),
+    const request = yield* Schema.decodeEffect(AdmissionRequest)({
+      threadId: options.threadId,
+      principal: options.principal,
+      idempotencyKey: options.idempotencyKey,
+      ...(options.admissionGroup === undefined ? {} : { admissionGroup: options.admissionGroup }),
+      ...(options.admissionFence === undefined ? {} : { admissionFence: options.admissionFence }),
+      agentId: agent.definition.id,
+      agentDigests: options.definitions,
+      deploymentId: config.deploymentId,
+      inputPayload,
+      inputDigest,
+      ...(workerAdmission === undefined
+        ? {}
+        : {
+            workerAdmission: yield* Schema.encodeEffect(WorkerAdmission)(workerAdmission).pipe(
+              Effect.mapError(() =>
+                LedgerError.make({
+                  operation: "submit",
+                  message: "Worker admission cannot be encoded",
+                }),
               ),
-            }),
-        ...(messageAdmission === undefined ? {} : { messageAdmission }),
-      }).pipe(
-        Effect.mapError(() =>
-          LedgerError.make({
-            operation: "submit",
-            message: "Admission fields do not satisfy the ledger contract",
+            ),
           }),
-        ),
+      ...(messageAdmission === undefined ? {} : { messageAdmission }),
+    }).pipe(
+      Effect.mapError(() =>
+        LedgerError.make({
+          operation: "submit",
+          message: "Admission fields do not satisfy the ledger contract",
+        }),
       ),
     );
+
+    if (workerAdmission !== undefined) {
+      const admitted = yield* workerAdmissionPort
+        .admit(
+          WorkerAdmissionRequest.make({
+            ...request,
+            workerAdmission,
+            producerId: config.producerId,
+          }),
+        )
+        .pipe(
+          Effect.provideService(SubmissionLedger, ledger),
+          Effect.provideService(ThreadStore, store),
+          Effect.provideService(WakeScheduler, wake),
+          Effect.provideService(DurableRuntimeFailpoint, failpoint),
+        );
+
+      return Receipt.make({
+        receiptId: admitted.receiptId,
+        submissionId: admitted.submissionId,
+        threadId: request.threadId,
+        queueSequence: admitted.queueSequence,
+      });
+    }
+    const admitted = yield* ledger.admit(request);
 
     yield* hit("submit:after-admit");
 
@@ -10160,15 +10119,6 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     }
     yield* materializeAtLeast(options.threadId, ZERO_EPOCH);
     yield* ensureThreadCreated(options.threadId, agent.definition.id, options.definitions);
-    if (workerAdmission !== undefined) {
-      yield* workerRuntime
-        .ensureOrigin(workerAdmission.origin)
-        .pipe(
-          Effect.mapError((cause) =>
-            LedgerError.make({ operation: "worker-origin", message: cause.reason, cause }),
-          ),
-        );
-    }
     yield* hit("submit:after-materialize");
     yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
     yield* wake.notify(options.threadId);

@@ -31,6 +31,14 @@ for application queries.
 database so ownership claims fence the same records. These adapters provide storage
 ports; acquiring them alone does not drive agent execution or recovery.
 
+Background worker starts validate authority and reserve capacity at the source, then admit and
+initialize the child through one destination RPC. Custom routed assemblies must install
+`PortRouting.routedWorkerAdmissionLayer` alongside the routed ledger and thread store. The
+owner-side port handler requires `WakeScheduler` and `DurableRuntimeFailpoint` and must run
+mutations through the host's maintenance gate. `ThreadObject.make` and `ThreadObject.layerInHost`
+provide this wiring, including enrollment of affected maintenance lanes. Upgrade the framework,
+storage and host packages together; stored records and retry receipts need no reset.
+
 ## Optional shared memory
 
 Thread history and memory shared across threads have different owners. For shared

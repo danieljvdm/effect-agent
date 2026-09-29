@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Option, Predicate, Schema, Stream } from "effect";
+import type { DurableRuntimeFailpoint } from "effect-agent/durable-failpoint";
 import { LifecyclePublicationError } from "effect-agent/lifecycle-publication";
 import { MessageDeliveryStore, MessageDeliveryError } from "effect-agent/message-delivery";
 import {
@@ -23,8 +24,16 @@ import {
   ThreadStoreError,
   FenceRejected,
 } from "effect-agent/thread-store";
+import type { WakeScheduler } from "effect-agent/wake-scheduler";
+import {
+  admitWorker,
+  WorkerAdmissionPort,
+  WorkerAdmissionFailure,
+} from "effect-agent/worker-admission";
 
 import {
+  WorkerAdmitCall,
+  WorkerAdmitResult,
   MessageDeliveryListCall,
   MessageDeliveryListResult,
   boundPortDiagnostic,
@@ -1056,6 +1065,48 @@ export const routedThreadStoreLayer = (
 ): Layer.Layer<ThreadStore, never, ThreadStore | ThreadPortTransport> =>
   Layer.effectContext(makeRoutedStoreServices(options));
 
+/** Route validated worker admission as one operation; source policy hooks stay at the caller. */
+export const routedWorkerAdmissionLayer = (options: RoutedPortOptions) =>
+  Layer.effect(
+    WorkerAdmissionPort,
+    Effect.gen(function* () {
+      const call = makeTransportCall(yield* ThreadPortTransport);
+
+      return WorkerAdmissionPort.of({
+        admit: (request) =>
+          options.ownsThread(request.threadId)
+            ? admitWorker(request)
+            : call(request.threadId, WorkerAdmitCall.make({ request })).pipe(
+                Effect.mapError((cause) =>
+                  LedgerError.make({
+                    operation: "admit worker",
+                    message: "Worker admission transport failed",
+                    cause,
+                  }),
+                ),
+                Effect.flatMap((response) => {
+                  if (
+                    response._tag === "PortSucceeded" &&
+                    response.result._tag === "WorkerAdmitResult"
+                  )
+                    return Effect.succeed(response.result.result);
+
+                  return Effect.fail(
+                    response._tag === "PortFailed" &&
+                      Schema.is(WorkerAdmissionFailure)(response.failure)
+                      ? response.failure
+                      : LedgerError.make({
+                          operation: "admit worker",
+                          message: "Unexpected worker admission response",
+                          cause: response,
+                        }),
+                  );
+                }),
+              ),
+      });
+    }),
+  );
+
 /** Route the existing owner-scoped list; delivery mutations remain source local. */
 export const routedMessageDeliveryStoreLayer = (options: RoutedPortOptions) =>
   Layer.effect(
@@ -1103,9 +1154,9 @@ export const routedMessageDeliveryStoreLayer = (options: RoutedPortOptions) =>
 // ---------------------------------------------------------------------------
 
 /** Fold one port operation's typed failures into the uniform response envelope. */
-const capture = <Failure extends PortFailure>(
-  effect: Effect.Effect<PortResult, Failure>,
-): Effect.Effect<PortResponse> =>
+const capture = <Failure extends PortFailure, R>(
+  effect: Effect.Effect<PortResult, Failure, R>,
+): Effect.Effect<PortResponse, never, R> =>
   effect.pipe(
     Effect.map((result): PortResponse => PortSucceeded.make({ result })),
     Effect.catch((failure) => Effect.succeed<PortResponse>(PortFailed.make({ failure }))),
@@ -1121,8 +1172,18 @@ const capture = <Failure extends PortFailure>(
  */
 export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(function* (
   request: PortRequest,
-): Effect.fn.Return<PortResponse, never, SubmissionLedger | ThreadStore | MessageDeliveryStore> {
+): Effect.fn.Return<
+  PortResponse,
+  never,
+  SubmissionLedger | ThreadStore | MessageDeliveryStore | WakeScheduler | DurableRuntimeFailpoint
+> {
   switch (request._tag) {
+    case "WorkerAdmit":
+      return yield* capture(
+        admitWorker(request.request).pipe(
+          Effect.map((result) => WorkerAdmitResult.make({ result })),
+        ),
+      );
     case "MessageDeliveryList": {
       const store = yield* MessageDeliveryStore;
 
@@ -1306,7 +1367,11 @@ const encodedProtocolFailure = (message: string): unknown => ({
 export const handleEncodedPortRequest = Effect.fn("DoPortRouting.handleEncodedPortRequest")(
   function* (
     encoded: unknown,
-  ): Effect.fn.Return<unknown, never, SubmissionLedger | ThreadStore | MessageDeliveryStore> {
+  ): Effect.fn.Return<
+    unknown,
+    never,
+    SubmissionLedger | ThreadStore | MessageDeliveryStore | WakeScheduler | DurableRuntimeFailpoint
+  > {
     const response = yield* decodePortRequest(encoded).pipe(
       Effect.flatMap(executePortRequest),
       Effect.catch((error) =>
