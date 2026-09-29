@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.148
+
+### Patch Changes
+
+- [#686](https://github.com/danieljvdm/effect-agent/pull/686) [`f2726bb`](https://github.com/danieljvdm/effect-agent/commit/f2726bb4f48848a7cbaa0878a9911f68220b8255) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Drain ready follow-ups together at durable turn boundaries, including after completion tools. Keep inputs arriving during a completion tool in the active run for the next model turn.
+
 ## 0.1.0-beta.147
 
 ### Patch Changes
