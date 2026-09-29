@@ -57,7 +57,7 @@ export const reviewCostLimitMicrousd = (
 
 const MAX_INPUT_TOKENS = 128_000;
 const MAX_OUTPUT_TOKENS = 32_000;
-const PRICING_VERSION = "openai-2026-09-22";
+const PRICING_VERSION = "openai-2026-09-29";
 
 interface Pricing {
   readonly label: string;
@@ -78,6 +78,14 @@ const modelPricing: Readonly<Record<string, Pricing>> = {
     read: 100,
     write: 1_250,
     output: 5_000,
+  },
+  "gpt-6.1-sol": {
+    label: "GPT-6.1 Sol",
+    url: "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+    input: 200,
+    read: 10,
+    write: 250,
+    output: 1_000,
   },
   "gpt-6-sol": {
     label: "GPT-6 Sol",
