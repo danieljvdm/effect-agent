@@ -1135,41 +1135,6 @@ const observePage = (
   return observed > maximum ? { _tag: "OverLimit", observed } : { _tag: "Text", text };
 };
 
-// Actions require one CSS match. Resolve that node directly in Puppeteer's
-// isolated realm instead of materializing and transferring an entire handle list.
-const resolveActionTarget = async (page: Page, selector: string) => {
-  const frame = page.mainFrame();
-
-  const target: JSHandle<unknown> = await frame
-    .isolatedRealm()
-    .evaluateHandle((requestedSelector) => {
-      const pageDocument = Reflect.get(globalThis, "document");
-
-      const matches = Reflect.apply(Reflect.get(pageDocument, "querySelectorAll"), pageDocument, [
-        requestedSelector,
-      ]);
-
-      if (typeof matches !== "object" || matches === null) throw new Error("Invalid query result");
-      const count = Reflect.get(matches, "length");
-
-      return count === 1 ? Reflect.get(matches, 0) : Math.min(10_000, count);
-    }, selector);
-
-  try {
-    if (!(target instanceof ElementHandle)) {
-      return {
-        matchCount: Schema.decodeUnknownSync(Schema.Natural)(await target.jsonValue()),
-        element: undefined,
-      };
-    }
-
-    // Guarded input observes identity in the main realm, as Puppeteer's $$ does.
-    return { matchCount: 1, element: await frame.mainRealm().adoptHandle(target) };
-  } finally {
-    await disposeActionHandles([target]);
-  }
-};
-
 const runObservedPageAction = async (
   page: Page,
   selector: string,
@@ -1188,21 +1153,47 @@ const runObservedPageAction = async (
   if (before.matchCount !== 1 || before.invalidSelector === true) {
     throw new BrowserRunActionUndispatched(before.matchCount);
   }
-  const target = await resolveActionTarget(page, selector);
-  const matches = target.element === undefined ? [] : [target.element];
+  // Resolve one CSS match inside this action's native adapter boundary. The
+  // isolated lookup avoids materializing and transferring an entire handle list.
+  const frame = page.mainFrame();
 
-  if (matches.length !== 1 || matches[0] === undefined) {
-    await disposeActionHandles(matches);
-    throw new BrowserRunActionUndispatched(target.matchCount);
+  const target: JSHandle<unknown> = await frame
+    .isolatedRealm()
+    .evaluateHandle((requestedSelector) => {
+      const pageDocument = Reflect.get(globalThis, "document");
+
+      const matches = Reflect.apply(Reflect.get(pageDocument, "querySelectorAll"), pageDocument, [
+        requestedSelector,
+      ]);
+
+      if (typeof matches !== "object" || matches === null) throw new Error("Invalid query result");
+      const count = Reflect.get(matches, "length");
+
+      return count === 1 ? Reflect.get(matches, 0) : Math.min(10_000, count);
+    }, selector);
+
+  let element: NonNullable<Awaited<ReturnType<Page["$"]>>>;
+
+  try {
+    if (!(target instanceof ElementHandle)) {
+      throw new BrowserRunActionUndispatched(
+        Schema.decodeUnknownSync(Schema.Natural)(await target.jsonValue()),
+      );
+    }
+
+    // Guarded input observes identity in the main realm, as Puppeteer's $$ does.
+    element = await frame.mainRealm().adoptHandle(target);
+  } finally {
+    await disposeActionHandles([target]);
   }
   if (signal.aborted) {
-    await disposeActionHandles(matches);
+    await disposeActionHandles([element]);
     throw new BrowserRunActionUndispatched(1);
   }
 
   let tracker: ReturnType<typeof makeActionRequestTracker> | undefined;
   let disposing: Promise<void> | undefined;
-  const dispose = () => (disposing ??= disposeActionHandles(matches));
+  const dispose = () => (disposing ??= disposeActionHandles([element]));
 
   const onAbort = () => {
     void dispose();
@@ -1210,7 +1201,7 @@ const runObservedPageAction = async (
 
   signal.addEventListener("abort", onAbort, { once: true });
   try {
-    if (validate !== undefined && !(await validate(matches[0])))
+    if (validate !== undefined && !(await validate(element)))
       throw new BrowserRunActionUndispatched(1);
     tracker = makeActionRequestTracker(page, signal);
     // No await between the final cancellation fence and SDK dispatch. Once
@@ -1219,7 +1210,7 @@ const runObservedPageAction = async (
     onDispatch();
     const inputStarted = performance.now();
 
-    await action(matches[0]);
+    await action(element);
     const inputFinished = performance.now();
 
     onComplete?.();
