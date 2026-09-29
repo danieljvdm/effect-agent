@@ -1,6 +1,13 @@
 import { Schema } from "effect";
 
 export const LaneId = Schema.NonEmptyString.check(Schema.isMaxLength(256));
+
+export const HostLaneId = LaneId.check(
+  Schema.isPattern(/^(?!effect-agent:)/, {
+    message: "The effect-agent: namespace is reserved for framework maintenance lanes",
+  }),
+);
+
 export const Deadline = Schema.NullOr(Schema.Finite);
 
 /** Scheduling metadata only. Domain outboxes, claims and receipts remain authoritative. */
@@ -36,8 +43,8 @@ export const make = (sql: SqlStorage) => {
     );
 
   const dirty = (id: string, dueAt: number) => {
-    Schema.decodeUnknownSync(LaneId)(id);
-    Schema.decodeUnknownSync(Schema.Finite)(dueAt);
+    Schema.decodeSync(LaneId)(id);
+    Schema.decodeSync(Schema.Finite)(dueAt);
     sql.exec(
       `INSERT INTO platform_cloudflare_due_queue VALUES (?, 1, ?, 0)
      ON CONFLICT(id) DO UPDATE SET revision = revision + 1,
@@ -54,7 +61,7 @@ export const make = (sql: SqlStorage) => {
   };
 
   const complete = (lane: DueLane, dueAt: number | null, failed = false) => {
-    Schema.decodeUnknownSync(Deadline)(dueAt);
+    Schema.decodeSync(Deadline)(dueAt);
     sql.exec(
       "UPDATE platform_cloudflare_due_queue SET dueAt = ?, stalls = ?, revision = revision + 1 WHERE id = ? AND revision = ?",
       dueAt,
@@ -66,7 +73,7 @@ export const make = (sql: SqlStorage) => {
 
   /** Native checkpoints already fence their own dirty/processed generation. */
   const checkpointNative = (dueAt: number | null) => {
-    Schema.decodeUnknownSync(Deadline)(dueAt);
+    Schema.decodeSync(Deadline)(dueAt);
     sql.exec("UPDATE platform_cloudflare_due_queue SET dueAt = ? WHERE id = ?", dueAt, Native);
   };
 

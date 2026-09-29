@@ -331,6 +331,13 @@ export const ThreadHostMaintenance = Context.Reference<{
   defaultValue: () => ({ lanes: [] }),
 });
 
+/** @internal Framework handlers are separate from host registrations and their namespace. */
+export const ThreadNativeMaintenance = Context.Reference<{
+  readonly lanes: ReadonlyArray<ThreadHostMaintenanceLane>;
+}>("@effect-agent/platform-cloudflare/ThreadNativeMaintenance", {
+  defaultValue: () => ({ lanes: [] }),
+});
+
 /** @internal Required host publication only; native lifecycle facts use a maintenance lane. */
 export const publishCommitted = Effect.gen(function* () {
   const publication = yield* ThreadPublication;
@@ -884,6 +891,12 @@ export class ThreadMaintenance extends Context.Service<
       const projection = yield* ThreadProjectionMaintenance;
       const messages = yield* ThreadMessageDelivery;
       const host = yield* ThreadHostMaintenance;
+      const framework = yield* ThreadNativeMaintenance;
+
+      for (const lane of host.lanes)
+        yield* Schema.decodeEffect(DueQueue.HostLaneId)(lane.id).pipe(
+          Effect.mapError(alarmFailure("maintenance lane ID")),
+        );
 
       const recoveryEvents = Option.getOrElse(
         yield* Effect.serviceOption(ThreadRecoveryEvents),
@@ -908,7 +921,7 @@ export class ThreadMaintenance extends Context.Service<
           DueQueue.Publication,
           DueQueue.Projection,
           DueQueue.Messages,
-          ...host.lanes.filter((lane) => lane.id === DueQueue.Lifecycle).map((lane) => lane.id),
+          ...framework.lanes.map((lane) => lane.id),
         ])
           dueQueue.register(id);
       });
@@ -919,25 +932,32 @@ export class ThreadMaintenance extends Context.Service<
       ) =>
         work.pipe(
           Effect.onExit((exit) =>
-            mutations.withSnapshot(() =>
-              Effect.gen(function* () {
-                const active = (yield* mutations.activeLanes).has(row.id);
-                const now = yield* Clock.currentTimeMillis;
-                const failed = Exit.isFailure(exit);
+            mutations
+              .withSnapshot(() =>
+                Effect.gen(function* () {
+                  const active = (yield* mutations.activeLanes).has(row.id);
+                  const now = yield* Clock.currentTimeMillis;
+                  const failed = Exit.isFailure(exit);
 
-                const next = failed
-                  ? now + backoffDelay(row.stalls, yield* Random.next)
-                  : Option.getOrNull(exit.value);
+                  const next = failed
+                    ? now + backoffDelay(row.stalls, yield* Random.next)
+                    : Option.getOrNull(exit.value);
 
-                yield* runTransaction("checkpoint maintenance lane", () =>
-                  ctx.storage.transaction(async () => {
-                    // A producer can be between enrollment and its source commit. Never acknowledge
-                    // that observation; its completion will notify the event or retain the alarm.
-                    if (!active) dueQueue.complete(row, next, failed);
-                  }),
-                );
-              }),
-            ),
+                  yield* runTransaction("checkpoint maintenance lane", () =>
+                    ctx.storage.transaction(async () => {
+                      // A producer can be between enrollment and its source commit. Never acknowledge
+                      // that observation; its completion will notify the event or retain the alarm.
+                      if (!active) dueQueue.complete(row, next, failed);
+                    }),
+                  );
+                }),
+              )
+              .pipe(
+                // Waiting for a producer or the SQL connection belongs to the wave budget.
+                // An interrupted checkpoint leaves its revision due for event rearming;
+                // the short storage transaction itself remains atomic.
+                Effect.interruptible,
+              ),
           ),
         );
 
@@ -1874,7 +1894,7 @@ export class ThreadMaintenance extends Context.Service<
 
         // Each lane has at most one finite wave. A completion is retained until the single
         // scheduling loop observes it; a busy sibling cannot consume another lane's hint.
-        const lanes = [recoveryEventLane, ...host.lanes].map((lane) => ({
+        const lanes = [recoveryEventLane, ...framework.lanes, ...host.lanes].map((lane) => ({
           ...lane,
           exhausted: false,
           fiber: undefined as Fiber.Fiber<Option.Option<number>, DurableAlarmError> | undefined,
@@ -2048,7 +2068,7 @@ export class ThreadMaintenance extends Context.Service<
           ]);
 
           for (const lane of lanes) {
-            yield* Schema.decodeUnknownEffect(DueQueue.LaneId)(lane.id).pipe(
+            yield* Schema.decodeEffect(DueQueue.LaneId)(lane.id).pipe(
               Effect.mapError(alarmFailure("maintenance lane ID")),
             );
             if (ids.has(lane.id))
@@ -2077,26 +2097,24 @@ export class ThreadMaintenance extends Context.Service<
                 yield* Schema.decodeEffect(AuxiliaryDispatchMillis)(
                   lane.dispatchTimeoutMillis,
                 ).pipe(Effect.mapError(alarmFailure("host dispatch allowance")));
-                if ((yield* Clock.currentTimeMillis) + lane.dispatchTimeoutMillis > dispatchEnd) {
+                const selectedAt = yield* Clock.currentTimeMillis;
+
+                if (selectedAt >= until || selectedAt + lane.dispatchTimeoutMillis > dispatchEnd) {
                   lane.exhausted = true;
 
                   return Option.some(dueAt);
                 }
 
-                return yield* runQueued(
-                  row,
-                  lane.run.pipe(
-                    Effect.scoped,
-                    Effect.timeoutOrElse({
-                      duration: lane.dispatchTimeoutMillis,
-                      orElse: () =>
-                        DurableAlarmError.make({
-                          operation: "host dispatch allowance",
-                          message:
-                            "The admitted host wave exceeded its allowance; durable work remains pending",
-                        }),
-                    }),
-                  ),
+                return yield* runQueued(row, lane.run.pipe(Effect.scoped)).pipe(
+                  Effect.timeoutOrElse({
+                    duration: lane.dispatchTimeoutMillis,
+                    orElse: () =>
+                      DurableAlarmError.make({
+                        operation: "host dispatch allowance",
+                        message:
+                          "The admitted host wave exceeded its allowance; durable work remains pending",
+                      }),
+                  }),
                 );
               }),
             );

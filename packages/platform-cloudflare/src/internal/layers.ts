@@ -92,7 +92,7 @@ import {
   type ThreadRecoveryEvents,
   DurableAlarmError,
   ThreadMaintenance,
-  ThreadHostMaintenance,
+  ThreadNativeMaintenance,
   ThreadMutationGate,
   ThreadPublication,
   publishCommitted,
@@ -820,9 +820,9 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
           ? runtimeStack
           : Layer.merge(
               runtimeStack,
-              Layer.effect(ThreadHostMaintenance)(
+              Layer.effect(ThreadNativeMaintenance)(
                 Effect.gen(function* () {
-                  const previous = yield* ThreadHostMaintenance;
+                  const previous = yield* ThreadNativeMaintenance;
                   const store = yield* ThreadStore;
                   const storage = store.lifecyclePublications;
 
