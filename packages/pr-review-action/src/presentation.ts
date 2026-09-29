@@ -12,6 +12,9 @@ import { Schema } from "effect";
 import { type GeneratedContentOmission } from "./generated-content.ts";
 import { reviewMarker, reviewPauseMarker, type ReviewHistoryItem } from "./selection.ts";
 
+/** Shared with GitHub's publication schemas; includes the terminal attempt marker. */
+export const MAX_REVIEW_BODY_CHARS = 100_000;
+
 const severityAppearance: Record<
   ReviewSeverity,
   { readonly icon: string; readonly label: string }
@@ -29,7 +32,10 @@ const formatNumber = (value: number): string => String(value).replace(/\B(?=(\d{
 const inlineText = (text: string): string => text.replace(/[\\`*_{}[\]()<>@]/g, "\\$&");
 
 /** Titles are display hints from our published finding format, never resolution evidence. */
-const renderEarlierReviews = (prior: ReviewPresentationInput["priorReviews"]): string => {
+const renderEarlierReviews = (
+  prior: ReviewPresentationInput["priorReviews"],
+  maxChars = MAX_REVIEW_BODY_CHARS,
+): string => {
   if (prior === undefined || prior.reviews.length === 0) return "";
 
   const entries = prior.reviews.slice(0, 8).map((review) => {
@@ -55,15 +61,21 @@ const renderEarlierReviews = (prior: ReviewPresentationInput["priorReviews"]): s
     return `- [Review #${review.id}](${prior.pullRequestUrl}#pullrequestreview-${review.id})${metadata.length === 0 ? "" : ` · ${inlineText(metadata)}`} — ${summary}`;
   });
 
-  return [
-    "### Earlier unresolved reviews",
-    ...entries,
-    ...(prior.reviews.length > entries.length
-      ? [
-          `${prior.reviews.length - entries.length} more unresolved reviews. See the pull request's review history.`,
-        ]
-      : []),
-  ].join("\n\n");
+  for (let count = entries.length; count >= 0; count -= 1) {
+    const body = [
+      "### Earlier unresolved reviews",
+      ...entries.slice(0, count),
+      ...(prior.reviews.length > count
+        ? [
+            `${prior.reviews.length - count} more unresolved reviews. See the pull request's review history.`,
+          ]
+        : []),
+    ].join("\n\n");
+
+    if (body.length <= maxChars) return body;
+  }
+
+  return "";
 };
 
 const findingLabel = (finding: ReviewFinding): string => {
@@ -262,9 +274,8 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
   const automaticPause = renderAutomaticPause(input.automaticReviewsRemaining);
 
   if (automaticPause !== undefined) parts.push(automaticPause);
-  const earlierReviews = renderEarlierReviews(input.priorReviews);
+  const earlierReviewsIndex = parts.length;
 
-  if (earlierReviews.length > 0) parts.push(earlierReviews);
   if (severityCounts(input.report).blocking > 0 || input.unresolvedChangeRequests > 0) {
     parts.push(renderDismissalHelp());
   }
@@ -382,6 +393,15 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
   const footer = `<sub>${modelLabel}${usage}${estimatedCost}${pendingCost}${costLimit} · inspected at <code>${input.headRevision.slice(0, 7)}</code>${automaticReviewStatus}</sub>`;
 
   parts.push(footer);
+
+  // Fit optional history around the complete report, its separators, and the
+  // longest attempt marker. Never truncate findings or their surrounding fences.
+  const earlierReviews = renderEarlierReviews(
+    input.priorReviews,
+    MAX_REVIEW_BODY_CHARS - parts.join("\n\n").length - reviewMarker(false, false).length - 4,
+  );
+
+  if (earlierReviews.length > 0) parts.splice(earlierReviewsIndex, 0, earlierReviews);
 
   return parts.join("\n\n");
 };

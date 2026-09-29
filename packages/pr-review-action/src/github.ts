@@ -4,6 +4,7 @@ import type { Redacted } from "effect";
 import { Clock, Context, DateTime, Effect, Encoding, Option, Result, Schema } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
+import { MAX_REVIEW_BODY_CHARS } from "./presentation.ts";
 import { unresolvedChangeRequests, type ReviewHistoryItem } from "./selection.ts";
 
 const ShortString = Schema.String.check(Schema.isMaxLength(2_048));
@@ -206,7 +207,7 @@ const ReactionWire = Schema.Struct({
 const PublishReviewWire = Schema.Struct({
   commit_id: Revision,
   event: Schema.Literals(["COMMENT", "REQUEST_CHANGES"]),
-  body: Schema.String.check(Schema.isMaxLength(100_000)),
+  body: Schema.String.check(Schema.isMaxLength(MAX_REVIEW_BODY_CHARS)),
   comments: Schema.Array(
     Schema.Struct({
       path: Schema.NonEmptyString.check(Schema.isMaxLength(512)),
@@ -220,7 +221,7 @@ const PublishReviewWire = Schema.Struct({
 const PublishAttemptWire = Schema.Struct({
   commit_id: Revision,
   event: Schema.Literal("COMMENT"),
-  body: Schema.String.check(Schema.isMaxLength(100_000)),
+  body: Schema.String.check(Schema.isMaxLength(MAX_REVIEW_BODY_CHARS)),
   comments: Schema.Tuple([]),
 });
 

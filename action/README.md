@@ -178,7 +178,8 @@ other bots' reviews are never dismissed.
 
 Unresolved-review notices link to the original reviews with their dates, inspected commits,
 and available blocker titles, separately from new findings. They show up to eight reviews and
-three blocker titles per review; open the linked review for complete feedback.
+three blocker titles per review, subject to space remaining after the current findings; open
+the linked review or the pull request's review history for complete feedback.
 
 Incremental passes revisit unresolved reviews, including body-only findings and findings on paths
 outside the latest delta. A fix retained because its pass found a new blocker can be verified again
