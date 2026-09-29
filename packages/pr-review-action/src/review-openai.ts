@@ -38,13 +38,14 @@ const ReviewCostLimitMicrousd = Schema.Int.check(
 
 /** Configured base plus $1 per 100,000 patch/feedback characters, up to the configured cap. */
 export const reviewCostLimitMicrousd = (
-  request: Pick<ReviewRequest, "changes" | "followUps">,
+  request: Pick<ReviewRequest, "changes" | "followUps" | "discussion">,
   maxCostUsd: number,
   baseCostUsd = 1,
 ): number => {
   const characters =
     request.changes.reduce((total, change) => total + change.patch.length, 0) +
-    (request.followUps ?? []).reduce((total, followUp) => total + followUp.description.length, 0);
+    (request.followUps ?? []).reduce((total, followUp) => total + followUp.description.length, 0) +
+    (request.discussion === undefined ? 0 : JSON.stringify(request.discussion).length);
 
   return characters === 0
     ? 0

@@ -1,0 +1,606 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "version": 1,
+      "id": "synthetic-dismissal-context-merge",
+      "kind": "clean-control",
+      "provenance": "Fictional, source-backed review-loop regression requested on 2026-09-29. Providing the endpoint context must preserve the caller's RequestId service. This is a supplied-evidence control, not a replay of a private PR or proof of production accuracy.",
+      "inputDigest": "69c4e7153fe28367c8b9c9a6f96a8b7e5a886ba8ca5fc160093da45f8fb04d2c",
+      "request": {
+        "title": "Reuse a captured endpoint context",
+        "description": "Providing the endpoint context must preserve the caller's RequestId service.",
+        "baseRevision": "fixture-context-merge-before",
+        "headRevision": "fixture-context-merge-after",
+        "scope": "full",
+        "changes": [
+          {
+            "path": "src/send.ts",
+            "patch": "--- a/src/send.ts\n+++ b/src/send.ts\n@@ -9,4 +9,4 @@\n   return `${endpoint}/${requestId}`;\n });\n \n-export const sendWithEndpoint = send.pipe(Effect.provideService(Endpoint, \"https://fixture.test\"));\n+export const sendWithEndpoint = send.pipe(Effect.provide(Context.make(Endpoint, \"https://fixture.test\")));\n"
+          }
+        ],
+        "unreviewedPaths": [],
+        "followUps": [
+          {
+            "id": "context-merge-review",
+            "description": "[P1] Effect.provide(context) replaces the caller context. sendWithEndpoint can no longer obtain RequestId, so every request fails with a missing service."
+          }
+        ],
+        "discussion": {
+          "status": "complete",
+          "entries": [
+            {
+              "kind": "comment",
+              "author": "fixture-author",
+              "url": "https://github.test/fixtures/review/pull/1#issuecomment-1",
+              "createdAt": "2026-09-29T12:00:00Z",
+              "body": "The Context overload merges in the pinned release. docs/dependency-contracts.md identifies its implementation; src/caller.ts supplies RequestId outside sendWithEndpoint. The provided context contains only Endpoint."
+            }
+          ]
+        }
+      },
+      "repository": {
+        "version": 1,
+        "files": [
+          {
+            "path": "docs/dependency-contracts.md",
+            "revision": "base",
+            "content": "# Pinned Effect contracts\n\nThe fixture pins effect 4.0.0-rc.117. In that release, the Context overload of\nEffect.provide delegates to provideContext. Its implementation updates the\ncurrent context using Context.merge(context); it does not replace all services.\nProvided entries win for duplicate keys. The caller's other entries remain.\nSource: effect/src/internal/layer.ts, provide; effect/src/internal/effect.ts, provideContext.\n"
+          },
+          {
+            "path": "package.json",
+            "revision": "base",
+            "content": "{\"name\":\"review-fixture\",\"private\":true,\"type\":\"module\",\"dependencies\":{\"effect\":\"4.0.0-rc.117\"}}\n"
+          },
+          {
+            "path": "src/caller.ts",
+            "revision": "base",
+            "content": "import { Effect } from \"effect\";\nimport { RequestId, sendWithEndpoint } from \"./send.ts\";\nexport const request = sendWithEndpoint.pipe(Effect.provideService(RequestId, \"request-1\"));\n"
+          },
+          {
+            "path": "src/send.ts",
+            "revision": "base",
+            "content": "import { Context, Effect } from \"effect\";\n\nexport class RequestId extends Context.Service<RequestId, string>()(\"fixture/RequestId\") {}\nexport class Endpoint extends Context.Service<Endpoint, string>()(\"fixture/Endpoint\") {}\n\nconst send = Effect.gen(function* () {\n  const endpoint = yield* Endpoint;\n  const requestId = yield* RequestId;\n  return `${endpoint}/${requestId}`;\n});\n\nexport const sendWithEndpoint = send.pipe(Effect.provideService(Endpoint, \"https://fixture.test\"));\n"
+          },
+          {
+            "path": "docs/dependency-contracts.md",
+            "revision": "head",
+            "content": "# Pinned Effect contracts\n\nThe fixture pins effect 4.0.0-rc.117. In that release, the Context overload of\nEffect.provide delegates to provideContext. Its implementation updates the\ncurrent context using Context.merge(context); it does not replace all services.\nProvided entries win for duplicate keys. The caller's other entries remain.\nSource: effect/src/internal/layer.ts, provide; effect/src/internal/effect.ts, provideContext.\n"
+          },
+          {
+            "path": "package.json",
+            "revision": "head",
+            "content": "{\"name\":\"review-fixture\",\"private\":true,\"type\":\"module\",\"dependencies\":{\"effect\":\"4.0.0-rc.117\"}}\n"
+          },
+          {
+            "path": "src/caller.ts",
+            "revision": "head",
+            "content": "import { Effect } from \"effect\";\nimport { RequestId, sendWithEndpoint } from \"./send.ts\";\nexport const request = sendWithEndpoint.pipe(Effect.provideService(RequestId, \"request-1\"));\n"
+          },
+          {
+            "path": "src/send.ts",
+            "revision": "head",
+            "content": "import { Context, Effect } from \"effect\";\n\nexport class RequestId extends Context.Service<RequestId, string>()(\"fixture/RequestId\") {}\nexport class Endpoint extends Context.Service<Endpoint, string>()(\"fixture/Endpoint\") {}\n\nconst send = Effect.gen(function* () {\n  const endpoint = yield* Endpoint;\n  const requestId = yield* RequestId;\n  return `${endpoint}/${requestId}`;\n});\n\nexport const sendWithEndpoint = send.pipe(Effect.provide(Context.make(Endpoint, \"https://fixture.test\")));\n"
+          }
+        ],
+        "digest": "6c4a9a97b41ba74de91c0650f31e2b4cc274ae905ac402ce70bda7b4a5096d8d"
+      },
+      "expectedDefects": [],
+      "expectedResolvedFollowUpIds": ["context-merge-review"],
+      "expectedUnresolvedFollowUpIds": []
+    },
+    {
+      "version": 1,
+      "id": "synthetic-dismissal-array-element",
+      "kind": "clean-control",
+      "provenance": "Fictional, source-backed review-loop regression requested on 2026-09-29. The array schema's value member is the element schema in the pinned Effect version. This is a supplied-evidence control, not a replay of a private PR or proof of production accuracy.",
+      "inputDigest": "a291a62f9312d5c791e5bb75c20189311c9c0cfeb3b00e70c2b58304b2defff6",
+      "request": {
+        "title": "Derive the row encoder from the batch schema",
+        "description": "The array schema's value member is the element schema in the pinned Effect version.",
+        "baseRevision": "fixture-array-element-before",
+        "headRevision": "fixture-array-element-after",
+        "scope": "full",
+        "changes": [
+          {
+            "path": "src/rows.ts",
+            "patch": "--- a/src/rows.ts\n+++ b/src/rows.ts\n@@ -2,4 +2,4 @@\n \n const Row = Schema.Struct({ id: Schema.String, attempt: Schema.Int });\n export const StoredRows = Schema.Array(Row);\n-export const encodeRow = Schema.encodeSync(Row);\n+export const encodeRow = Schema.encodeSync(StoredRows.value);\n"
+          }
+        ],
+        "unreviewedPaths": [],
+        "followUps": [
+          {
+            "id": "array-element-review",
+            "description": "[P1] StoredRows.value is still an array schema. Passing one row to its encoder throws a parse error, blocking every persistence operation."
+          }
+        ],
+        "discussion": {
+          "status": "complete",
+          "entries": [
+            {
+              "kind": "comment",
+              "author": "fixture-author",
+              "url": "https://github.test/fixtures/review/pull/1#issuecomment-2",
+              "createdAt": "2026-09-29T12:00:00Z",
+              "body": "Schema.Array keeps its element schema in value; see the pinned declaration in docs/dependency-contracts.md and the object passed in src/persist.ts. The array schema is StoredRows, not StoredRows.value."
+            }
+          ]
+        }
+      },
+      "repository": {
+        "version": 1,
+        "files": [
+          {
+            "path": "docs/dependency-contracts.md",
+            "revision": "base",
+            "content": "# Pinned Effect contracts\n\nIn effect 4.0.0-rc.117, Schema.$Array<S> declares readonly value: S.\nSchema.Array(schema) constructs the array schema with the member { value: schema }.\nTherefore value is the supplied element schema. StoredRows itself is the array schema.\nSource: effect/src/Schema.ts, $Array and Array declarations.\n"
+          },
+          {
+            "path": "package.json",
+            "revision": "base",
+            "content": "{\"name\":\"review-fixture\",\"private\":true,\"type\":\"module\",\"dependencies\":{\"effect\":\"4.0.0-rc.117\"}}\n"
+          },
+          {
+            "path": "src/persist.ts",
+            "revision": "base",
+            "content": "import { encodeRow } from \"./rows.ts\";\nexport const persisted = encodeRow({ id: \"row-1\", attempt: 0 });\n"
+          },
+          {
+            "path": "src/rows.ts",
+            "revision": "base",
+            "content": "import { Schema } from \"effect\";\n\nconst Row = Schema.Struct({ id: Schema.String, attempt: Schema.Int });\nexport const StoredRows = Schema.Array(Row);\nexport const encodeRow = Schema.encodeSync(Row);\n"
+          },
+          {
+            "path": "docs/dependency-contracts.md",
+            "revision": "head",
+            "content": "# Pinned Effect contracts\n\nIn effect 4.0.0-rc.117, Schema.$Array<S> declares readonly value: S.\nSchema.Array(schema) constructs the array schema with the member { value: schema }.\nTherefore value is the supplied element schema. StoredRows itself is the array schema.\nSource: effect/src/Schema.ts, $Array and Array declarations.\n"
+          },
+          {
+            "path": "package.json",
+            "revision": "head",
+            "content": "{\"name\":\"review-fixture\",\"private\":true,\"type\":\"module\",\"dependencies\":{\"effect\":\"4.0.0-rc.117\"}}\n"
+          },
+          {
+            "path": "src/persist.ts",
+            "revision": "head",
+            "content": "import { encodeRow } from \"./rows.ts\";\nexport const persisted = encodeRow({ id: \"row-1\", attempt: 0 });\n"
+          },
+          {
+            "path": "src/rows.ts",
+            "revision": "head",
+            "content": "import { Schema } from \"effect\";\n\nconst Row = Schema.Struct({ id: Schema.String, attempt: Schema.Int });\nexport const StoredRows = Schema.Array(Row);\nexport const encodeRow = Schema.encodeSync(StoredRows.value);\n"
+          }
+        ],
+        "digest": "d5e0aa2f4eb728e00a1a859ed5c2d538c0f1b64b2af4d4881f25a1fe841c95a7"
+      },
+      "expectedDefects": [],
+      "expectedResolvedFollowUpIds": ["array-element-review"],
+      "expectedUnresolvedFollowUpIds": []
+    },
+    {
+      "version": 1,
+      "id": "synthetic-dismissal-lifetime-cap",
+      "kind": "clean-control",
+      "provenance": "Fictional, source-backed review-loop regression requested on 2026-09-29. The production owner admits at most 1,000 inputs over a worker's entire lifetime, including completed inputs. This is a supplied-evidence control, not a replay of a private PR or proof of production accuracy.",
+      "inputDigest": "19cd9a9b6ae2438644229afcff86bca5d5c87bea470e75822f5dd8a8cd0fcf7c",
+      "request": {
+        "title": "Align the RPC input bound with admission",
+        "description": "The production owner admits at most 1,000 inputs over a worker's entire lifetime, including completed inputs.",
+        "baseRevision": "fixture-lifetime-cap-before",
+        "headRevision": "fixture-lifetime-cap-after",
+        "scope": "full",
+        "changes": [
+          {
+            "path": "src/rpc.ts",
+            "patch": "--- a/src/rpc.ts\n+++ b/src/rpc.ts\n@@ -1,3 +1,3 @@\n import { host } from \"./composition.ts\";\n-const rpcLimit = 2_000;\n+const rpcLimit = 1_000;\n export const listInputs = () => host.list().slice(0, rpcLimit);\n"
+          }
+        ],
+        "unreviewedPaths": [],
+        "followUps": [
+          {
+            "id": "lifetime-cap-review",
+            "description": "[P1] Completed inputs accumulate beyond the pending-work bound. A worker with 1,001 accepted inputs now loses the last input from the RPC response."
+          }
+        ],
+        "discussion": {
+          "status": "complete",
+          "entries": [
+            {
+              "kind": "comment",
+              "author": "fixture-author",
+              "url": "https://github.test/fixtures/review/pull/1#issuecomment-3",
+              "createdAt": "2026-09-29T12:00:00Z",
+              "body": "src/composition.ts installs a lifetime limit of 1,000. Host.submit checks the total accepted history, and complete does not remove entries. The claimed 1,001st input is rejected before it reaches this RPC."
+            }
+          ]
+        }
+      },
+      "repository": {
+        "version": 1,
+        "files": [
+          {
+            "path": "src/composition.ts",
+            "revision": "base",
+            "content": "import { Host } from \"./host.ts\";\nexport const host = new Host(1_000);\n"
+          },
+          {
+            "path": "src/host.ts",
+            "revision": "base",
+            "content": "interface Input { readonly id: string; readonly completed: boolean }\nexport class Host {\n  readonly #accepted: Array<Input> = [];\n  constructor(private readonly lifetimeLimit: number) {}\n  submit(id: string): boolean {\n    if (this.#accepted.length >= this.lifetimeLimit) return false;\n    this.#accepted.push({ id, completed: false });\n    return true;\n  }\n  complete(id: string): void {\n    const index = this.#accepted.findIndex((input) => input.id === id);\n    const input = this.#accepted[index];\n    if (input !== undefined) this.#accepted[index] = { ...input, completed: true };\n  }\n  list(): ReadonlyArray<Input> { return this.#accepted.map((input) => ({ ...input })); }\n}\n"
+          },
+          {
+            "path": "src/rpc.ts",
+            "revision": "base",
+            "content": "import { host } from \"./composition.ts\";\nconst rpcLimit = 2_000;\nexport const listInputs = () => host.list().slice(0, rpcLimit);\n"
+          },
+          {
+            "path": "src/composition.ts",
+            "revision": "head",
+            "content": "import { Host } from \"./host.ts\";\nexport const host = new Host(1_000);\n"
+          },
+          {
+            "path": "src/host.ts",
+            "revision": "head",
+            "content": "interface Input { readonly id: string; readonly completed: boolean }\nexport class Host {\n  readonly #accepted: Array<Input> = [];\n  constructor(private readonly lifetimeLimit: number) {}\n  submit(id: string): boolean {\n    if (this.#accepted.length >= this.lifetimeLimit) return false;\n    this.#accepted.push({ id, completed: false });\n    return true;\n  }\n  complete(id: string): void {\n    const index = this.#accepted.findIndex((input) => input.id === id);\n    const input = this.#accepted[index];\n    if (input !== undefined) this.#accepted[index] = { ...input, completed: true };\n  }\n  list(): ReadonlyArray<Input> { return this.#accepted.map((input) => ({ ...input })); }\n}\n"
+          },
+          {
+            "path": "src/rpc.ts",
+            "revision": "head",
+            "content": "import { host } from \"./composition.ts\";\nconst rpcLimit = 1_000;\nexport const listInputs = () => host.list().slice(0, rpcLimit);\n"
+          }
+        ],
+        "digest": "060710f110c2f3eccfa062479e8d84a848c30497d647e78569a7e258bf2bc172"
+      },
+      "expectedDefects": [],
+      "expectedResolvedFollowUpIds": ["lifetime-cap-review"],
+      "expectedUnresolvedFollowUpIds": []
+    },
+    {
+      "version": 1,
+      "id": "synthetic-dismissal-heartbeat-recovery",
+      "kind": "clean-control",
+      "provenance": "Fictional, source-backed review-loop regression requested on 2026-09-29. Notifications are hints; periodic heartbeat and durable replay recover a failed send even when close also fails. This is a supplied-evidence control, not a replay of a private PR or proof of production accuracy.",
+      "inputDigest": "c06717fe3b42277f69840e15959ce7bd3172fcd67e1303a7e93f2ccc857f3461",
+      "request": {
+        "title": "Continue notification fanout after a failed close",
+        "description": "Notifications are hints; periodic heartbeat and durable replay recover a failed send even when close also fails.",
+        "baseRevision": "fixture-heartbeat-recovery-before",
+        "headRevision": "fixture-heartbeat-recovery-after",
+        "scope": "full",
+        "changes": [
+          {
+            "path": "src/socket.ts",
+            "patch": "--- a/src/socket.ts\n+++ b/src/socket.ts\n@@ -6,6 +6,6 @@\n   try {\n     socket.send(event);\n   } catch {\n-    socket.close(1011, \"Notification failed\");\n+    try { socket.close(1011, \"Notification failed\"); } catch { /* Heartbeat reconciles. */ }\n   }\n };\n"
+          }
+        ],
+        "unreviewedPaths": [],
+        "followUps": [
+          {
+            "id": "heartbeat-recovery-review",
+            "description": "[P1] If send and close both throw, the client has no way to notice the lost notification and cannot recover until its entire session expires."
+          }
+        ],
+        "discussion": {
+          "status": "complete",
+          "entries": [
+            {
+              "kind": "comment",
+              "author": "fixture-author",
+              "url": "https://github.test/fixtures/review/pull/1#issuecomment-4",
+              "createdAt": "2026-09-29T12:00:00Z",
+              "body": "src/client.ts handles both missing pongs and cursor mismatch. src/server.ts derives pong positions from the event log before fanout, so a healthy heartbeat sees the missed event; a broken connection hits the ping timeout and reconnects."
+            }
+          ]
+        }
+      },
+      "repository": {
+        "version": 1,
+        "files": [
+          {
+            "path": "src/client.ts",
+            "revision": "base",
+            "content": "export interface Session {\n  readonly cursor: number;\n  /** Rejects if no pong arrives within timeoutMs. */\n  ping(options: { readonly timeoutMs: number }): Promise<{ readonly cursor: number }>;\n  reconnect(): Promise<void>;\n  /** Applies all durable events after the supplied cursor and advances cursor. */\n  replayAfter(cursor: number): Promise<void>;\n}\n/** The session owner runs this every five seconds until disposed. */\nexport const heartbeat = async (session: Session): Promise<void> => {\n  try {\n    const pong = await session.ping({ timeoutMs: 2_500 });\n    if (pong.cursor !== session.cursor) await session.replayAfter(session.cursor);\n  } catch {\n    await session.reconnect();\n    await session.replayAfter(session.cursor);\n  }\n};\n"
+          },
+          {
+            "path": "src/server.ts",
+            "revision": "base",
+            "content": "import { notify, type Socket } from \"./socket.ts\";\nexport class EventLog {\n  readonly #events: Array<string> = [];\n  publish(event: string, sockets: ReadonlyArray<Socket>): void {\n    this.#events.push(event);\n    for (const socket of sockets) notify(socket, event);\n  }\n  pong() { return { cursor: this.#events.length }; }\n  replayAfter(cursor: number) { return this.#events.slice(cursor); }\n}\n"
+          },
+          {
+            "path": "src/socket.ts",
+            "revision": "base",
+            "content": "export interface Socket {\n  send(event: string): void;\n  close(code: number, reason: string): void;\n}\nexport const notify = (socket: Socket, event: string): void => {\n  try {\n    socket.send(event);\n  } catch {\n    socket.close(1011, \"Notification failed\");\n  }\n};\n"
+          },
+          {
+            "path": "src/client.ts",
+            "revision": "head",
+            "content": "export interface Session {\n  readonly cursor: number;\n  /** Rejects if no pong arrives within timeoutMs. */\n  ping(options: { readonly timeoutMs: number }): Promise<{ readonly cursor: number }>;\n  reconnect(): Promise<void>;\n  /** Applies all durable events after the supplied cursor and advances cursor. */\n  replayAfter(cursor: number): Promise<void>;\n}\n/** The session owner runs this every five seconds until disposed. */\nexport const heartbeat = async (session: Session): Promise<void> => {\n  try {\n    const pong = await session.ping({ timeoutMs: 2_500 });\n    if (pong.cursor !== session.cursor) await session.replayAfter(session.cursor);\n  } catch {\n    await session.reconnect();\n    await session.replayAfter(session.cursor);\n  }\n};\n"
+          },
+          {
+            "path": "src/server.ts",
+            "revision": "head",
+            "content": "import { notify, type Socket } from \"./socket.ts\";\nexport class EventLog {\n  readonly #events: Array<string> = [];\n  publish(event: string, sockets: ReadonlyArray<Socket>): void {\n    this.#events.push(event);\n    for (const socket of sockets) notify(socket, event);\n  }\n  pong() { return { cursor: this.#events.length }; }\n  replayAfter(cursor: number) { return this.#events.slice(cursor); }\n}\n"
+          },
+          {
+            "path": "src/socket.ts",
+            "revision": "head",
+            "content": "export interface Socket {\n  send(event: string): void;\n  close(code: number, reason: string): void;\n}\nexport const notify = (socket: Socket, event: string): void => {\n  try {\n    socket.send(event);\n  } catch {\n    try { socket.close(1011, \"Notification failed\"); } catch { /* Heartbeat reconciles. */ }\n  }\n};\n"
+          }
+        ],
+        "digest": "8c6cc0fb1dcbb2838972f7e6ec7523d7fdf0e46dbc35155d56b3b90b807b9622"
+      },
+      "expectedDefects": [],
+      "expectedResolvedFollowUpIds": ["heartbeat-recovery-review"],
+      "expectedUnresolvedFollowUpIds": []
+    },
+    {
+      "version": 1,
+      "id": "synthetic-dismissal-check-suite-head",
+      "kind": "clean-control",
+      "provenance": "Fictional, source-backed review-loop regression requested on 2026-09-29. The check-suite response's head_sha identifies the candidate commit independently of a workflow's synthetic checkout revision. This is a supplied-evidence control, not a replay of a private PR or proof of production accuracy.",
+      "inputDigest": "ba036854321497212fea171dab5ff6a209e418490db81a7f9745743622e991ce",
+      "request": {
+        "title": "Ignore CI suites for unpublished commits",
+        "description": "The check-suite response's head_sha identifies the candidate commit independently of a workflow's synthetic checkout revision.",
+        "baseRevision": "fixture-check-suite-head-before",
+        "headRevision": "fixture-check-suite-head-after",
+        "scope": "full",
+        "changes": [
+          {
+            "path": "src/checks.ts",
+            "patch": "--- a/src/checks.ts\n+++ b/src/checks.ts\n@@ -1,4 +1,4 @@\n export interface CheckSuite { readonly head_sha: string; readonly appId: number; readonly conclusion: \"success\" | \"failure\" | null }\n /** GitHub lists suites newest first; candidates contains the published PR commit IDs. */\n export const selectSuite = (suites: ReadonlyArray<CheckSuite>, candidates: ReadonlySet<string>) =>\n-  suites.find((suite) => suite.appId === 15368);\n+  suites.find((suite) => suite.appId === 15368 && candidates.has(suite.head_sha));\n"
+          }
+        ],
+        "unreviewedPaths": [],
+        "followUps": [
+          {
+            "id": "check-suite-head-review",
+            "description": "[P1] pull_request CI runs check out a synthetic merge commit, so check-suite head_sha must be that merge SHA. Candidate-head filtering discards every real CI suite and leaves the PR waiting forever."
+          }
+        ],
+        "discussion": {
+          "status": "complete",
+          "entries": [
+            {
+              "kind": "comment",
+              "author": "fixture-author",
+              "url": "https://github.test/fixtures/review/pull/1#issuecomment-5",
+              "createdAt": "2026-09-29T12:00:00Z",
+              "body": "The paired API fixtures have candidate head 1111111111111111111111111111111111111111 on both the PR and check suite. The checkout merge SHA is 2222222222222222222222222222222222222222. These are separate fields, not interchangeable contracts."
+            }
+          ]
+        }
+      },
+      "repository": {
+        "version": 1,
+        "files": [
+          {
+            "path": ".github/workflows/ci.yml",
+            "revision": "base",
+            "content": "name: CI\non: [pull_request]\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: echo \"$GITHUB_SHA\"\n"
+          },
+          {
+            "path": "docs/github-contract.md",
+            "revision": "base",
+            "content": "# Check-suite identity\n\nThe paired fixtures represent the same pull-request CI run. Candidate selection uses\npull-request head.sha. GitHub's check-suite response carries head_sha independently\nof the synthetic merge revision checked out by the pull_request workflow.\nSource: https://docs.github.com/en/rest/checks/suites#get-a-check-suite\nCheckout environment: https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request\n"
+          },
+          {
+            "path": "fixtures/check-suite.json",
+            "revision": "base",
+            "content": "{\"head_sha\":\"1111111111111111111111111111111111111111\",\"appId\":15368,\"conclusion\":\"success\"}\n"
+          },
+          {
+            "path": "fixtures/pull-request.json",
+            "revision": "base",
+            "content": "{\"head\":{\"sha\":\"1111111111111111111111111111111111111111\"},\"merge_commit_sha\":\"2222222222222222222222222222222222222222\"}\n"
+          },
+          {
+            "path": "src/checks.ts",
+            "revision": "base",
+            "content": "export interface CheckSuite { readonly head_sha: string; readonly appId: number; readonly conclusion: \"success\" | \"failure\" | null }\n/** GitHub lists suites newest first; candidates contains the published PR commit IDs. */\nexport const selectSuite = (suites: ReadonlyArray<CheckSuite>, candidates: ReadonlySet<string>) =>\n  suites.find((suite) => suite.appId === 15368);\n"
+          },
+          {
+            "path": ".github/workflows/ci.yml",
+            "revision": "head",
+            "content": "name: CI\non: [pull_request]\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: echo \"$GITHUB_SHA\"\n"
+          },
+          {
+            "path": "docs/github-contract.md",
+            "revision": "head",
+            "content": "# Check-suite identity\n\nThe paired fixtures represent the same pull-request CI run. Candidate selection uses\npull-request head.sha. GitHub's check-suite response carries head_sha independently\nof the synthetic merge revision checked out by the pull_request workflow.\nSource: https://docs.github.com/en/rest/checks/suites#get-a-check-suite\nCheckout environment: https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request\n"
+          },
+          {
+            "path": "fixtures/check-suite.json",
+            "revision": "head",
+            "content": "{\"head_sha\":\"1111111111111111111111111111111111111111\",\"appId\":15368,\"conclusion\":\"success\"}\n"
+          },
+          {
+            "path": "fixtures/pull-request.json",
+            "revision": "head",
+            "content": "{\"head\":{\"sha\":\"1111111111111111111111111111111111111111\"},\"merge_commit_sha\":\"2222222222222222222222222222222222222222\"}\n"
+          },
+          {
+            "path": "src/checks.ts",
+            "revision": "head",
+            "content": "export interface CheckSuite { readonly head_sha: string; readonly appId: number; readonly conclusion: \"success\" | \"failure\" | null }\n/** GitHub lists suites newest first; candidates contains the published PR commit IDs. */\nexport const selectSuite = (suites: ReadonlyArray<CheckSuite>, candidates: ReadonlySet<string>) =>\n  suites.find((suite) => suite.appId === 15368 && candidates.has(suite.head_sha));\n"
+          }
+        ],
+        "digest": "9efd1d977ecf14c7c9db2db3b91d579666dd55ed60c563c64f10f6d1c062b6f6"
+      },
+      "expectedDefects": [],
+      "expectedResolvedFollowUpIds": ["check-suite-head-review"],
+      "expectedUnresolvedFollowUpIds": []
+    },
+    {
+      "version": 1,
+      "id": "synthetic-dismissal-unreleased-format",
+      "kind": "clean-control",
+      "provenance": "Fictional, source-backed review-loop regression requested on 2026-09-29. This incremental base is an unmerged draft. The released format has no observation field; the head continues to decode every released record. This is a supplied-evidence control, not a replay of a private PR or proof of production accuracy.",
+      "inputDigest": "b89ab1a2c468147437c3702cdca9b342847e245e3931fb77c8e1724959233524",
+      "request": {
+        "title": "Represent a draft observation as a typed outcome",
+        "description": "This incremental base is an unmerged draft. The released format has no observation field; the head continues to decode every released record.",
+        "baseRevision": "fixture-unreleased-format-before",
+        "headRevision": "fixture-unreleased-format-after",
+        "scope": "incremental",
+        "changes": [
+          {
+            "path": "src/state.ts",
+            "patch": "--- a/src/state.ts\n+++ b/src/state.ts\n@@ -1,6 +1,6 @@\n import { Schema } from \"effect\";\n export const State = Schema.Struct({\n   name: Schema.String,\n-  observation: Schema.optionalKey(Schema.String),\n+  observation: Schema.optionalKey(Schema.Struct({ outcome: Schema.Literals([\"passed\", \"failed\"]) })),\n });\n export const decode = Schema.decodeUnknownSync(State);\n"
+          }
+        ],
+        "unreviewedPaths": [],
+        "followUps": [
+          {
+            "id": "unreleased-format-review",
+            "description": "[P1] baseRevision persisted observation as a string. Replacing it with an object requires a string-to-object migration for all existing installations or loading their state will fail."
+          }
+        ],
+        "discussion": {
+          "status": "complete",
+          "entries": [
+            {
+              "kind": "comment",
+              "author": "fixture-author",
+              "url": "https://github.test/fixtures/review/pull/1#issuecomment-6",
+              "createdAt": "2026-09-29T12:00:00Z",
+              "body": "baseRevision is an earlier review in this still-unmerged PR. AGENTS.md identifies the supported deployed format and explicitly excludes draft databases; compatibility/released-state.ts contains only name, which the new State still accepts."
+            }
+          ]
+        }
+      },
+      "repository": {
+        "version": 1,
+        "files": [
+          {
+            "path": "AGENTS.md",
+            "revision": "base",
+            "content": "# Persistence policy\n\nPreserve deployed data. Formats introduced only within an unmerged PR may be\ncollapsed before merge; do not retain migrations for intermediate draft formats.\nThe observation field in this PR has never shipped. The latest deployed format is\nfrozen in compatibility/released-state.ts; no draft database is a supported upgrade input.\n"
+          },
+          {
+            "path": "compatibility/released-state.ts",
+            "revision": "base",
+            "content": "import { Schema } from \"effect\";\nexport const ReleasedState = Schema.Struct({ name: Schema.String });\n"
+          },
+          {
+            "path": "package.json",
+            "revision": "base",
+            "content": "{\"name\":\"review-fixture\",\"private\":true,\"type\":\"module\",\"dependencies\":{\"effect\":\"4.0.0-rc.117\"}}\n"
+          },
+          {
+            "path": "src/state.ts",
+            "revision": "base",
+            "content": "import { Schema } from \"effect\";\nexport const State = Schema.Struct({\n  name: Schema.String,\n  observation: Schema.optionalKey(Schema.String),\n});\nexport const decode = Schema.decodeUnknownSync(State);\n"
+          },
+          {
+            "path": "AGENTS.md",
+            "revision": "head",
+            "content": "# Persistence policy\n\nPreserve deployed data. Formats introduced only within an unmerged PR may be\ncollapsed before merge; do not retain migrations for intermediate draft formats.\nThe observation field in this PR has never shipped. The latest deployed format is\nfrozen in compatibility/released-state.ts; no draft database is a supported upgrade input.\n"
+          },
+          {
+            "path": "compatibility/released-state.ts",
+            "revision": "head",
+            "content": "import { Schema } from \"effect\";\nexport const ReleasedState = Schema.Struct({ name: Schema.String });\n"
+          },
+          {
+            "path": "package.json",
+            "revision": "head",
+            "content": "{\"name\":\"review-fixture\",\"private\":true,\"type\":\"module\",\"dependencies\":{\"effect\":\"4.0.0-rc.117\"}}\n"
+          },
+          {
+            "path": "src/state.ts",
+            "revision": "head",
+            "content": "import { Schema } from \"effect\";\nexport const State = Schema.Struct({\n  name: Schema.String,\n  observation: Schema.optionalKey(Schema.Struct({ outcome: Schema.Literals([\"passed\", \"failed\"]) })),\n});\nexport const decode = Schema.decodeUnknownSync(State);\n"
+          }
+        ],
+        "digest": "0079f01fa0d66bf2389effc997e0fcc5ba295f039779955364549fc6db8e9dd0"
+      },
+      "expectedDefects": [],
+      "expectedResolvedFollowUpIds": ["unreleased-format-review"],
+      "expectedUnresolvedFollowUpIds": []
+    },
+    {
+      "version": 1,
+      "id": "synthetic-dismissal-legacy-outbox",
+      "kind": "known-defects",
+      "provenance": "Fictional, source-backed review-loop regression requested on 2026-09-29. Every undelivered legacy row must remain discoverable until its recipient has been enrolled in the new scheduler. This is a supplied-evidence control, not a replay of a private PR or proof of production accuracy.",
+      "inputDigest": "607164c4c27c5e7f4ee906f7ecbaf1aece424c9879f68b77f3adbfbfd458c314",
+      "request": {
+        "title": "Enroll outbox recipients once",
+        "description": "Every undelivered legacy row must remain discoverable until its recipient has been enrolled in the new scheduler.",
+        "baseRevision": "fixture-legacy-outbox-before",
+        "headRevision": "fixture-legacy-outbox-after",
+        "scope": "full",
+        "changes": [
+          {
+            "path": "src/store.ts",
+            "patch": "--- a/src/store.ts\n+++ b/src/store.ts\n@@ -1,5 +1,6 @@\n export const migrations = [\n   \"CREATE TABLE outbox (id TEXT PRIMARY KEY, recipient TEXT NOT NULL, payload TEXT NOT NULL, delivered_at INTEGER)\",\n+  \"ALTER TABLE outbox ADD COLUMN scheduled_at INTEGER DEFAULT 0\",\n ];\n-export const pendingRecipients = \"SELECT DISTINCT recipient FROM outbox WHERE delivered_at IS NULL\";\n-export const insert = \"INSERT INTO outbox (id, recipient, payload) VALUES (?, ?, ?)\";\n+export const pendingRecipients = \"SELECT DISTINCT recipient FROM outbox WHERE delivered_at IS NULL AND scheduled_at IS NULL\";\n+export const insert = \"INSERT INTO outbox (id, recipient, payload, scheduled_at) VALUES (?, ?, ?, NULL)\";\n"
+          }
+        ],
+        "unreviewedPaths": [],
+        "discussion": {
+          "status": "complete",
+          "entries": [
+            {
+              "kind": "comment",
+              "author": "fixture-author",
+              "url": "https://github.test/fixtures/review/pull/1#issuecomment-7",
+              "createdAt": "2026-09-29T12:00:00Z",
+              "body": "I think DEFAULT 0 is harmless: the old rows must already have been enrolled, so no retained-data repair should be necessary."
+            }
+          ]
+        }
+      },
+      "repository": {
+        "version": 1,
+        "files": [
+          {
+            "path": "docs/upgrade.md",
+            "revision": "base",
+            "content": "# Upgrade contract\n\nThe old release has no recipient scheduler. It may leave undelivered outbox rows.\nSchema migrations run before reconcile on the first startup. The new recipient\nscheduler starts empty and only processes recipients durably enrolled by reconcile.\nDelivered rows need no work; fresh inserts deliberately use scheduled_at NULL.\n"
+          },
+          {
+            "path": "src/scheduler.ts",
+            "revision": "base",
+            "content": "import { pendingRecipients } from \"./store.ts\";\nexport interface Storage {\n  all(sql: string): Promise<ReadonlyArray<{ readonly recipient: string }>>;\n  /** Durably enrolls this recipient, then marks its outstanding rows as scheduled. */\n  enroll(recipient: string): Promise<void>;\n}\n/** On startup and after writes. The scheduler has no other legacy-recipient discovery. */\nexport const reconcile = async (storage: Storage): Promise<void> => {\n  for (const row of await storage.all(pendingRecipients)) await storage.enroll(row.recipient);\n};\n"
+          },
+          {
+            "path": "src/store.ts",
+            "revision": "base",
+            "content": "export const migrations = [\n  \"CREATE TABLE outbox (id TEXT PRIMARY KEY, recipient TEXT NOT NULL, payload TEXT NOT NULL, delivered_at INTEGER)\",\n];\nexport const pendingRecipients = \"SELECT DISTINCT recipient FROM outbox WHERE delivered_at IS NULL\";\nexport const insert = \"INSERT INTO outbox (id, recipient, payload) VALUES (?, ?, ?)\";\n"
+          },
+          {
+            "path": "docs/upgrade.md",
+            "revision": "head",
+            "content": "# Upgrade contract\n\nThe old release has no recipient scheduler. It may leave undelivered outbox rows.\nSchema migrations run before reconcile on the first startup. The new recipient\nscheduler starts empty and only processes recipients durably enrolled by reconcile.\nDelivered rows need no work; fresh inserts deliberately use scheduled_at NULL.\n"
+          },
+          {
+            "path": "src/scheduler.ts",
+            "revision": "head",
+            "content": "import { pendingRecipients } from \"./store.ts\";\nexport interface Storage {\n  all(sql: string): Promise<ReadonlyArray<{ readonly recipient: string }>>;\n  /** Durably enrolls this recipient, then marks its outstanding rows as scheduled. */\n  enroll(recipient: string): Promise<void>;\n}\n/** On startup and after writes. The scheduler has no other legacy-recipient discovery. */\nexport const reconcile = async (storage: Storage): Promise<void> => {\n  for (const row of await storage.all(pendingRecipients)) await storage.enroll(row.recipient);\n};\n"
+          },
+          {
+            "path": "src/store.ts",
+            "revision": "head",
+            "content": "export const migrations = [\n  \"CREATE TABLE outbox (id TEXT PRIMARY KEY, recipient TEXT NOT NULL, payload TEXT NOT NULL, delivered_at INTEGER)\",\n  \"ALTER TABLE outbox ADD COLUMN scheduled_at INTEGER DEFAULT 0\",\n];\nexport const pendingRecipients = \"SELECT DISTINCT recipient FROM outbox WHERE delivered_at IS NULL AND scheduled_at IS NULL\";\nexport const insert = \"INSERT INTO outbox (id, recipient, payload, scheduled_at) VALUES (?, ?, ?, NULL)\";\n"
+          }
+        ],
+        "digest": "ab959485e16db11f3ac949e3a0f063fc4d1c122dd37cdcc142fe0ddba968d5a2"
+      },
+      "expectedDefects": [
+        {
+          "id": "legacy-outbox-unenrolled",
+          "severity": "blocking",
+          "invariant": "Undelivered rows from the old release must remain discoverable until recipient enrollment. DEFAULT 0 excludes them from pendingRecipients before the new scheduler has enrolled them.",
+          "evidence": [
+            {
+              "path": "src/store.ts",
+              "line": 3,
+              "description": "Adding scheduled_at with DEFAULT 0 makes every legacy row fail the scheduled_at IS NULL enrollment query."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

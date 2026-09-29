@@ -163,6 +163,14 @@ request changes and fail the Action after publication; other outcomes remain com
 With `check-name` configured, published review outcomes instead determine the shared PR check
 described above.
 
+The reviewer also receives attributed PR comments, inline discussion, and reasons for this bot's
+dismissed reviews. It verifies that evidence against source and contracts; a comment or dismissal
+does not establish correctness or authorize another dismissal. The Action requests the latest
+20 issue comments, 20 review threads with up to 10 comments each, and 20 dismissal events. It keeps
+the newest 60 entries within 32,000 serialized characters, clipping each body at 4,000 characters.
+Omitted or clipped context is marked partial; a failed or mismatched response is marked unavailable.
+The source tools read committed Git files and do not install dependencies.
+
 Reviews with findings include a **Copy all findings** dropdown. Expand it and use the code
 block's copy button to copy every finding from that review, including paths, inline line numbers
 when available, and the inspected commit. The block reminds coding agents to verify findings
@@ -258,7 +266,7 @@ Review attempts default to a configurable **$2.50 maximum**. Set the Action's `m
 input or local `PR_REVIEW_MAX_COST_USD` environment variable to a value from $0.01 to $100.
 The base defaults to **$1**. Set `base-cost-usd` or local `PR_REVIEW_BASE_COST_USD` to a value
 from $0.01 to $100. The allowance is **base plus $1 per 100,000 characters** in admitted patches
-and selected prior feedback, capped at the maximum even when the base exceeds it.
+and selected prior feedback and discussion, capped at the maximum even when the base exceeds it.
 For example, 10,000 characters allow $1.10, 50,000 allow
 $1.50, and 150,000 or more allow $2.50 with the default configuration. Ignored and excluded
 files do not increase the allowance. Empty or skipped reviews have a zero allowance.

@@ -40,6 +40,79 @@ const priorFollowUp = ReviewFollowUp.make({
   }),
 });
 
+describe("review discussion evidence", () => {
+  // Human-requested regression: preserve rebuttals without presenting omitted evidence
+  // as complete or accepting a response for a different pull request.
+  it.effect.each(["bounded", "wrong-pull", "unavailable"] as const)(
+    "discloses incomplete discussion: %s",
+    (mode) =>
+      Effect.gen(function* () {
+        const url = "https://github.test/reve-ai/example/pull/12";
+        const body = "Evidence before clipping. ".repeat(400);
+
+        const client = HttpClient.make((request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new globalThis.Response(
+                JSON.stringify({
+                  data: {
+                    repository: {
+                      pullRequest: {
+                        number: mode === "wrong-pull" ? 13 : 12,
+                        url,
+                        comments: {
+                          pageInfo: { hasPreviousPage: true },
+                          nodes: [
+                            {
+                              body,
+                              url: `${url}#issuecomment-10`,
+                              author: { login: "author" },
+                              createdAt: "2026-09-29T12:00:00Z",
+                            },
+                          ],
+                        },
+                        reviewThreads: { pageInfo: { hasPreviousPage: false }, nodes: [] },
+                        timelineItems: { pageInfo: { hasPreviousPage: false }, nodes: [] },
+                      },
+                    },
+                  },
+                }),
+                { status: mode === "unavailable" ? 403 : 200 },
+              ),
+            ),
+          ),
+        );
+
+        const github = yield* makeGitHubClient({
+          repository,
+          pullRequest: 12,
+          token: Redacted.make("token"),
+        }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+
+        const discussion = yield* github.loadReviewDiscussion({
+          reviewAuthor: priorReview.authorLogin,
+          history: [],
+          pullRequestUrl: url,
+        });
+
+        if (mode === "bounded") {
+          expect(discussion.status).toBe("partial");
+          expect(discussion.entries).toHaveLength(1);
+          expect(discussion.entries[0]).toMatchObject({
+            author: "author",
+            url: `${url}#issuecomment-10`,
+          });
+          expect(discussion.entries[0]?.body).toContain("Evidence before clipping.");
+          expect(discussion.entries[0]?.body.length).toBeLessThan(body.length);
+          expect(JSON.stringify(discussion).length).toBeLessThanOrEqual(32_000);
+        } else {
+          expect(discussion).toMatchObject({ status: "unavailable", entries: [] });
+        }
+      }),
+  );
+});
+
 describe("addressed review verification", () => {
   it.effect.each(["success", "edited-comment", "untrusted"] as const)(
     "dismisses only an unchanged owned review on the inspected head: %s",

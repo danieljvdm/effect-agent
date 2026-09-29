@@ -1,4 +1,8 @@
-import { ReviewFollowUp } from "@effect-agent/pr-review/review";
+import {
+  MAX_REVIEW_DISCUSSION_CHARS,
+  ReviewDiscussion,
+  ReviewFollowUp,
+} from "@effect-agent/pr-review/review";
 import { createTwoFilesPatch } from "diff";
 import type { Redacted } from "effect";
 import { Clock, Context, DateTime, Effect, Encoding, Option, Result, Schema } from "effect";
@@ -189,6 +193,73 @@ const GeneratedFileWire = Schema.Struct({
           path: GitTreeEntryFields.path,
           oid: Revision,
           isGenerated: Schema.Boolean,
+        }),
+      }),
+    }),
+  }),
+  errors: Schema.optionalKey(Schema.Tuple([])),
+});
+
+const DiscussionActorWire = Schema.NullOr(
+  Schema.Struct({ login: ReviewWire.fields.user.fields.login }),
+);
+
+const DiscussionPageInfo = Schema.Struct({ hasPreviousPage: Schema.Boolean });
+
+const DiscussionCommentWire = Schema.Struct({
+  body: Schema.String.check(Schema.isMaxLength(100_000)),
+  url: Schema.NonEmptyString.check(Schema.isMaxLength(2_048)),
+  author: DiscussionActorWire,
+  createdAt: Schema.NonEmptyString.check(Schema.isMaxLength(128)),
+});
+
+const DiscussionQuery = Schema.Struct({
+  query: Schema.String,
+  variables: Schema.Struct({
+    owner: Schema.NonEmptyString,
+    name: Schema.NonEmptyString,
+    number: Schema.Natural,
+  }),
+});
+
+const DiscussionWire = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.Struct({
+      pullRequest: Schema.Struct({
+        number: Schema.Natural,
+        url: ShortString,
+        comments: Schema.Struct({
+          pageInfo: DiscussionPageInfo,
+          nodes: Schema.Array(DiscussionCommentWire).check(Schema.isMaxLength(20)),
+        }),
+        reviewThreads: Schema.Struct({
+          pageInfo: DiscussionPageInfo,
+          nodes: Schema.Array(
+            Schema.Struct({
+              path: GitTreeEntryFields.path,
+              comments: Schema.Struct({
+                pageInfo: DiscussionPageInfo,
+                nodes: Schema.Array(DiscussionCommentWire).check(Schema.isMaxLength(10)),
+              }),
+            }),
+          ).check(Schema.isMaxLength(20)),
+        }),
+        timelineItems: Schema.Struct({
+          pageInfo: DiscussionPageInfo,
+          nodes: Schema.Array(
+            Schema.Struct({
+              createdAt: DiscussionCommentWire.fields.createdAt,
+              actor: DiscussionActorWire,
+              dismissalMessage: Schema.NullOr(DiscussionCommentWire.fields.body),
+              review: Schema.NullOr(
+                Schema.Struct({
+                  fullDatabaseId: Schema.NullOr(
+                    Schema.NonEmptyString.check(Schema.isMaxLength(128)),
+                  ),
+                }),
+              ),
+            }),
+          ).check(Schema.isMaxLength(20)),
         }),
       }),
     }),
@@ -590,6 +661,141 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     }
 
     return followUps;
+  });
+
+  /** Recent discussion is evidence only; it never joins the authoritative follow-up fingerprint. */
+  const loadReviewDiscussion = Effect.fn("GitHubClient.loadReviewDiscussion")(function* (input: {
+    readonly reviewAuthor: string;
+    readonly history: ReadonlyArray<ReviewHistoryItem>;
+    readonly pullRequestUrl: string;
+  }) {
+    const result = yield* Effect.gen(function* () {
+      const [owner = "", name = ""] = options.repository.split("/");
+
+      const body = yield* Schema.encodeEffect(DiscussionQuery)({
+        query: `query ReviewDiscussion($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              number url
+              comments(last: 20) {
+                pageInfo { hasPreviousPage }
+                nodes { body url createdAt author { login } }
+              }
+              reviewThreads(last: 20) {
+                pageInfo { hasPreviousPage }
+                nodes { path comments(last: 10) {
+                  pageInfo { hasPreviousPage }
+                  nodes { body url createdAt author { login } }
+                } }
+              }
+              timelineItems(last: 20, itemTypes: [REVIEW_DISMISSED_EVENT]) {
+                pageInfo { hasPreviousPage }
+                nodes { ... on ReviewDismissedEvent {
+                  createdAt actor { login } dismissalMessage review { fullDatabaseId }
+                } }
+              }
+            }
+          }
+        }`,
+        variables: { owner, name, number: options.pullRequest },
+      }).pipe(Effect.mapError((cause) => failure("encode discussion query", cause)));
+
+      const query = yield* HttpClientRequest.post(graphqlUrl).pipe(
+        HttpClientRequest.bodyJson(body),
+        Effect.mapError((cause) => failure("encode discussion query", cause)),
+      );
+
+      const wire = yield* readJson("load review discussion", query, DiscussionWire);
+      const pull = wire.data.repository.pullRequest;
+
+      if (pull.number !== options.pullRequest || pull.url !== input.pullRequestUrl) {
+        return yield* GitHubApiFailure.make({
+          operation: "load review discussion",
+          reason: "Discussion response does not match the inspected pull request",
+        });
+      }
+
+      return pull;
+    }).pipe(Effect.timeout("10 seconds"), Effect.result);
+
+    if (Result.isFailure(result)) {
+      yield* Effect.logWarning("Review discussion unavailable", { category: result.failure._tag });
+
+      return ReviewDiscussion.make({ status: "unavailable", entries: [] });
+    }
+
+    const pull = result.success;
+
+    let partial =
+      pull.comments.pageInfo.hasPreviousPage ||
+      pull.reviewThreads.pageInfo.hasPreviousPage ||
+      pull.timelineItems.pageInfo.hasPreviousPage;
+
+    const candidates: Array<ReviewDiscussion["entries"][number]> = [];
+
+    const append = (entry: ReviewDiscussion["entries"][number]) => {
+      if (entry.body.length > 4_000) partial = true;
+      candidates.push({ ...entry, body: entry.body.slice(0, 4_000) });
+    };
+
+    for (const comment of pull.comments.nodes) {
+      append({ ...comment, kind: "comment", author: comment.author?.login ?? "[deleted]" });
+    }
+    for (const thread of pull.reviewThreads.nodes) {
+      if (thread.comments.pageInfo.hasPreviousPage) partial = true;
+      if (thread.path.length > 512 || thread.path.length === 0) {
+        partial = true;
+        continue;
+      }
+      for (const comment of thread.comments.nodes) {
+        append({
+          ...comment,
+          kind: "review-comment",
+          path: thread.path,
+          author: comment.author?.login ?? "[deleted]",
+        });
+      }
+    }
+
+    const dismissed = new Set(
+      unresolvedChangeRequests({
+        reviewAuthor: input.reviewAuthor,
+        history: input.history
+          .filter((review) => review.state === "DISMISSED")
+          .map((review) => ({ ...review, state: "CHANGES_REQUESTED" })),
+      }).map((review) => String(review.id)),
+    );
+
+    for (const event of pull.timelineItems.nodes) {
+      const reviewId = event.review?.fullDatabaseId;
+
+      if (reviewId === undefined || reviewId === null || !dismissed.has(reviewId)) continue;
+      append({
+        kind: "dismissal",
+        reviewId,
+        author: event.actor?.login ?? "[deleted]",
+        url: `${pull.url}#pullrequestreview-${reviewId}`,
+        createdAt: event.createdAt,
+        body: event.dismissalMessage ?? "",
+      });
+    }
+
+    const entries: Array<ReviewDiscussion["entries"][number]> = [];
+
+    for (const entry of candidates.sort((left, right) =>
+      left.createdAt.localeCompare(right.createdAt),
+    )) {
+      entries.push(entry);
+      while (
+        entries.length > 60 ||
+        JSON.stringify({ status: "complete", entries }).length > MAX_REVIEW_DISCUSSION_CHARS
+      ) {
+        entries.shift();
+        partial = true;
+      }
+    }
+
+    return ReviewDiscussion.make({ status: partial ? "partial" : "complete", entries });
   });
 
   /** Recheck ownership, feedback, and head before each dismissal. GitHub has no conditional PUT. */
@@ -1168,6 +1374,7 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     listFiles,
     listReviews,
     loadReviewFollowUps,
+    loadReviewDiscussion,
     dismissReview,
     getMergeBase,
     compareTrees,

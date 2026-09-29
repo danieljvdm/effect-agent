@@ -1200,6 +1200,12 @@ const reviewPullRequest = Effect.fn("reviewPullRequest")(function* (
       history,
     });
 
+    const discussion = yield* github.loadReviewDiscussion({
+      reviewAuthor,
+      history,
+      pullRequestUrl: pull.url,
+    });
+
     const request = ReviewRequest.make({
       title: pull.title.slice(0, 1_000),
       description: pull.description.slice(0, 20_000),
@@ -1209,6 +1215,7 @@ const reviewPullRequest = Effect.fn("reviewPullRequest")(function* (
       changes: surface.changes,
       unreviewedPaths: surface.unreviewedPaths.filter((path) => path.length <= 512).slice(0, 300),
       followUps,
+      discussion,
     });
 
     const costLimitMicrousd = reviewCostLimitMicrousd(request, maxCostUsd, baseCostUsd);

@@ -189,6 +189,12 @@ risk belongs to the host's authorized maintainer. Unknown or duplicate resolutio
 verification. Incomplete, exhausted, pending-path, or excluded-path results return no resolutions.
 History selection, credentials, dismissal authorization, and publication belong to the host.
 
+Hosts can also supply attributed `discussion` evidence, including rebuttals and dismissal reasons.
+The reviewer and optional research children receive it as untrusted input and verify its claims
+against source or contracts. Its `status` discloses partial or unavailable context; it never grants
+dismissal authority or expands discovery scope. Discussion is bounded to 60 entries and 32,000
+serialized characters, with at most 4,000 body characters per entry.
+
 ```ts
 const reviewer = makeReviewer({ model, guidance, costControl });
 const program = reviewer.review(request).pipe(Effect.provideService(ReviewRepository, repository));

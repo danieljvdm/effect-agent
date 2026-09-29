@@ -41,7 +41,7 @@ refused, interrupted, or incomplete delegations make the review incomplete. This
 experiment; its configured concurrency and output limit are recorded in each observation.
 Set `PR_REVIEW_MAX_COST_USD` to configure the maximum, between $0.01 and $100; the default is $2.50.
 The variant reads this setting once. Each nonempty case receives $1 plus $1 per 100,000 admitted
-patch and follow-up characters, capped at that maximum. For example, 10,000 characters receive
+patch, follow-up, and discussion characters, capped at that maximum. For example, 10,000 characters receive
 $1.10, while 150,000 characters receive the default $2.50 maximum. Repeated trials receive fresh
 allowances; the configured maximum is per trial, not a cap on the entire evaluation suite.
 Admission reserves full cache-miss input and the affordable output allowance before every
@@ -110,7 +110,12 @@ a model finds bugs; scripted tests establish host behavior rather than model rec
 
 The `synthetic-*.json` suites contain fictional, redistributable source-backed probes for a
 status-and-follow-up review loop, a bounded active-record page, typed inventory failures, and an
-Effect Result false-positive control. Exact historical replays belong in ignored `data/`; these
+Effect Result false-positive control. `synthetic-dismissal-evidence.json` covers six refuted
+blockers: context merging, array element schemas, lifetime admission limits, heartbeat recovery,
+check-suite identity, and unmerged persisted formats. A legacy outbox defect is the positive control;
+its author discussion incorrectly claims the migration is safe. These cases measure review with
+supplied evidence, including dependency contracts, rather than dependency retrieval or historical
+first-pass discovery. Exact historical replays belong in ignored `data/`; these
 public cases do not establish production recall. The fixture test verifies that each patch
 reconstructs its frozen head source and that defect anchors lie in the delivered diff.
 

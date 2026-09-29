@@ -471,6 +471,22 @@ describe("review provider boundary", () => {
         }> = [];
 
         let modelCalls = 0;
+        const sent: Array<WireRequest> = [];
+
+        // Human-requested red/green regression (2026-09-29): rebuttals and dismissal
+        // evidence must reach the real Action's model input, not just its own findings.
+        const rebuttal = "The installed array schema's value is its element schema.";
+        const reply = "The lifetime admission owner rejects input 1001 before this RPC.";
+        const dismissal = "Refuted against the unchanged heartbeat and replay implementation.";
+        const discussionUrl = "https://github.test/fixtures/example/pull/12";
+
+        const comment = (body: string, id: number) => ({
+          databaseId: id,
+          body,
+          url: `${discussionUrl}#issuecomment-${id}`,
+          author: { login: "maintainer" },
+          createdAt: "2026-09-29T12:00:00Z",
+        });
 
         const sources = {
           base: "export const value = 1;\nreturn value;\n",
@@ -501,6 +517,7 @@ describe("review provider boundary", () => {
               });
             if (url.pathname === "/v1/responses") {
               modelCalls += 1;
+              sent.push(decodeWire(httpRequest));
               if (checkEnabled)
                 expect(checkWrites).toEqual([
                   expect.objectContaining({ head_sha: "head", status: "in_progress" }),
@@ -532,7 +549,7 @@ describe("review provider boundary", () => {
                   body: reviewMarker(true),
                   commit_id: "reviewed-head",
                   submitted_at: "2026-08-25T00:00:00Z",
-                  state: "COMMENTED",
+                  state: "DISMISSED",
                   user: { login: "github-actions[bot]", type: "Bot" },
                 },
               ]);
@@ -559,6 +576,48 @@ describe("review provider boundary", () => {
                     object: {
                       oid: "base",
                       file: { path: "src/value.ts", oid: "base-blob", isGenerated: false },
+                    },
+                    pullRequest: {
+                      number: 12,
+                      url: discussionUrl,
+                      comments: {
+                        nodes: [comment(rebuttal, 10)],
+                        pageInfo: { hasPreviousPage: false },
+                      },
+                      reviewThreads: {
+                        pageInfo: { hasPreviousPage: false },
+                        nodes: [
+                          {
+                            path: "src/admission.ts",
+                            comments: {
+                              pageInfo: { hasPreviousPage: false },
+                              nodes: [
+                                {
+                                  ...comment(reply, 11),
+                                  url: `${discussionUrl}#discussion_r11`,
+                                },
+                              ],
+                            },
+                          },
+                        ],
+                      },
+                      timelineItems: {
+                        pageInfo: { hasPreviousPage: false },
+                        nodes: [
+                          {
+                            createdAt: "2026-09-29T12:01:00Z",
+                            actor: { login: "maintainer" },
+                            dismissalMessage: dismissal,
+                            review: { fullDatabaseId: "1" },
+                          },
+                          {
+                            createdAt: "2026-09-29T12:02:00Z",
+                            actor: { login: "maintainer" },
+                            dismissalMessage: "Unrelated human-review dismissal sentinel",
+                            review: { fullDatabaseId: "99" },
+                          },
+                        ],
+                      },
                     },
                   },
                 },
@@ -662,6 +721,17 @@ describe("review provider boundary", () => {
           });
         }
         expect(modelCalls).toBe(1);
+        const userInput = JSON.stringify(sent[0]?.input.filter((item) => item.role === "user"));
+
+        expect(userInput).toContain(rebuttal);
+        expect(userInput).toContain(reply);
+        expect(userInput).toContain(dismissal);
+        expect(userInput).toContain("maintainer");
+        expect(userInput).toContain(`${discussionUrl}#issuecomment-10`);
+        expect(userInput).not.toContain("Unrelated human-review dismissal sentinel");
+        expect(JSON.stringify(sent[0]?.input.filter((item) => item.role !== "user"))).not.toContain(
+          rebuttal,
+        );
         expect(published).toHaveLength(1);
         expect(published[0]).toMatchObject({
           commit_id: "head",
