@@ -168,7 +168,9 @@ dismissed reviews. It verifies that evidence against source and contracts; a com
 does not establish correctness or authorize another dismissal. The Action requests the latest
 20 issue comments, 20 review threads with up to 10 comments each, and 20 dismissal events. It keeps
 the newest 60 entries within 32,000 serialized characters, clipping each body at 4,000 characters.
-Omitted or clipped context is marked partial; a failed or mismatched response is marked unavailable.
+Uncorrelated dismissal events and omitted or clipped context are marked partial; a failed or
+mismatched response is marked unavailable. A missing review commit does not exclude otherwise
+attributable dismissal evidence.
 The source tools read committed Git files and do not install dependencies.
 
 Reviews with findings include a **Copy all findings** dropdown. Expand it and use the code

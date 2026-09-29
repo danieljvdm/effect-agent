@@ -5,7 +5,7 @@ import { TestClock } from "effect/testing";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { makeGitHubClient } from "../src/github.ts";
-import { reviewMarker, type ReviewHistoryItem } from "../src/selection.ts";
+import { reviewMarker, reviewPauseMarker, type ReviewHistoryItem } from "../src/selection.ts";
 
 const repository = "reve-ai/example";
 const baseRevision = "1".repeat(40);
@@ -111,10 +111,137 @@ describe("review discussion evidence", () => {
         }
       }),
   );
+
+  // Regression at 32c8a34a: nullable links and commit IDs silently hid dismissal
+  // evidence. Exercise the admitted REST and GraphQL shapes at the client boundary.
+  it.effect.each([
+    "missing-review",
+    "missing-id",
+    "unknown-review",
+    "missing-commit",
+    "owned",
+  ] as const)("preserves dismissal evidence and discloses missing correlation: %s", (mode) =>
+    Effect.gen(function* () {
+      const url = "https://github.test/reve-ai/example/pull/12";
+      const createdAt = "2026-09-29T12:00:00Z";
+      const reason = "Refuted against the unchanged recovery implementation.";
+
+      const comment = {
+        body: "The source evidence remains available in this reply.",
+        url: `${url}#issuecomment-10`,
+        author: { login: "maintainer" },
+        createdAt,
+      };
+
+      const reviews = [
+        {
+          ...priorReviewWire,
+          state: "DISMISSED",
+          commit_id: mode === "missing-commit" ? null : baseRevision,
+        },
+        {
+          ...priorReviewWire,
+          id: 43,
+          state: "DISMISSED",
+          user: { login: "other-reviewer[bot]", type: "Bot" },
+        },
+        {
+          ...priorReviewWire,
+          id: 44,
+          state: "DISMISSED",
+          user: { ...priorReviewWire.user, type: "User" },
+        },
+        { ...priorReviewWire, id: 45, state: "DISMISSED", body: "An unrelated review channel." },
+        { ...priorReviewWire, id: 46, state: "DISMISSED", body: reviewPauseMarker(3) },
+      ];
+
+      const eventReview =
+        mode === "missing-review"
+          ? null
+          : {
+              fullDatabaseId:
+                mode === "missing-id" ? null : mode === "unknown-review" ? "99" : "42",
+            };
+
+      const client = HttpClient.make((request, requestUrl) => {
+        const body =
+          request.method === "GET" && requestUrl.pathname.endsWith("/reviews")
+            ? reviews
+            : request.method === "POST" && requestUrl.pathname === "/graphql"
+              ? {
+                  data: {
+                    repository: {
+                      pullRequest: {
+                        number: 12,
+                        url,
+                        comments: { pageInfo: { hasPreviousPage: false }, nodes: [comment] },
+                        reviewThreads: { pageInfo: { hasPreviousPage: false }, nodes: [] },
+                        timelineItems: {
+                          pageInfo: { hasPreviousPage: false },
+                          nodes: [
+                            {
+                              createdAt,
+                              actor: { login: "maintainer" },
+                              dismissalMessage: reason,
+                              review: eventReview,
+                            },
+                            ...[43, 44, 45, 46].map((id) => ({
+                              createdAt,
+                              actor: { login: "maintainer" },
+                              dismissalMessage: "Unrelated dismissal sentinel",
+                              review: { fullDatabaseId: String(id) },
+                            })),
+                          ],
+                        },
+                      },
+                    },
+                  },
+                }
+              : undefined;
+
+        if (body === undefined) return Effect.die("Unexpected discussion request");
+
+        return Effect.succeed(HttpClientResponse.fromWeb(request, globalThis.Response.json(body)));
+      });
+
+      const github = yield* makeGitHubClient({
+        repository,
+        pullRequest: 12,
+        token: Redacted.make("token"),
+      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+
+      const history = yield* github.listReviews;
+
+      const discussion = yield* github.loadReviewDiscussion({
+        reviewAuthor: priorReview.authorLogin,
+        history,
+        pullRequestUrl: url,
+      });
+
+      const correlated = mode === "missing-commit" || mode === "owned";
+
+      expect(discussion.status).toBe(correlated ? "complete" : "partial");
+      expect(discussion.entries).toEqual([
+        { ...comment, author: "maintainer", kind: "comment" },
+        ...(correlated
+          ? [
+              {
+                kind: "dismissal",
+                reviewId: "42",
+                author: "maintainer",
+                url: `${url}#pullrequestreview-42`,
+                createdAt,
+                body: reason,
+              },
+            ]
+          : []),
+      ]);
+    }),
+  );
 });
 
 describe("addressed review verification", () => {
-  it.effect.each(["success", "edited-comment", "untrusted"] as const)(
+  it.effect.each(["success", "edited-comment", "untrusted", "missing-commit"] as const)(
     "dismisses only an unchanged owned review on the inspected head: %s",
     (mode) =>
       Effect.gen(function* () {
@@ -191,7 +318,12 @@ describe("addressed review verification", () => {
 
         const result = yield* github
           .dismissReview({
-            review: mode === "untrusted" ? { ...priorReview, authorType: "User" } : priorReview,
+            review:
+              mode === "untrusted"
+                ? { ...priorReview, authorType: "User" }
+                : mode === "missing-commit"
+                  ? { ...priorReview, commitId: undefined }
+                  : priorReview,
             reviewAuthor: priorReview.authorLogin,
             commitId: headRevision,
             decision: {

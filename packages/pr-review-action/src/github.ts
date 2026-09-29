@@ -9,7 +9,7 @@ import { Clock, Context, DateTime, Effect, Encoding, Option, Result, Schema } fr
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import { MAX_REVIEW_BODY_CHARS } from "./presentation.ts";
-import { unresolvedChangeRequests, type ReviewHistoryItem } from "./selection.ts";
+import { dismissedReviews, unresolvedChangeRequests, type ReviewHistoryItem } from "./selection.ts";
 
 const ShortString = Schema.String.check(Schema.isMaxLength(2_048));
 const Revision = Schema.NonEmptyString.check(Schema.isMaxLength(128));
@@ -757,19 +757,17 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
       }
     }
 
-    const dismissed = new Set(
-      unresolvedChangeRequests({
-        reviewAuthor: input.reviewAuthor,
-        history: input.history
-          .filter((review) => review.state === "DISMISSED")
-          .map((review) => ({ ...review, state: "CHANGES_REQUESTED" })),
-      }).map((review) => String(review.id)),
-    );
+    const historyIds = new Set(input.history.map((review) => String(review.id)));
+    const dismissed = new Set(dismissedReviews(input).map((review) => String(review.id)));
 
     for (const event of pull.timelineItems.nodes) {
       const reviewId = event.review?.fullDatabaseId;
 
-      if (reviewId === undefined || reviewId === null || !dismissed.has(reviewId)) continue;
+      if (reviewId === undefined || reviewId === null || !historyIds.has(reviewId)) {
+        partial = true;
+        continue;
+      }
+      if (!dismissed.has(reviewId)) continue;
       append({
         kind: "dismissal",
         reviewId,

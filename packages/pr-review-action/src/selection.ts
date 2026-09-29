@@ -125,7 +125,7 @@ const markerKind = (
   return pause === null ? undefined : { _tag: "pause", automaticReviewLimit: pause[1] ?? "" };
 };
 
-const trustedHistory = (input: {
+const ownedHistory = (input: {
   readonly reviewAuthor: string;
   readonly history: ReadonlyArray<ReviewHistoryItem>;
 }) => {
@@ -138,12 +138,25 @@ const trustedHistory = (input: {
 
     return marker !== undefined &&
       item.authorType === "Bot" &&
-      item.authorLogin.toLowerCase() === author &&
-      item.commitId !== undefined
+      item.authorLogin.toLowerCase() === author
       ? [{ item, marker }]
       : [];
   });
 };
+
+const trustedHistory = (input: {
+  readonly reviewAuthor: string;
+  readonly history: ReadonlyArray<ReviewHistoryItem>;
+}) => ownedHistory(input).filter(({ item }) => item.commitId !== undefined);
+
+/** Advisory dismissal evidence needs ownership, not a commit usable as a review baseline. */
+export const dismissedReviews = (input: {
+  readonly reviewAuthor: string;
+  readonly history: ReadonlyArray<ReviewHistoryItem>;
+}): ReadonlyArray<ReviewHistoryItem> =>
+  ownedHistory(input).flatMap(({ item, marker }) =>
+    marker._tag === "attempt" && item.state === "DISMISSED" ? [item] : [],
+  );
 
 /** Select only this channel's terminal, bot-authored change requests. */
 export const unresolvedChangeRequests = (input: {
