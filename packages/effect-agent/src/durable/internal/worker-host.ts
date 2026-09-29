@@ -2525,11 +2525,13 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
                 command.delegationId,
               );
 
-        const principal = yield* authorize("start", "send", undefined, previous?.evidence);
-
+        // Bind the decision to the tail before authorization. If it changes while the
+        // authorizer reads current state, currentStart rejects reuse of this decision.
         const tail = yield* deps.store
           .inspectTail(ThreadTailRequest.make({ threadId: context.source.threadId }))
           .pipe(Effect.mapError(storageFailure("start")));
+
+        const principal = yield* authorize("start", "send", undefined, previous?.evidence);
 
         const startAdmission: WorkerStartAdmission = {
           sourceThreadId: context.source.threadId,
