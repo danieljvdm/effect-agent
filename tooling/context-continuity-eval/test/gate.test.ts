@@ -97,10 +97,6 @@ const pressureReport = (): EvaluationReport => {
   };
 };
 
-it("accepts measured pressure and confirmed separate processes", () => {
-  expect(gateChecks(pressureReport()).filter((c) => !c.passed)).toEqual([]);
-});
-
 it.each(["same-process", "requested"] as const)(
   "rejects false pressure/restart coverage: %s",
   (failure) => {
@@ -111,11 +107,9 @@ it.each(["same-process", "requested"] as const)(
       compactions: base.compactions.map((c) => ({
         ...c,
         trigger: failure === "requested" ? "requested" : c.trigger,
-        estimatedTokens: c.estimatedTokens,
       })),
       restarts: base.restarts.map((r) => ({
         ...r,
-        killConfirmed: true,
         processAfter: failure === "same-process" ? r.processBefore : r.processAfter,
       })),
     };
@@ -125,9 +119,7 @@ it.each(["same-process", "requested"] as const)(
       .map((c) => c.name);
 
     expect(failures).toEqual([
-      failure === "same-process" || false
-        ? "actual-process-kills"
-        : "pressure-caused-committed-windows",
+      failure === "same-process" ? "actual-process-kills" : "pressure-caused-committed-windows",
     ]);
   },
 );

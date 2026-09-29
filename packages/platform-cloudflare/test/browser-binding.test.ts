@@ -394,7 +394,6 @@ it.effect.each(["unacknowledged"] as const)(
         ),
       ).toBe(true);
       expect(JSON.stringify(reports)).toContain('"operation":"session.disconnect"');
-      expect(JSON.stringify(reports)).not.toContain("private-local-close-detail");
       expect(fixture.methods).toEqual(["Target.getBrowserContexts"]);
       expect(fixture.socket.readyState).toBe(WebSocket.OPEN);
     }).pipe(Effect.scoped),

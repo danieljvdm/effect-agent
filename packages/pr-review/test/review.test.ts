@@ -221,7 +221,6 @@ describe("review output boundary", () => {
 
         const alpha = ReviewFinding.make({ ...importantFinding, title: "Alpha cause" });
         const beta = ReviewFinding.make({ ...importantFinding, title: "Beta cause" });
-        const reports: Array<ReadonlyArray<ReviewFinding>> = [];
 
         for (const first of ["Alpha", "Beta"]) {
           const firstRecorded = yield* Deferred.make<void>();
@@ -283,12 +282,10 @@ describe("review output boundary", () => {
             .review(request)
             .pipe(Effect.provideService(ReviewRepository, emptyRepository));
 
-          reports.push(outcome.report.findings);
           expect(outcome.report.findings).toEqual([alpha, beta, ...initial.slice(0, 22)]);
           expect(outcome.research?.completed).toBe(2);
           expect(outcome.incomplete).toBe(true);
         }
-        expect(reports[0]).toEqual(reports[1]);
       }),
   );
 

@@ -381,10 +381,10 @@ export class TestThreadObject extends ThreadObject.make(
     if (completionRead) {
       probe.activeReads++;
       probe.maxActiveReads = Math.max(probe.maxActiveReads, probe.activeReads);
-      // Make overlap observable without depending on local SQLite latency.
-      await new Promise((resolve) => setTimeout(resolve, 25));
     }
     try {
+      if (completionRead) await probe.beforeCompletionRead?.();
+
       return await super.portCall(encoded, traceContext);
     } finally {
       if (completionRead) probe.activeReads--;

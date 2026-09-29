@@ -90,7 +90,14 @@ it.effect("rejects a zero writer timeout before opening storage", () =>
     );
 
     expect(Exit.isFailure(opened)).toBe(true);
-    if (Exit.isFailure(opened))
-      expect(Cause.squash(opened.cause)).toBeInstanceOf(PostgresStorageError);
+    if (Exit.isFailure(opened)) {
+      const failure = Cause.squash(opened.cause);
+
+      expect(failure).toBeInstanceOf(PostgresStorageError);
+      expect(failure).toMatchObject({
+        operation: "configure Postgres storage",
+        cause: { _tag: "SchemaError" },
+      });
+    }
   }),
 );

@@ -27,6 +27,7 @@ export const workerLaunchProbe: {
     calls: Array<{ thread: string; request: PortRequest }>;
     activeReads: number;
     maxActiveReads: number;
+    beforeCompletionRead?: () => Promise<void>;
   };
 } = {};
 

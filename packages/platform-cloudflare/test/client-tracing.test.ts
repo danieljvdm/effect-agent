@@ -5,7 +5,7 @@ import {
 import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { describe, expect, it } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema, Tracer } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
 import { CanonicalSequence } from "effect-agent/records";
 import { TestClock } from "effect/testing";
 
@@ -33,7 +33,6 @@ const clientFixture = (
   options: { readonly rpcTracing?: boolean; readonly binding?: string } = {},
 ) => {
   const calls: Array<NativeCall> = [];
-  const spans: Array<Tracer.NativeSpan> = [];
 
   const stub = Object.fromEntries(
     clientMethods.map((method) => [
@@ -59,17 +58,7 @@ const clientFixture = (
     ]),
   );
 
-  const tracer = Tracer.make({
-    span(spanOptions) {
-      const span = new Tracer.NativeSpan(spanOptions);
-
-      spans.push(span);
-
-      return span;
-    },
-  });
-
-  return { calls, spans, layer, tracer };
+  return { calls, layer };
 };
 
 describe("DEPLOY-016 opt-in native Thread RPC tracing", () => {

@@ -60,7 +60,7 @@ it.effect(
 
         const tracer = Tracer.make({
           span: (options) => {
-            const span = new Tracer.NativeSpan({ ...options, sampled });
+            const span = new Tracer.NativeSpan(options);
 
             attemptSpans.push(span);
 

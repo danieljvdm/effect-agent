@@ -343,8 +343,13 @@ layer(NodeServices.layer)((it) => {
 
           switch (route) {
             case `commits/${mergedCheckout}/pulls`:
-              body = [{ number: 516, head: { sha: head } }];
-              if (scenario === "ambiguous") body = [body, body];
+              body =
+                scenario === "ambiguous"
+                  ? [
+                      { number: 516, head: { sha: head } },
+                      { number: 517, head: { sha: head } },
+                    ]
+                  : [{ number: 516, head: { sha: head } }];
               break;
             case "pulls/516":
               body = {

@@ -808,7 +808,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
     );
 
     it.effect(
-      "abort of an active Run in another process: canonical AbortRequested precedes interruption",
+      "abort of an active Run in another process: canonical AbortRequested precedes settlement",
       () =>
         withCrashSite((site) =>
           Effect.gen(function* () {
@@ -872,8 +872,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const records = yield* readLog(thread);
                 const tags = logTags(records);
 
-                // Durable §13: the abort became canonical BEFORE the Run fiber died — and the
-                // interrupted model produced no committed Turn at all.
+                // The canonical abort precedes settlement, with no committed model response.
                 expect(tags.indexOf("AbortRequested")).toBeGreaterThanOrEqual(0);
                 expect(tags.indexOf("AbortRequested")).toBeLessThan(
                   tags.indexOf("SubmissionSettled"),

@@ -1,11 +1,8 @@
 import {
   BrowserQuickActionBrowserBinding,
   BrowserQuickActionRpcError,
-  BrowserQuickActionWorkersAi,
   browserQuickActionCaptureLayer,
-  browserQuickActionWorkersAiCaptureLayer,
   type BrowserQuickActionClient,
-  type BrowserQuickActionWorkersAiPolicy,
 } from "@effect-agent/platform-cloudflare/cloudflare-browser";
 import { Effect, Layer } from "effect";
 import {
@@ -87,32 +84,19 @@ const request = (
 const captureError = (
   binding: BrowserQuickActionClient,
   input: PageCaptureRequest,
-  workersAi?: BrowserQuickActionWorkersAiPolicy,
 ): Promise<PageCaptureError> =>
   Effect.runPromise(
     Effect.gen(function* () {
       const port = yield* PageCapture;
 
       return yield* port.capture(input).pipe(Effect.flip);
-    }).pipe(Effect.provide(captureLayer(binding, workersAi))),
+    }).pipe(Effect.provide(captureLayer(binding))),
   );
 
-const captureLayer = (
-  binding: BrowserQuickActionClient,
-  workersAi?: BrowserQuickActionWorkersAiPolicy,
-): Layer.Layer<PageCapture> =>
-  workersAi === undefined
-    ? browserQuickActionCaptureLayer().pipe(
-        Layer.provide(Layer.succeed(BrowserQuickActionBrowserBinding)(binding)),
-      )
-    : browserQuickActionWorkersAiCaptureLayer().pipe(
-        Layer.provide(
-          Layer.merge(
-            Layer.succeed(BrowserQuickActionBrowserBinding)(binding),
-            BrowserQuickActionWorkersAi.layer(workersAi),
-          ),
-        ),
-      );
+const captureLayer = (binding: BrowserQuickActionClient): Layer.Layer<PageCapture> =>
+  browserQuickActionCaptureLayer().pipe(
+    Layer.provide(Layer.succeed(BrowserQuickActionBrowserBinding)(binding)),
+  );
 
 describe("Browser Run Quick Action PageCapture adapter", () => {
   it("stops oversized streams at the first exceeding chunk and releases their reader", async () => {

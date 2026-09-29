@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Effect, Schema } from "effect";
 import { SettlementFailureDiagnostic } from "effect-agent/records";
 import { ThreadExport } from "effect-agent/thread-store";
+import { WorkerCompletion } from "effect-agent/worker";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
@@ -197,12 +198,31 @@ it("does not treat the retained request on a worker update or completion as fres
   expect(active.scouts).toHaveLength(1);
   await fixture("gate", { name: "Report denial" }, "POST");
 
+  // Child settlement does not imply parent processing; wait for its report's parent settlement.
+  const parent = await until(
+    async () => Schema.decodeUnknownSync(ThreadExport)(await fixture("journal", { thread })),
+    ({ records }) =>
+      records.some(({ record }) => {
+        const input = record.payload;
+
+        return (
+          input._tag === "UserInputRecorded" &&
+          Schema.is(WorkerCompletion)(input.messageAdmission) &&
+          input.messageAdmission.report.worker.threadId === active.scouts?.[0]?.id &&
+          input.submissionId !== undefined &&
+          records.some(
+            ({ record }) =>
+              record.payload._tag === "SubmissionSettled" &&
+              record.payload.submissionId === input.submissionId,
+          )
+        );
+      }),
+  );
+
   const completed = await until(
     () => snapshot(email),
     (state) => state.pending === 0 && state.scouts?.[0]?.state === "idle",
   );
-
-  const parent = Schema.decodeUnknownSync(ThreadExport)(await fixture("journal", { thread }));
 
   const denied = parent.records.filter(
     ({ record }) =>

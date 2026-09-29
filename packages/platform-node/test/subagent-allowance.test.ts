@@ -93,7 +93,6 @@ it.effect(
             );
 
           const starts: Array<number> = [];
-          let offeredAllowance = 1;
 
           const tools = Toolkit.make(
             Tool.make("delegate_payment", {
@@ -151,14 +150,14 @@ it.effect(
           const delegation = Subagent.make("research", {
             target: childDefinition,
             description: "Run bounded probes.",
-            parameters: Schema.Struct({ allowance: Schema.optionalKey(Schema.Number) }),
+            parameters: Schema.Struct({ allowance: Schema.Number }),
             success: Schema.Struct({ exhausted: Schema.Boolean }),
             failure: ProbeFailed,
             prepareInput: () => Effect.succeed("probe"),
             projectResult: (_, context) => Effect.succeed({ exhausted: context.budgetExhausted }),
             toolCallAllowance: {
               default: 1,
-              fromParameters: ({ allowance }) => allowance ?? offeredAllowance,
+              fromParameters: ({ allowance }) => allowance,
             },
             policy: SubagentPolicy.make({
               maxChildren: 1,
@@ -193,11 +192,7 @@ it.effect(
                     Stream.fromIterable(
                       request.prompt.content.some((message) => message.role === "tool")
                         ? finalParts
-                        : toolTurn(
-                            delegationCall,
-                            delegation.name,
-                            row.requested === undefined ? {} : { allowance: row.requested },
-                          ),
+                        : toolTurn(delegationCall, delegation.name, { allowance: row.requested }),
                     ),
                 }),
               ),
@@ -237,8 +232,6 @@ it.effect(
             row.fault,
           );
 
-          // Re-evaluating the delegation on the next Attempt must not raise its pinned limit.
-          offeredAllowance = 99;
           const childId = childThreadIdFor(receipt.submissionId, delegationCall);
 
           const childSubmission = yield* withRuntime(

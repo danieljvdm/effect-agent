@@ -101,12 +101,8 @@ const publish = async (
   report: unknown,
   options: {
     currentMain?: string;
-    releaseTag?: string;
     releaseCommit?: string;
-    runHead?: string;
     runRepository?: string;
-    annotatedTag?: boolean;
-    releasePr?: boolean;
   } = {},
 ) => {
   const comments: string[] = [];
@@ -133,7 +129,7 @@ const publish = async (
         workflow_run: {
           event: "push",
           head_branch: "main",
-          head_sha: options.runHead ?? head,
+          head_sha: head,
           head_repository: { full_name: options.runRepository ?? "owner/repository" },
           html_url: "https://example.test/run",
         },
@@ -146,16 +142,13 @@ const publish = async (
           getRef: async ({ ref }: { ref: string }) => ({
             data: {
               object: {
-                type: ref === "heads/main" || !options.annotatedTag ? "commit" : "tag",
+                type: "commit",
                 sha:
                   ref === "heads/main"
                     ? (options.currentMain ?? head)
                     : (options.releaseCommit ?? base),
               },
             },
-          }),
-          getTag: async () => ({
-            data: { object: { type: "commit", sha: options.releaseCommit ?? base } },
           }),
         },
         pulls: {
@@ -179,28 +172,26 @@ const publish = async (
               draft: false,
               prerelease: true,
               published_at: "2026-09-10T03:17:46Z",
-              tag_name: options.releaseTag ?? baselineTag,
+              tag_name: baselineTag,
             },
           ];
         if (endpoint === "pulls")
-          return options.releasePr === false
-            ? []
-            : [
-                {
-                  number: 1,
-                  state: "open",
-                  head: {
-                    ref: "changeset-release/main",
-                    sha: "9".repeat(40),
-                    repo: { full_name: "owner/repository" },
-                  },
-                  base: {
-                    ref: "main",
-                    sha: options.currentMain ?? head,
-                    repo: { full_name: "owner/repository" },
-                  },
-                },
-              ];
+          return [
+            {
+              number: 1,
+              state: "open",
+              head: {
+                ref: "changeset-release/main",
+                sha: "9".repeat(40),
+                repo: { full_name: "owner/repository" },
+              },
+              base: {
+                ref: "main",
+                sha: options.currentMain ?? head,
+                repo: { full_name: "owner/repository" },
+              },
+            },
+          ];
         if (endpoint === "comments") return [];
         throw new Error("Unexpected GitHub endpoint");
       },
@@ -233,5 +224,5 @@ it.each(mutations)("rejects %s before commenting", async (_name, mutate) => {
   const report = makeReport();
 
   mutate(report);
-  await expect(publish(report)).rejects.toThrow(/Invalid|Incomplete|Unexpected/);
+  await expect(publish(report)).rejects.toThrow("Invalid cohort");
 });

@@ -80,7 +80,10 @@ const withOwner = <A, E>(
 
 // Requested proof seam: count actual cross-Object launch calls and pressure reads. Existing
 // lifecycle cases below retain authority, receipt, contention and eviction coverage.
-it("admits workers in one RPC and reads completions concurrently only at capacity", async () => {
+it("admits workers in one RPC and reads completions concurrently only at capacity", async ({
+  onTestFinished,
+  signal,
+}) => {
   const samples = [];
 
   for (let sample = 0; sample < 5; sample++) {
@@ -109,30 +112,109 @@ it("admits workers in one RPC and reads completions concurrently only at capacit
         ).pipe(Effect.provideService(SubagentHost, host)),
       );
 
-    const measure = async (key: string) => {
-      const probe = { calls: [], activeReads: 0, maxActiveReads: 0 };
+    const children: Array<Awaited<ReturnType<typeof launch>>> = [];
+    let pendingLaunch: ReturnType<typeof launch> | undefined;
+    let releaseReads = () => {};
+    let cleanupPromise: Promise<void> | undefined;
 
-      workerLaunchProbe.current = probe;
-      const start = performance.now();
-      const result = await launch(key);
-      const elapsedMs = performance.now() - start;
-
-      delete workerLaunchProbe.current;
-
-      return { result, elapsedMs, ...probe };
+    const rememberChild = (child: Awaited<ReturnType<typeof launch>>) => {
+      if (
+        child.delivery.receipt !== null &&
+        !children.some((existing) => existing.worker.threadId === child.worker.threadId)
+      )
+        children.push(child);
     };
 
-    const children: Array<Awaited<ReturnType<typeof launch>>> = [];
+    const invoke = async (key: string) => {
+      signal.throwIfAborted();
+      pendingLaunch = launch(key);
+      try {
+        const result = await pendingLaunch;
+
+        rememberChild(result);
+        signal.throwIfAborted();
+
+        return result;
+      } finally {
+        pendingLaunch = undefined;
+      }
+    };
+
+    const release = () => releaseReads();
+
+    const cleanup = () =>
+      (cleanupPromise ??= (async () => {
+        release();
+        let failure: unknown;
+
+        try {
+          if (pendingLaunch !== undefined) rememberChild(await pendingLaunch);
+        } catch (cause) {
+          failure = cause;
+        }
+        for (const child of children) {
+          try {
+            await withOwner(source, (host) =>
+              Subagent.cancel(independentBudgetWorkers, child.worker, child.delivery.receipt!).pipe(
+                Effect.provideService(SubagentHost, host),
+              ),
+            );
+            await drainAlarmsUntil(child.worker.threadId, allSettled(child.worker.threadId));
+          } catch (cause) {
+            failure ??= cause;
+          }
+        }
+        delete workerLaunchProbe.current;
+        independentBudgetGrants.delete(source);
+        independentBudgetAuthorityCalls.delete(source);
+        backgroundWakeDropPrefixes.delete("worker:");
+        droppedMessageWakes.delete(source);
+        signal.removeEventListener("abort", release);
+        if (failure !== undefined) throw failure;
+      })());
+
+    signal.addEventListener("abort", release, { once: true });
+    onTestFinished(cleanup);
+
+    const measure = async (key: string) => {
+      const probe: NonNullable<typeof workerLaunchProbe.current> = {
+        calls: [],
+        activeReads: 0,
+        maxActiveReads: 0,
+      };
+
+      if (key === "3") {
+        const entered = new Promise<void>((resolve) => {
+          releaseReads = resolve;
+        });
+
+        probe.beforeCompletionRead = () => {
+          // Hold the first real RPC until the second enters, regardless of arrival latency.
+          if (probe.activeReads === 2) releaseReads();
+
+          return entered;
+        };
+      }
+      workerLaunchProbe.current = probe;
+      try {
+        const start = performance.now();
+        const result = await invoke(key);
+        const elapsedMs = performance.now() - start;
+
+        return { result, elapsedMs, ...probe };
+      } finally {
+        release();
+        delete workerLaunchProbe.current;
+      }
+    };
+
+    let primaryFailure: unknown;
 
     try {
       const first = await measure("1");
-
-      children.push(first.result);
       const second = await measure("2");
-
-      children.push(second.result);
       const pressure = await measure("3");
-      const replay = await launch("1");
+      const replay = await invoke("1");
 
       expect(replay).toEqual(first.result);
       expect(first.result.delivery.status).toBe("accepted");
@@ -147,22 +229,16 @@ it("admits workers in one RPC and reads completions concurrently only at capacit
           maxActiveReads: pressure.maxActiveReads,
         },
       });
+    } catch (failure) {
+      primaryFailure = failure;
     } finally {
-      delete workerLaunchProbe.current;
-      for (const child of children) {
-        if (child.delivery.receipt === null) continue;
-        await withOwner(source, (host) =>
-          Subagent.cancel(independentBudgetWorkers, child.worker, child.delivery.receipt!).pipe(
-            Effect.provideService(SubagentHost, host),
-          ),
-        );
-        await drainAlarmsUntil(child.worker.threadId, allSettled(child.worker.threadId));
+      try {
+        await cleanup();
+      } catch (failure) {
+        primaryFailure ??= failure;
       }
-      independentBudgetGrants.delete(source);
-      independentBudgetAuthorityCalls.delete(source);
-      backgroundWakeDropPrefixes.delete("worker:");
-      droppedMessageWakes.delete(source);
     }
+    if (primaryFailure !== undefined) throw primaryFailure;
   }
   console.log("worker launch budget", JSON.stringify(samples));
   for (const sample of samples) {
