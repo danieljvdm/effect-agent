@@ -223,6 +223,7 @@
     "pure-session-boundaries",
     "quick-memory-pages",
     "quick-primitive-responses",
+    "quick-worker-admission",
     "quiescent-conversation-maintenance",
     "quiet-admission-retry",
     "quiet-browsers-explain",

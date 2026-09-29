@@ -1,5 +1,17 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.151
+
+### Patch Changes
+
+- [#696](https://github.com/danieljvdm/effect-agent/pull/696) [`61cb29f`](https://github.com/danieljvdm/effect-agent/commit/61cb29f025fedd14483e013d7b33d099439b8074) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Admit background workers through one destination RPC and read child completion receipts concurrently only when capacity could block admission.
+
+  BEHAVIOR CHANGE: Upgrade the framework and Cloudflare packages together; custom routed hosts must install `routedWorkerAdmissionLayer` and provide `WakeScheduler` and `DurableRuntimeFailpoint` to owner-side port handlers under their maintenance gate. Existing records and retry receipts require no reset.
+
+- Updated dependencies [[`61cb29f`](https://github.com/danieljvdm/effect-agent/commit/61cb29f025fedd14483e013d7b33d099439b8074)]:
+  - effect-agent@0.1.0-beta.151
+  - @effect-agent/storage-cloudflare@0.1.0-beta.151
+
 ## 0.1.0-beta.150
 
 ### Patch Changes

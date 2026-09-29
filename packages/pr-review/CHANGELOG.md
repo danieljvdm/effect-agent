@@ -1,5 +1,12 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.151
+
+### Patch Changes
+
+- Updated dependencies [[`61cb29f`](https://github.com/danieljvdm/effect-agent/commit/61cb29f025fedd14483e013d7b33d099439b8074)]:
+  - effect-agent@0.1.0-beta.151
+
 ## 0.1.0-beta.150
 
 ### Patch Changes
