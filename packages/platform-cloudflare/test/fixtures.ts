@@ -57,6 +57,8 @@ export const unavailableBindingThreads = new Set<string>();
 /** Reconstruct selected Objects with the changed booking result contract. */
 export const upgradedBookBindingThreads = new Set<string>();
 
+export const maintenanceBindings = new Map<string, ReadonlyArray<ResolvedBinding>>();
+
 export const maintenanceClocks = new Map<string, Clock.Clock>();
 
 /** Hold only a provider request; the native Attempt and its abort watcher remain real. */

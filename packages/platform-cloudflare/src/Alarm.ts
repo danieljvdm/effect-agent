@@ -393,11 +393,9 @@ export class ThreadRecoveryEvents extends Context.Service<
   { readonly publish: (event: ThreadRecoveryFaultEvent) => Effect.Effect<void, DurableAlarmError> }
 >()("@effect-agent/platform-cloudflare/ThreadRecoveryEvents") {}
 
-class BindingRetry extends Schema.Class<BindingRetry>("BindingRetry")({
+class BindingWait extends Schema.Class<BindingWait>("BindingWait")({
   threadId: ThreadId,
   submissionId: SubmissionId,
-  attempts: Schema.Natural,
-  notBefore: Schema.Finite,
   reportedAt: Schema.Finite,
 }) {}
 
@@ -567,7 +565,8 @@ class ThreadMaintenanceState extends Schema.Class<ThreadMaintenanceState>(
   lastRecoveredThreadId: Schema.optionalKey(ThreadId),
   /** Rotate bounded post-native admission across full events and Object eviction. */
   lastAfterNativeLaneId: Schema.optionalKey(DueQueue.LaneId),
-  bindingRetries: Schema.optionalKey(Schema.Array(BindingRetry)),
+  bindingRegistryKey: Schema.optionalKey(Schema.String),
+  bindingWaits: Schema.optionalKey(Schema.Array(BindingWait)),
   recoveryEventSequence: Schema.optionalKey(MaintenanceGeneration),
   recoveryEventAcknowledged: Schema.optionalKey(MaintenanceGeneration),
   /** Absent on older records. A newer mutation makes this retry obsolete. */
@@ -592,7 +591,7 @@ const initialMaintenanceState = (): ThreadMaintenanceState =>
   });
 
 const readMaintenanceState = async (
-  transaction: DurableObjectTransaction,
+  transaction: Pick<DurableObjectTransaction, "get">,
 ): Promise<{ readonly state: ThreadMaintenanceState; readonly initialized: boolean }> => {
   const encoded = await transaction.get(MAINTENANCE_STATE_KEY);
 
@@ -1178,13 +1177,33 @@ export class ThreadMaintenance extends Context.Service<
         recovery.repaired ||= result.reports.some((report) => report.disposition === "repaired");
       });
 
+      // Registry changes, including upgrades from timed binding retries, create one native
+      // opportunity. Unchanged registries leave parked work dormant across Object eviction.
+      const readCurrentMaintenanceState = async (transaction: DurableObjectTransaction) => {
+        const current = await readMaintenanceState(transaction);
+
+        if (current.state.bindingRegistryKey === runtime.bindingRegistryKey) return current;
+
+        const state = ThreadMaintenanceState.make({
+          ...Struct.omit(current.state, ["retry"]),
+          bindingRegistryKey: runtime.bindingRegistryKey,
+          bindingWaits: [],
+          dirty: current.state.dirty + 1n,
+        });
+
+        await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(state));
+        dueQueue.dirty(DueQueue.Native, 0);
+
+        return { state, initialized: true };
+      };
+
       const ensureAlarm = Effect.fn("ThreadMaintenance.ensureAlarm")(function* () {
         yield* failpoint.hit("maintenance:ensure:before");
         const now = yield* Clock.currentTimeMillis;
 
         yield* runTransaction("ensure maintenance alarm", () =>
           ctx.storage.transaction(async (transaction) => {
-            const { state, initialized } = await readMaintenanceState(transaction);
+            const { state, initialized } = await readCurrentMaintenanceState(transaction);
 
             recoveryEventsPending = hasRecoveryEvents(state);
             const rows = dueQueue.read();
@@ -1220,7 +1239,7 @@ export class ThreadMaintenance extends Context.Service<
 
         const result = yield* runTransaction("begin maintenance pass", () =>
           ctx.storage.transaction(async (transaction) => {
-            const { state, initialized } = await readMaintenanceState(transaction);
+            const { state, initialized } = await readCurrentMaintenanceState(transaction);
 
             recoveryEventsPending = hasRecoveryEvents(state);
 
@@ -1358,7 +1377,7 @@ export class ThreadMaintenance extends Context.Service<
 
       const attemptSelected = Effect.fn("ThreadMaintenance.attemptSelected")(function* (
         selected: SubmissionWorkItem,
-        previousRetries: ReadonlyArray<BindingRetry>,
+        previousWaits: ReadonlyArray<BindingWait>,
         yieldAfter: DateTime.Utc,
         recovery: NativeRecovery,
       ): Effect.fn.Return<number, MaintenancePassFailure> {
@@ -1367,7 +1386,7 @@ export class ThreadMaintenance extends Context.Service<
         let bindingFailure: DurableBindingFailure | undefined;
 
         // A missing binding releases its slot after retaining this exact Submission
-        // and committing its retry deadline below.
+        // and committing its registry wait below.
         const settlement = recovery.faults.has(selected.threadId)
           ? Option.none()
           : yield* runtime.processThreadHead(selected.threadId, { yieldAfter }).pipe(
@@ -1378,33 +1397,24 @@ export class ThreadMaintenance extends Context.Service<
               }),
             );
 
-        const previous = previousRetries.find(
-          (retry) => retry.submissionId === selected.submissionId,
-        );
+        const previous = previousWaits.find((wait) => wait.submissionId === selected.submissionId);
 
-        let retry: BindingRetry | undefined;
-        let reportBindingFailure = false;
+        const wait =
+          bindingFailure === undefined
+            ? undefined
+            : BindingWait.make({
+                threadId: selected.threadId,
+                submissionId: selected.submissionId,
+                reportedAt: previous?.reportedAt ?? (yield* Clock.currentTimeMillis),
+              });
 
-        if (bindingFailure !== undefined) {
-          const now = yield* Clock.currentTimeMillis;
-          const attempts = Math.min(30, (previous?.attempts ?? 0) + 1);
-
-          reportBindingFailure = previous === undefined || now - previous.reportedAt >= 15 * 60_000;
-          retry = BindingRetry.make({
-            threadId: selected.threadId,
-            submissionId: selected.submissionId,
-            attempts,
-            notBefore: now + Math.min(60_000, 5_000 * 2 ** (attempts - 1)),
-            reportedAt: reportBindingFailure ? now : (previous?.reportedAt ?? now),
-          });
-        }
-        if (retry !== undefined || previous !== undefined) {
+        if (wait !== undefined || previous !== undefined) {
           // The Attempt released its Claim. Commit its binding wait (or clear) once,
           // before joining fallible auxiliary work. This local fact neither acknowledges
           // a generation nor changes the shared alarm.
           yield* failpoint.hit("maintenance:binding-retry:before");
           yield* runStorage(
-            "record submission binding retry",
+            "record submission binding wait",
             storage
               .transaction((transaction) =>
                 Effect.gen(function* () {
@@ -1415,32 +1425,35 @@ export class ThreadMaintenance extends Context.Service<
                       ? initialMaintenanceState()
                       : yield* Schema.decodeUnknownEffect(ThreadMaintenanceState)(encoded);
 
-                  const bindingRetries = [
-                    ...(state.bindingRetries ?? []).filter(
+                  const bindingWaits = [
+                    ...(state.bindingWaits ?? []).filter(
                       (entry) => entry.submissionId !== selected.submissionId,
                     ),
-                    ...(retry === undefined ? [] : [retry]),
+                    ...(wait === undefined ? [] : [wait]),
                   ];
 
                   yield* transaction.put(
                     MAINTENANCE_STATE_KEY,
                     yield* Schema.encodeEffect(ThreadMaintenanceState)(
-                      ThreadMaintenanceState.make({ ...state, bindingRetries }),
+                      ThreadMaintenanceState.make({ ...state, bindingWaits }),
                     ),
                   );
                 }),
               )
-              .pipe(Effect.mapError(alarmFailure("record submission binding retry"))),
+              .pipe(Effect.mapError(alarmFailure("record submission binding wait"))),
           );
           yield* failpoint.hit("maintenance:binding-retry:after");
         }
-        if (bindingFailure !== undefined) {
-          yield* reportBindingFailure
-            ? Effect.logError(
-                "Thread awaits a current agent binding; original work remains pending",
-                Cause.fail(bindingFailure),
-              )
-            : Effect.logDebug("Thread binding retry remains pending", Cause.fail(bindingFailure));
+        if (bindingFailure !== undefined && previous === undefined) {
+          yield* Effect.logError(
+            "Thread parked until its agent binding registry changes; original work remains pending",
+            Cause.fail(bindingFailure),
+          ).pipe(
+            Effect.annotateLogs({
+              threadId: selected.threadId,
+              submissionId: selected.submissionId,
+            }),
+          );
         }
 
         return Option.isSome(settlement) ? 1 : 0;
@@ -1588,10 +1601,18 @@ export class ThreadMaintenance extends Context.Service<
         const reports = recovery.reports;
         const recoveryFaults = recovery.faults;
 
+        const bindingWaits = yield* runTransaction(
+          "read binding waits",
+          async () => (await readMaintenanceState(ctx.storage)).state.bindingWaits ?? [],
+        );
+
+        const parked = new Set(bindingWaits.map((wait) => wait.submissionId));
+
         const waiting = (row: SubmissionWorkItem) =>
-          !recovery.pending.has(row.threadId) &&
-          !recoveryFaults.has(row.threadId) &&
-          stableExternalWait(row, reports);
+          parked.has(row.submissionId) ||
+          (!recovery.pending.has(row.threadId) &&
+            !recoveryFaults.has(row.threadId) &&
+            stableExternalWait(row, reports));
 
         const heads = new Map<ThreadId, SubmissionWorkItem>();
 
@@ -1659,7 +1680,7 @@ export class ThreadMaintenance extends Context.Service<
           ctx.storage.transaction(async (transaction) => {
             const { state } = await readMaintenanceState(transaction);
 
-            const retries = (state.bindingRetries ?? []).filter(
+            const waits = (state.bindingWaits ?? []).filter(
               (retry) => heads.get(retry.threadId)?.submissionId === retry.submissionId,
             );
 
@@ -1668,9 +1689,7 @@ export class ThreadMaintenance extends Context.Service<
                 !reserved.has(threadId) &&
                 !native.active.has(threadId) &&
                 !native.deferred.has(threadId) &&
-                !retries.some(
-                  (retry) => retry.threadId === threadId && retry.notBefore > selectionTime,
-                ),
+                !waits.some((wait) => wait.threadId === threadId),
             );
 
             const pivot = Math.max(
@@ -1723,7 +1742,7 @@ export class ThreadMaintenance extends Context.Service<
                 threadId <= state.lastRecoveredThreadId,
             );
 
-            return { selected, retries, backlog: [...after, ...before] };
+            return { selected, waits, backlog: [...after, ...before] };
           }),
         );
 
@@ -1745,7 +1764,7 @@ export class ThreadMaintenance extends Context.Service<
           native.active.set(
             threadId,
             yield* Effect.forkIn(
-              attemptSelected(selected, selection.retries, yieldAfter, recovery),
+              attemptSelected(selected, selection.waits, yieldAfter, recovery),
               native.scope,
             ),
           );
@@ -1761,7 +1780,6 @@ export class ThreadMaintenance extends Context.Service<
             dispatched: selection.selected.length > 0,
           };
         }
-        const retries = selection.retries;
 
         const remaining = yield* Stream.runCollect(ledger.scanNonterminal);
         const waitingHeads = new Map<ThreadId, boolean>();
@@ -1791,11 +1809,9 @@ export class ThreadMaintenance extends Context.Service<
         const nextEligible = [...recoveryFaults.values()]
           .map((fault) => fault.retryAt)
           .concat(
-            eligible.map(
-              (threadId) =>
-                retries.find((retry) => retry.submissionId === heads.get(threadId)?.submissionId)
-                  ?.notBefore ?? now,
-            ),
+            eligible
+              .filter((threadId) => !selection.waits.some((wait) => wait.threadId === threadId))
+              .map(() => now),
           );
 
         const retryDelay =
@@ -1837,7 +1853,7 @@ export class ThreadMaintenance extends Context.Service<
                 ...Struct.omit(state, ["retry"]),
                 processed,
                 nonterminal: remaining.length,
-                bindingRetries: (state.bindingRetries ?? []).filter((retry) =>
+                bindingWaits: (state.bindingWaits ?? []).filter((retry) =>
                   remaining.some((row) => row.submissionId === retry.submissionId),
                 ),
                 ...(autonomous && !progressed && canBackoff

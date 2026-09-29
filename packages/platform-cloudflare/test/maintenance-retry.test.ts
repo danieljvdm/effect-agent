@@ -5,7 +5,7 @@ import {
   threadStoreLayer,
 } from "@effect-agent/storage-cloudflare/do-thread-store";
 import { runInDurableObject } from "cloudflare:test";
-import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect";
+import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer, Logger, Option, Stream } from "effect";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { ProducerId } from "effect-agent/records";
 import {
@@ -16,7 +16,6 @@ import {
   SubmissionLookupById,
   LedgerError,
 } from "effect-agent/submission-ledger";
-import { ThreadStore, ThreadTailRequest } from "effect-agent/thread-store";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
@@ -33,17 +32,13 @@ import { CloudflareDurableRuntimeConfig } from "../src/CloudflareConfig.ts";
 import { CloudflareThreadClient } from "../src/CloudflareThreadClient.ts";
 import {
   maintenanceClocks,
+  maintenanceBindings,
   decodeThreadId,
   makeTestBindings,
   plannerDefinition,
   submitOptions,
 } from "./fixtures.ts";
-import { laneRows, readCanonical, runClient, scheduledAlarm, stubFor } from "./harness.ts";
-
-const Generation = Schema.Struct({
-  dirty: Schema.BigIntFromString,
-  processed: Schema.BigIntFromString,
-});
+import { readCanonical, runClient, scheduledAlarm, stubFor } from "./harness.ts";
 
 describe("maintenance retry deadlines", () => {
   // Regression: https://github.com/danieljvdm/effect-agent/commit/e1c3ce677e82589a4b133840e640464472ec2c3f
@@ -427,278 +422,182 @@ describe("maintenance retry deadlines", () => {
       ),
   );
 
-  // A missing root agent must not repeatedly claim and release the same receipt behind a
-  // 50ms pre-arm, even when auxiliary work fails or the Object is evicted.
-  // Native SQLite and Object eviction use a wall-clock budget; deadlines use TestClock.
-  it("retains root binding backoff across auxiliary failures, ensureAlarm and eviction", ({
-    signal,
-  }) => {
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const thread = `maintenance-retry-${crypto.randomUUID()}`;
+  // Human-requested regression: zero and duplicate bindings must park accepted work across
+  // Object eviction and auxiliary failure, report once, and resume when registration changes.
+  for (const unavailable of ["missing", "duplicate"] as const) {
+    it(`parks a ${unavailable} binding until the registry changes`, async ({ signal }) => {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const thread = `maintenance-binding-${crypto.randomUUID()}`;
 
-        yield* TestClock.setTime(Date.now() + 86_400_000);
-        maintenanceClocks.set(thread, yield* Clock.Clock);
-        yield* Effect.addFinalizer(() => Effect.sync(() => maintenanceClocks.delete(thread)));
+          yield* TestClock.setTime(Date.now() + 86_400_000);
+          maintenanceClocks.set(thread, yield* Clock.Clock);
+          yield* Effect.addFinalizer(() => Effect.sync(() => maintenanceClocks.delete(thread)));
 
-        const receipt = yield* Effect.promise(() =>
-          runClient(
-            CloudflareThreadClient.use((client) =>
-              client.submit(
-                { definition: plannerDefinition },
-                { question: "retry the original contract", ref: thread },
-                submitOptions(thread, thread),
-              ),
-            ),
-          ),
-        );
-
-        const canonicalBefore = yield* Effect.promise(() => readCanonical(thread));
-        let available = false;
-        let hostDeadline: number | undefined;
-        let hostDrains = 0;
-        let hostFailure = false;
-        let activeHostResources = 0;
-
-        // Rebuild real runtime/maintenance services over this Object's SQLite adapters.
-        // Local ports let this physical owner exercise multiple logical Threads, rather
-        // than the standard fixture's one-Thread-per-Object transport. Keep its native
-        // SQL connection, clock and mutation gate; never rewrite stored submissions.
-        const run = <A, E>(
-          body: Effect.Effect<A, E, ThreadMaintenance | DurableAgentRuntime | ThreadMutationGate>,
-        ) =>
-          Effect.promise(() =>
-            runInDurableObject(stubFor(thread), (instance, state) =>
-              instance[DurableObject.RunSymbol](
-                Effect.gen(function* () {
-                  const bindings = yield* makeTestBindings;
-                  const config = yield* CloudflareDurableRuntimeConfig;
-
-                  const deployed = bindings.filter(
-                    (binding) => available || binding.agentId !== plannerDefinition.id,
-                  );
-
-                  const ports = Layer.mergeAll(threadStoreLayer, submissionLedgerLayer).pipe(
-                    Layer.provide(
-                      storageConfigLayer({
-                        storage: state.storage,
-                        ownershipLeaseDuration: config.ownershipLeaseDuration,
-                      }),
-                    ),
-                    Layer.provide(DoStorageFailpoint.layer),
-                  );
-
-                  const maintenance = Layer.fresh(ThreadMaintenance.layer).pipe(
-                    Layer.provideMerge(DurableAgentRuntime.layerWithBindings(deployed)),
-                    Layer.provide(ports),
-                  );
-
-                  return yield* body.pipe(
-                    Effect.provide(maintenance),
-                    Effect.provideService(ThreadMaintenanceFailpoint, {
-                      hit: (location) =>
-                        Effect.sync(() => {
-                          // #500 owns hook resources until event retirement. Backoff follows cleanup.
-                          if (location === "maintenance:retry:before")
-                            expect(activeHostResources).toBe(0);
-                        }),
-                    }),
-                    Effect.provideService(CloudflareDurableRuntimeConfig, {
-                      ...config,
-                      alarmBackoffBase: 100,
-                      alarmBackoffCap: 100,
-                    }),
-                    Effect.provideService(ThreadHostMaintenance, {
-                      lanes: [
-                        {
-                          dispatchTimeoutMillis: 1_000,
-                          id: "test:host",
-                          run: Effect.gen(function* () {
-                            yield* Effect.acquireRelease(
-                              Effect.sync(() => {
-                                activeHostResources++;
-                              }),
-                              () =>
-                                Effect.sync(() => {
-                                  activeHostResources--;
-                                }),
-                            );
-                            if (hostFailure)
-                              return yield* DurableAlarmError.make({
-                                operation: "test host failure",
-                                message: "host delivery remains pending",
-                              });
-                            if (hostDeadline !== undefined) {
-                              hostDrains++;
-                              hostDeadline = undefined;
-                            }
-
-                            return Option.fromUndefinedOr(hostDeadline);
-                          }),
-                        },
-                      ],
-                    }),
-                    Effect.exit,
-                  );
-                }),
+          const receipt = yield* Effect.promise(() =>
+            runClient(
+              CloudflareThreadClient.use((client) =>
+                client.submit(
+                  { definition: plannerDefinition },
+                  { question: "preserve the accepted contract", ref: thread },
+                  submitOptions(thread, thread),
+                ),
               ),
             ),
           );
 
-        const pass = ThreadMaintenance.use((maintenance) => maintenance.pass);
-        const ensure = ThreadMaintenance.use((maintenance) => maintenance.ensureAlarm);
+          const canonicalBefore = yield* Effect.promise(() => readCanonical(thread));
 
-        const snapshot = (submissionId = receipt.submissionId) =>
-          Effect.promise(() =>
+          yield* Effect.addFinalizer(() => Effect.sync(() => maintenanceBindings.delete(thread)));
+          let available = false;
+          let hostFailure = true;
+          let hostDrains = 0;
+          const errors: string[] = [];
+
+          const logger = Logger.make((options) => {
+            if (options.logLevel === "Error") errors.push(String(options.message));
+          });
+
+          const run = <A, E>(
+            body: Effect.Effect<A, E, ThreadMaintenance | DurableAgentRuntime | ThreadMutationGate>,
+          ) =>
+            Effect.promise(() =>
+              runInDurableObject(stubFor(thread), (instance, state) =>
+                instance[DurableObject.RunSymbol](
+                  Effect.gen(function* () {
+                    const bindings = yield* makeTestBindings;
+                    const config = yield* CloudflareDurableRuntimeConfig;
+
+                    const planner = bindings.find(
+                      (binding) => binding.agentId === plannerDefinition.id,
+                    )!;
+
+                    const deployed = available
+                      ? bindings
+                      : unavailable === "missing"
+                        ? bindings.filter((binding) => binding.agentId !== plannerDefinition.id)
+                        : [...bindings, planner];
+
+                    maintenanceBindings.set(thread, deployed);
+
+                    const ports = Layer.mergeAll(threadStoreLayer, submissionLedgerLayer).pipe(
+                      Layer.provide(
+                        storageConfigLayer({
+                          storage: state.storage,
+                          ownershipLeaseDuration: config.ownershipLeaseDuration,
+                        }),
+                      ),
+                      Layer.provide(DoStorageFailpoint.layer),
+                    );
+
+                    return yield* body.pipe(
+                      Effect.provide(
+                        Layer.fresh(ThreadMaintenance.layer).pipe(
+                          Layer.provideMerge(DurableAgentRuntime.layerWithBindings(deployed)),
+                          Layer.provide(ports),
+                        ),
+                      ),
+                      Effect.provideService(CloudflareDurableRuntimeConfig, {
+                        ...config,
+                        alarmBackoffBase: 100,
+                        alarmBackoffCap: 100,
+                      }),
+                      Effect.provideService(ThreadHostMaintenance, {
+                        lanes: [
+                          {
+                            dispatchTimeoutMillis: 1_000,
+                            id: "test:host",
+                            run: Effect.gen(function* () {
+                              hostDrains++;
+                              if (hostFailure)
+                                return yield* DurableAlarmError.make({
+                                  operation: "test host failure",
+                                  message: "host delivery remains pending",
+                                });
+
+                              return Option.none();
+                            }),
+                          },
+                        ],
+                      }),
+                      Effect.provide(Logger.layer([logger])),
+                      Effect.exit,
+                    );
+                  }),
+                ),
+              ),
+            );
+
+          const pass = ThreadMaintenance.use((maintenance) => maintenance.pass);
+          const ensure = ThreadMaintenance.use((maintenance) => maintenance.ensureAlarm);
+
+          const snapshot = Effect.promise(() =>
             runInDurableObject(stubFor(thread), (instance) =>
               instance[DurableObject.RunSymbol](
-                Effect.gen(function* () {
-                  const ledger = yield* SubmissionLedger;
-                  const store = yield* ThreadStore;
-
-                  const snapshot = yield* ledger.loadRecoverySnapshot(
-                    RecoverySnapshotRequest.make({ submissionId }),
-                  );
-
-                  const tail = yield* store.inspectTail(
-                    ThreadTailRequest.make({ threadId: decodeThreadId(thread) }),
-                  );
-
-                  return { ...snapshot, producerEpoch: tail.producerEpoch };
-                }),
+                SubmissionLedger.use((ledger) =>
+                  ledger.loadRecoverySnapshot(
+                    RecoverySnapshotRequest.make({ submissionId: receipt.submissionId }),
+                  ),
+                ),
               ),
             ),
           );
 
-        const evict = () =>
-          Effect.promise(() =>
+          const evict = Effect.promise(() =>
             runInDurableObject(stubFor(thread), (_instance, state) => {
-              state.abort("maintenance retry restart");
+              state.abort("binding registry restart");
             }).catch(() => undefined),
           );
 
-        const refused = yield* run(
-          DurableAgentRuntime.use((runtime) => runtime.processThreadHead(decodeThreadId(thread))),
-        );
-
-        expect(
-          Exit.isFailure(refused) ? Cause.pretty(refused.cause) : "unexpected execution",
-        ).toContain("BindingUnavailable");
-        expect((yield* snapshot()).ownership).toBeUndefined();
-
-        // Constructor repair and auxiliary failures must preserve the earned binding wait.
-        const delays = [5_000];
-
-        for (const [attempt, delay] of delays.entries()) {
-          const before = yield* Clock.currentTimeMillis;
-
-          hostFailure = true;
           yield* run(ThreadMutationGate.use((gate) => gate.schedule("test:host", 0)));
-          const failed = yield* run(pass);
-
-          expect(Exit.isFailure(failed) ? Cause.pretty(failed.cause) : "success").toContain(
-            "host delivery remains pending",
-          );
-          const afterBindingFailure = yield* snapshot();
-
-          expect(afterBindingFailure.ownership).toBeUndefined();
-          const genericRetry = yield* Effect.promise(() => scheduledAlarm(thread));
-
-          // An auxiliary error must retain the longer binding wait already earned by the
-          // selected head. A second failed event at the generic deadline cannot claim it again.
-          expect(genericRetry).toBeGreaterThanOrEqual(before + 50);
-          expect(genericRetry).toBeLessThanOrEqual(before + 100);
-          yield* evict();
-          yield* run(ensure);
-          expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBe(genericRetry);
-          yield* TestClock.adjust(genericRetry! - before);
           expect(Exit.isFailure(yield* run(pass))).toBe(true);
-          expect(yield* snapshot()).toEqual(afterBindingFailure);
+          const parked = yield* snapshot;
+
+          expect(parked.ownership).toBeUndefined();
+          expect(parked.submission.state).toBe("ready");
+          expect(errors.filter((message) => message.includes("binding"))).toHaveLength(1);
+
           hostFailure = false;
-          const nextRetry = yield* Effect.promise(() => scheduledAlarm(thread));
-
-          yield* TestClock.adjust(nextRetry! - (yield* Clock.currentTimeMillis));
+          yield* TestClock.adjust("1 second");
           expect(Exit.isSuccess(yield* run(pass))).toBe(true);
-          expect(yield* snapshot()).toEqual(afterBindingFailure);
-          expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBe(before + delay);
+          expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBeNull();
+          expect(yield* snapshot).toEqual(parked);
+          yield* evict;
           yield* run(ensure);
-          yield* evict();
-          yield* run(ensure);
-          expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBe(before + delay);
-          const afterFailure = yield* snapshot();
+          expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBeNull();
 
-          // A host deadline and a forced redelivery do not run native recovery early.
-          const hostNow = yield* Clock.currentTimeMillis;
+          // Unrelated host delivery and a redelivered alarm cannot retry the same registry.
+          yield* TestClock.adjust("1 hour");
+          yield* run(ThreadMutationGate.use((gate) => gate.schedule("test:host", 0)));
+          expect(Exit.isSuccess(yield* run(pass))).toBe(true);
+          expect(Exit.isSuccess(yield* run(pass))).toBe(true);
+          expect(yield* snapshot).toEqual(parked);
+          expect(yield* Effect.promise(() => readCanonical(thread))).toEqual(canonicalBefore);
+          expect(errors.filter((message) => message.includes("binding"))).toHaveLength(1);
+          expect(hostDrains).toBeGreaterThan(1);
+          expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBeNull();
 
-          hostDeadline = attempt === 0 ? before : before + 1_000;
-          yield* run(ThreadMutationGate.use((gate) => gate.schedule("test:host", hostDeadline!)));
+          available = true;
+          yield* evict;
           yield* run(ensure);
-          expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBe(
-            attempt === 0 ? hostNow + 5 : hostDeadline,
+          expect(yield* Effect.promise(() => scheduledAlarm(thread))).not.toBeNull();
+          yield* TestClock.adjust("1 second");
+          expect(Exit.isSuccess(yield* run(pass))).toBe(true);
+
+          const settlement = yield* Effect.promise(() =>
+            runClient(CloudflareThreadClient.use((client) => client.awaitSettlement(receipt))),
           );
-          yield* TestClock.adjust(before + 1_000 - (yield* Clock.currentTimeMillis));
-          expect(Exit.isSuccess(yield* run(pass))).toBe(true);
-          expect(yield* snapshot()).toEqual(afterFailure);
-          expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBe(before + delay);
-          expect(Exit.isSuccess(yield* run(pass))).toBe(true);
-          expect(yield* snapshot()).toEqual(afterFailure);
-          yield* TestClock.adjust(before + delay - (yield* Clock.currentTimeMillis));
-        }
-        expect(hostDrains).toBe(delays.length);
-        expect(yield* Effect.promise(() => readCanonical(thread))).toEqual(canonicalBefore);
-        expect((yield* Effect.promise(() => laneRows(thread)))[0]?.state).not.toBe("settled");
 
-        const generation = yield* Effect.promise(() =>
-          runInDurableObject(stubFor(thread), async (_instance, state) =>
-            Schema.decodeUnknownSync(Generation)(
-              await state.storage.get("effect-agent:thread-maintenance:v1"),
-            ),
-          ),
-        );
-
-        expect(generation.dirty).toBeGreaterThan(generation.processed);
-
-        hostFailure = true;
-        yield* run(ThreadMutationGate.use((gate) => gate.schedule("test:host", 0)));
-
-        available = true;
-        const resumed = yield* run(pass);
-
-        expect(Exit.isFailure(resumed) ? Cause.pretty(resumed.cause) : "success").toContain(
-          "host delivery remains pending",
-        );
-
-        const retainedRetries = yield* Effect.promise(() =>
-          runInDurableObject(stubFor(thread), async (_instance, state) =>
-            Schema.decodeUnknownSync(
-              Schema.Struct({
-                bindingRetries: Schema.Array(Schema.Struct({ submissionId: Schema.String })),
-              }),
-            )(await state.storage.get("effect-agent:thread-maintenance:v1")),
-          ),
-        );
-
-        // An available agent clears its prior binding wait even if the host join fails.
-        expect(retainedRetries.bindingRetries.map((retry) => retry.submissionId)).not.toContain(
-          receipt.submissionId,
-        );
-
-        const settlement = yield* Effect.promise(() =>
-          runClient(CloudflareThreadClient.use((client) => client.awaitSettlement(receipt))),
-        );
-
-        expect(settlement.submissionId).toBe(receipt.submissionId);
-        expect(settlement.outcome).toBe("completed");
-        hostFailure = false;
-        const finalRetry = yield* Effect.promise(() => scheduledAlarm(thread));
-
-        yield* TestClock.adjust(finalRetry! - (yield* Clock.currentTimeMillis));
-        expect(Exit.isSuccess(yield* run(pass))).toBe(true);
-        expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBeNull();
-      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
-      { signal },
-    );
-  }, 20_000);
+          expect(settlement.submissionId).toBe(receipt.submissionId);
+          expect(settlement.outcome).toBe("completed");
+          expect((yield* snapshot).submission.agentDigests).toEqual(parked.submission.agentDigests);
+          expect((yield* snapshot).submission.receiptId).toBe(parked.submission.receiptId);
+          expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBeNull();
+        }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+        { signal },
+      );
+    }, 20_000);
+  }
 
   it("retains exponential no-progress backoff while preserving a live claim", () =>
     Effect.runPromise(

@@ -11114,6 +11114,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   }).pipe(Effect.provideService(WorkerRuntime, workerRuntime));
 
   return DurableAgentRuntime.of({
+    bindingRegistryKey: yield* withCrypto(
+      digestJson(
+        registeredBindings
+          .map((binding) => JSON.stringify([binding.agentId, binding.digests]))
+          .sort(),
+      ),
+    ).pipe(Effect.orDie),
     workerHost: workerRuntime.acquire,
     messagingHost: messagingRuntime.acquire,
     submitRegistered,
@@ -11205,6 +11212,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 export class DurableAgentRuntime extends Context.Service<
   DurableAgentRuntime,
   {
+    /** Stable registration identity for hosts parking unavailable bindings; never an admission authority. */
+    readonly bindingRegistryKey: string;
     /** Acquire an authenticated source Thread facet; its References confer no authority. */
     readonly workerHost: (request: {
       readonly sourceThreadId: ThreadId;

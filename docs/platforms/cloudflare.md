@@ -291,14 +291,13 @@ prevents another claim. `explainThread` exposes parked operations for authorized
 
 Failed and no-progress passes preserve the dirty generation and use jittered exponential
 backoff up to `alarmBackoffCap` (5 seconds by default).
-Missing agent bindings wait 5, 10, 20, 40, then 60 seconds between attempts;
-further attempts remain one minute apart. The retry deadline survives eviction:
-`ensureAlarm` and early alarm deliveries cannot accelerate native recovery for the same
-generation. A newer durable mutation can wake it immediately, and host deadlines remain
-independently serviceable. Each blocked Thread retains its own waiting period, so it cannot
-monopolize other Threads. Binding refusals still fail closed and retain the original submission.
-There is no terminal retry-count limit: dropping the alarm would strand accepted work after a
-later deployment that registers the agent. An obsolete pending tool operation does not wait for
+Missing or duplicate agent bindings park the original submission and report the refusal once.
+The wait survives eviction and does not schedule an alarm. Unrelated host work and aborts
+remain serviceable. On the next invocation with changed registered identities or definition
+digests, constructor maintenance clears binding waits and schedules one native pass. A dormant
+Object still needs an invocation after deployment; deployment alone does not invoke it.
+The original receipt, admission evidence and unresolved tool or child obligations remain intact.
+An obsolete pending tool operation does not wait for
 historical code: it receives an unavailable result when no mutation was dispatched, or stays
 unknown when an external effect may have occurred.
 
