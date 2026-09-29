@@ -138,8 +138,9 @@ packages.
 - Contributor agent skills are repository tooling. They are not runtime Skill definitions and
   must not be imported by `@effect-agent/*`.
 - Before handoff, run `vp run ready`.
-- For live model calls, load provider keys through the Infisical machine identity in
-  [live credentials](docs/TOOLCHAIN.md#live-credentials). Do not ask for a personal Infisical login.
+- For live model calls, follow [live credentials](docs/TOOLCHAIN.md#live-credentials). When
+  `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID` is set, load keys through that machine identity rather than
+  asking for a personal Infisical login; otherwise use provider keys already in the environment.
 - For lockfile-only PR fixes, push after `vp install --frozen-lockfile` passes; finish full validation afterward.
 
 ## Change discipline

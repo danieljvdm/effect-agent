@@ -151,18 +151,20 @@ CI runs the adapter against Postgres 16 and 18, and the certification suite agai
 ## Live credentials
 
 Local live model calls and evaluations read provider keys, such as `OPENAI_API_KEY`, from the
-Infisical project in `.infisical.json`, environment `dev`. Use the maintainer machine identity, not
-a personal `infisical login`: a personal session can select an organization that does not own the
-project and then fails with 403. Maintainer shells provide the identity as
-`INFISICAL_UNIVERSAL_AUTH_CLIENT_ID` and `INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET`. A machine identity
-needs an explicit project ID:
+environment. Export them directly, or load them from the project's Infisical environment if you
+have been granted its machine identity. Infisical access is selective; not every maintainer has it.
+
+With access, your shell provides the identity as `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID` and
+`INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET`. Use it rather than a personal `infisical login`, which can
+select an organization that does not own the project and then fails with 403. A machine identity
+needs an explicit project ID for the project in `.infisical.json`, environment `dev`:
 
 ```sh
 export INFISICAL_TOKEN="$(infisical login --method=universal-auth --silent --plain)"
 infisical run --projectId="$(bun -p 'require("./.infisical.json").workspaceId')" --env=dev -- <command>
 ```
 
-The environment holds model provider keys only. The hosted checkout proof also needs the Cloudflare
+That environment holds model provider keys only. The hosted checkout proof also needs the Cloudflare
 values listed in [its README](../tooling/browser-run-worker-proof/README.md#run). CI reads repository
 secrets instead.
 
