@@ -211,6 +211,14 @@ export interface RunContextRequest {
    */
   readonly source: Prompt.Prompt;
   /**
+   * Durable coordinator's exact prior-Run prefix length in `source`. A preparation hook
+   * can replace `source.content.slice(0, priorRunPrefixLength)` with application context
+   * while preserving this Run's instructions, input, updates and recovered Tool exchanges.
+   * This is a model-only transformation: canonical records and retry receipts are retained.
+   * Absent for non-durable Runs; never infer this boundary from message roles or text.
+   */
+  readonly priorRunPrefixLength?: number | undefined;
+  /**
    * The exact model-visible final-output contract the engine appends to the
    * prepared prompt after this hook returns (RUN-028), or
    * undefined when the definition's output Schema cannot render to JSON

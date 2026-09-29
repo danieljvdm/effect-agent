@@ -5541,23 +5541,30 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         };
       };
 
-      const resumeContext: RunContextHook<never, never> = {
-        prepare: ({ source }) =>
+      const resumeContext = {
+        prepare: ({ source }: { readonly source: Prompt.Prompt }) =>
           Ref.get(stateRef).pipe(
-            Effect.map((state) => ({
-              prompt: Prompt.fromMessages([
-                ...instructionView(
-                  resumeProjection.prompt.content,
-                  source.content
-                    .slice(0, state.baseLen)
-                    .filter((message) => message.role === "system"),
-                  true,
-                ).messages,
-                ...source.content.slice(state.baseLen ?? source.content.length),
-              ]),
-            })),
+            Effect.map((state) => {
+              const view = instructionView(
+                resumeProjection.prompt.content,
+                source.content
+                  .slice(0, state.baseLen)
+                  .filter((message) => message.role === "system"),
+                true,
+              );
+
+              return {
+                prompt: Prompt.fromMessages([
+                  ...view.messages,
+                  ...source.content.slice(state.baseLen ?? source.content.length),
+                ]),
+                priorRunPrefixLength: view.prefixLength(
+                  resumeProjection.historyBefore.content.length,
+                ),
+              };
+            }),
           ),
-      };
+      } satisfies RunContextHook<never, never>;
 
       const externalContext = runContextPreparation.hook;
 
@@ -5569,13 +5576,17 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           : {
               prepare: (request) =>
                 (journal.committedTurns === 0
-                  ? Effect.succeed({ prompt: request.source })
+                  ? Effect.succeed({
+                      prompt: request.source,
+                      priorRunPrefixLength: journal.historyBefore.content.length,
+                    })
                   : resumeContext.prepare(request)
                 ).pipe(
-                  Effect.flatMap(({ prompt }) =>
+                  Effect.flatMap(({ prompt, priorRunPrefixLength }) =>
                     externalContext.prepare({
                       ...request,
                       source: prompt,
+                      priorRunPrefixLength,
                     }),
                   ),
                 ),
