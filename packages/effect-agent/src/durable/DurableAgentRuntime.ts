@@ -6236,31 +6236,33 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           return yield* renderInputPrompt(inputPrompt, decodedInput, encodedInput);
         });
 
+      // Empty successful drains leave Tool results and RunCompleted in one batch.
+      // A join or interrupted continuation must still retain already returned results.
+      const preserveToolResults = Effect.gen(function* () {
+        const state = yield* Ref.get(stateRef);
+
+        if (
+          state.pendingTurn !== undefined &&
+          knownIds.has(modelResponseRecordId(runId, state.pendingTurn.turn))
+        )
+          yield* commitPendingTurn;
+      });
+
       const input: RunInputHook<
         CoordinatorHalt | Agent.Failure<typeof agent>,
         Agent.DefinitionRequirements<(typeof agent)["definition"]>
       > = {
         drain: (policy) =>
           Effect.gen(function* () {
-            // Keep an empty drain's completion result and RunCompleted atomic. If this
-            // boundary joins input or fails, retain returned Tool results before leaving
-            // the Attempt so recovery never treats completed calls as unknown.
-            const preserveToolResults = Effect.gen(function* () {
-              const state = yield* Ref.get(stateRef);
-
-              if (
-                state.pendingTurn !== undefined &&
-                knownIds.has(modelResponseRecordId(runId, state.pendingTurn.turn))
-              )
-                yield* commitPendingTurn;
-            });
-
             const joinedInputs = yield* recordHalt(
               Effect.gen(function* () {
                 const limit = policy === "one" ? 1 : MAX_JOIN_DRAIN;
 
-                const joinedInputs: Array<Pick<UserInputRecorded, "input" | "messageAdmission">> =
-                  [];
+                const joinedInputs: Array<
+                  Pick<UserInputRecorded, "input" | "messageAdmission"> & {
+                    readonly rendered?: Prompt.RawInput;
+                  }
+                > = [];
 
                 if (joinBacklog === undefined) {
                   const hostSnapshot = yield* ledger.loadRecoverySnapshot(
@@ -6334,6 +6336,27 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                       );
                       continue;
                     }
+
+                    const payload = {
+                      input: claim.inputPayload,
+                      ...(claimSnapshot.submission.messageAdmission === undefined
+                        ? {}
+                        : { messageAdmission: claimSnapshot.submission.messageAdmission }),
+                    };
+
+                    const rendered = yield* Effect.result(renderJoinedInput(payload));
+
+                    if (Result.isFailure(rendered)) {
+                      // The rejecting input gets its own Run and normal typed failure.
+                      // Leave it and the unconsumed suffix ready, preserving queue order
+                      // and preventing one invalid prompt from failing unrelated receipts.
+                      for (const remaining of claims.slice(claims.indexOf(claim))) {
+                        yield* ledger.revertJoining(
+                          RevertJoiningRequest.make({ submissionId: remaining.submissionId }),
+                        );
+                      }
+                      break;
+                    }
                     yield* preserveToolResults;
                     const recordId = submissionInputRecordId(claim.submissionId);
                     let sequence: CanonicalSequence;
@@ -6383,10 +6406,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                     );
                     deliveredJoinInputs.add(claim.submissionId);
                     joinedInputs.push({
-                      input: claim.inputPayload,
-                      ...(claimSnapshot.submission.messageAdmission === undefined
-                        ? {}
-                        : { messageAdmission: claimSnapshot.submission.messageAdmission }),
+                      ...payload,
+                      rendered: rendered.success,
                     });
                   }
                 }
@@ -6398,7 +6419,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             );
 
             return yield* Effect.forEach(joinedInputs, (joinedInput) =>
-              renderJoinedInput(joinedInput).pipe(
+              (joinedInput.rendered === undefined
+                ? renderJoinedInput(joinedInput)
+                : Effect.succeed(joinedInput.rendered)
+              ).pipe(
                 Effect.map((input): RunInputCommand => ({
                   kind: "steering",
                   input,
@@ -7612,6 +7636,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             }),
           ),
       ).pipe(
+        Effect.onExit((exit) => (Exit.hasInterrupts(exit) ? preserveToolResults : Effect.void)),
         // Retain while the Attempt's services, claim renewal and abort watcher are still live.
         // A failed retention halts the coordinator; it is not a failed Tool or a safe suspension.
         Effect.tapCause((cause) =>

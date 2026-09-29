@@ -22,6 +22,7 @@ import {
   Option,
   Ref,
   Schema,
+  SchemaGetter,
   Stream,
 } from "effect";
 import * as Agent from "effect-agent/agent";
@@ -366,6 +367,205 @@ layer(Layer.mergeAll(baseLayer, publicationStorageLayer))("asynchronous lifecycl
   );
 });
 layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
+  // Regression: 625c5595 claims follow-ups even when the completing Run has no turns left.
+  it.effect("leaves a last-turn follow-up ready for its own successful Run", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+
+      const toolkit = Toolkit.make(
+        Tool.make("answer", { parameters: Schema.Struct({}), success: Schema.String }),
+      );
+
+      const scripted = yield* makeScriptedModel((call) => [
+        { type: "tool-call", id: `answer-${call}`, name: "answer", params: {} },
+        { type: "finish", reason: "tool-calls", usage },
+      ]);
+
+      const agent = Agent.withModel(
+        Agent.make("last-turn-join", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: Schema.String,
+          instructions: "Answer the question.",
+          toolkit,
+          completion: { tool: "answer", required: true, project: ({ result }) => result },
+          policy: { maxTurns: 1, maxToolCalls: 1, onExhaustion: "fail" },
+        }),
+        scripted.model,
+      );
+
+      const thread = "last-turn-join";
+
+      const host = yield* runtime.submit(
+        agent,
+        { question: "initial" },
+        submitOptions(thread, "host"),
+      );
+
+      let followUp: typeof host | undefined;
+
+      const settlements = yield* runtime.processThread(agent, host.threadId).pipe(
+        Effect.provide(
+          toolkit.toLayer({
+            answer: () =>
+              Effect.gen(function* () {
+                if (followUp === undefined) {
+                  followUp = yield* runtime
+                    .submit(agent, { question: "later" }, submitOptions(thread, "later"))
+                    .pipe(Effect.orDie);
+                }
+
+                return "answered";
+              }),
+          }),
+        ),
+      );
+
+      expect(settlements.map((settled) => settled.outcome)).toEqual(["completed", "completed"]);
+      expect((yield* runtime.awaitSettlement(host)).outcome).toBe("completed");
+      expect((yield* runtime.awaitSettlement(followUp!)).outcome).toBe("completed");
+      expect(scripted.prompts).toHaveLength(2);
+      const records = recordsById(yield* readLog(thread));
+      const later = records.get(`settlement:${followUp!.submissionId}`)?.record.payload;
+
+      expect(later?._tag === "SubmissionSettled" ? later.runId : undefined).toBe(
+        runIdForSubmission(followUp!.submissionId),
+      );
+    }),
+  );
+
+  // Regression: 625c5595 joins a whole batch before rendering a potentially invalid prompt.
+  it.effect("keeps a valid queued input runnable after a rejected joining prompt", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const scripted = yield* makeScriptedModel(() => finalParts('"answered"'));
+
+      const agent = Agent.withModel(
+        Agent.make("rejected-join", {
+          input: Schema.Struct({ question: Schema.String }),
+          inputPrompt: ({ question }) =>
+            question === "invalid" ? Effect.fail("Rejected input") : Effect.succeed(question),
+          output: Schema.String,
+          instructions: "Answer the question as JSON.",
+          toolkit: Toolkit.empty,
+          policy: { maxTurns: 4, maxToolCalls: 2 },
+        }),
+        scripted.model,
+      );
+
+      const thread = "rejected-join";
+
+      const host = yield* runtime.submit(
+        agent,
+        { question: "initial" },
+        submitOptions(thread, "host"),
+      );
+
+      const invalid = yield* runtime.submit(
+        agent,
+        { question: "invalid" },
+        submitOptions(thread, "invalid"),
+      );
+
+      const valid = yield* runtime.submit(
+        agent,
+        { question: "valid later input" },
+        submitOptions(thread, "valid"),
+      );
+
+      yield* runtime.processThread(agent, host.threadId);
+      expect((yield* runtime.awaitSettlement(valid)).outcome).toBe("completed");
+      expect((yield* runtime.awaitSettlement(invalid)).outcome).toBe("failed");
+      expect(
+        scripted.prompts.some((prompt) => promptOccurrences(prompt, "valid later input") === 1),
+      ).toBe(true);
+    }),
+  );
+
+  // Regression: d2473211 only retains returned results if cancellation happens inside drain.
+  it.effect("retains a returned completion tool when disposition encoding is interrupted", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const encoding = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+
+      const disposition = Schema.String.pipe(
+        Schema.decodeTo(Schema.String, {
+          decode: SchemaGetter.passthrough(),
+          encode: SchemaGetter.transformEffect((value) =>
+            Deferred.succeed(encoding, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as(value),
+            ),
+          ),
+        }),
+      );
+
+      const toolkit = Toolkit.make(
+        Tool.make("answer", { parameters: Schema.Struct({}), success: Schema.String }),
+      );
+
+      const scripted = yield* makeScriptedModel((call) =>
+        call === 0
+          ? [
+              { type: "tool-call", id: "answer-0", name: "answer", params: {} },
+              { type: "finish", reason: "tool-calls", usage },
+            ]
+          : finalParts('"answered"'),
+      );
+
+      const agent = Agent.withModel(
+        Agent.make("interrupted-completion", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: Schema.String,
+          instructions: "Answer the question.",
+          toolkit,
+          completion: { tool: "answer", project: ({ result }) => result },
+          runDisposition: { schema: disposition, fromOutput: () => "completed" },
+          policy: { maxTurns: 4, maxToolCalls: 4 },
+        }),
+        scripted.model,
+      );
+
+      const thread = "interrupted-completion";
+
+      const host = yield* runtime.submit(
+        agent,
+        { question: "initial" },
+        submitOptions(thread, "host"),
+      );
+
+      let calls = 0;
+
+      yield* Effect.gen(function* () {
+        const worker = yield* Effect.forkChild(runtime.processThread(agent, host.threadId));
+
+        yield* Deferred.await(encoding);
+        yield* Fiber.interrupt(worker);
+        const records = yield* readLog(thread);
+
+        expect(
+          records.filter(({ record }) => record.payload._tag === "ToolCallSettled"),
+        ).toHaveLength(1);
+        expect(calls).toBe(1);
+        yield* Deferred.succeed(release, undefined);
+        yield* runtime.processThread(agent, host.threadId);
+        expect((yield* runtime.awaitSettlement(host)).outcome).toBe("completed");
+        expect(calls).toBe(1);
+      }).pipe(
+        Effect.provide(
+          toolkit.toLayer({
+            answer: () =>
+              Effect.sync(() => {
+                calls++;
+
+                return "answered";
+              }),
+          }),
+        ),
+      );
+    }),
+  );
+
   // https://github.com/danieljvdm/effect-agent/blob/e40e0574/packages/effect-agent/src/engine/internal/agent-runtime.ts
   // A live provider cannot deterministically admit input inside the completion Tool boundary.
   it.effect(

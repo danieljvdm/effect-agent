@@ -278,9 +278,11 @@ prepare context
 
 `run` and `stream` use the same loop. Completion tools also drain steering after
 their results commit: new input continues the active run at its next model turn.
+When the completing run has exhausted its budget, follow-ups stay queued for a new run.
 Durable runs drain the ready input prefix together, subject to the host ledger's
 joining policy and the runtime batch bound. Each joined input retains its receipt;
-only a later host response covers it.
+only a later host response covers it. Inputs rejected by the prompt callback remain
+queued for their own run instead of failing the host or later queued inputs.
 
 ## Add per-run hooks {#operational-hooks}
 

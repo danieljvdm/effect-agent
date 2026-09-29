@@ -7229,13 +7229,22 @@ const toolBatchContinuation = <
         }
       }
 
-      // A completion Tool can admit new steering while its handler is running.
-      // Cover that input in the next Turn before allowing this Run to settle.
-      const steering = yield* drainInputs(context, options);
+      // A completion Tool can admit steering while its handler runs. Only claim it
+      // when another ordinary Turn can cover it; otherwise keep it queued for a new Run.
+      const bounds = effectiveRunBounds(agent.definition.policy, options);
+
+      const canContinue =
+        turn < bounds.maxTurns &&
+        toolCalls + context.programmaticToolCalls < bounds.maxToolCalls &&
+        !context.tokenExhausted &&
+        !context.finalizationUsed &&
+        (yield* Clock.currentTimeMillis) < context.durationDeadlineMillis;
+
+      const steering =
+        Option.isSome(selectedOutput) && !canContinue ? [] : yield* drainInputs(context, options);
 
       if (Option.isSome(selectedOutput) && steering.length === 0) {
         const output = selectedOutput.value;
-        const bounds = effectiveRunBounds(agent.definition.policy, options);
 
         const exhausted = context.tokenExhausted
           ? "tokens"
