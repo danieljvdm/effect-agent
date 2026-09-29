@@ -1001,7 +1001,8 @@ const makeJournal = (
     <A, E extends { readonly _tag: string }>(
       effect: Effect.Effect<A, E>,
     ): Effect.Effect<A, E | DoStorageError> =>
-      state.transaction(sql, storageResult(effect, expected)).pipe(
+      state.transaction(storageResult(effect, expected)).pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
         Effect.mapError((error) => (isSqlError(error) ? storageError(operation)(error) : error)),
         Effect.tapError(annotateStorageError),
         Effect.withSpan("DoJournal.withWriteTransaction", { attributes: { operation } }),
@@ -1586,7 +1587,6 @@ const makeJournal = (
   const exportThread = Effect.fn("DoJournal.exportThread")(function* (threadId: string) {
     return yield* state
       .transaction(
-        sql,
         Effect.gen(function* () {
           const threadRows = yield* getThread(threadId);
 
@@ -1650,6 +1650,7 @@ const makeJournal = (
         }),
       )
       .pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
         Effect.catchTag("SqlError", (error) =>
           Effect.fail(storageError("export transaction")(error)),
         ),
@@ -1882,7 +1883,6 @@ const makeJournal = (
   const scanStoredPayloads = Effect.fn("DoJournal.scanStoredPayloads")(function* () {
     return yield* state
       .transaction(
-        sql,
         Effect.gen(function* () {
           const threads = yield* sql<Record<string, unknown>>`
             SELECT
@@ -1958,6 +1958,7 @@ const makeJournal = (
         }),
       )
       .pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
         Effect.catchTag("SqlError", (error) =>
           Effect.fail(storageError("startup scan transaction")(error)),
         ),

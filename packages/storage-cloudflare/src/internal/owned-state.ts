@@ -1,6 +1,6 @@
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Context, Effect, Exit, Predicate, Schema, Semaphore } from "effect";
-import type { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient } from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
 import { DoStorageCorruptionError, DoStorageError } from "../DoStorageError.ts";
@@ -28,13 +28,14 @@ export class OwnedState {
     );
 
   readonly transaction = <A, E, R>(
-    sql: SqlClient,
     effect: Effect.Effect<A, E, R>,
-  ): Effect.Effect<A, E | SqlError, R> =>
+  ): Effect.Effect<A, E | SqlError, R | SqlClient> =>
     this.read(
-      sql
-        .withTransaction(effect)
-        .pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? this.invalidate : Effect.void))),
+      Effect.flatMap(SqlClient, (sql) =>
+        sql
+          .withTransaction(effect)
+          .pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? this.invalidate : Effect.void))),
+      ),
     );
 }
 

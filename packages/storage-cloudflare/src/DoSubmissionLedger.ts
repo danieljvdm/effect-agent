@@ -2195,7 +2195,6 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
 
     return yield* state
       .transaction(
-        sql,
         Effect.gen(function* () {
           const read = Effect.fnUntraced(function* (active: boolean) {
             const rows =
@@ -2227,7 +2226,10 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           }).pipe(Effect.mapError(internalFailure(operation)));
         }),
       )
-      .pipe(Effect.catchTag("SqlError", (cause) => sqlFailure(operation)(cause)));
+      .pipe(
+        Effect.provideService(SqlClientService.SqlClient, sql),
+        Effect.catchTag("SqlError", (cause) => sqlFailure(operation)(cause)),
+      );
   });
 
   const stopWorker = Effect.fn("DoSubmissionLedger.stopWorker")(function* (
