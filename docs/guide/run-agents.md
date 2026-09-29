@@ -24,19 +24,56 @@ deliberately measures a sequential workflow. Continuity fixtures serialize chang
 Code Mode examples bound generated programs separately. Node host worker concurrency is a separate
 setting.
 
-OpenAI requests preserve system instructions in conversation order and place the output contract
-after the initial system block. Changing instructions in later Runs and appended system context
+## Prompt caching
+
+OpenAI and xAI Responses requests preserve system instructions in conversation order and place
+the output contract after the initial system block. Changing instructions in later Runs and appended system context
 stay after earlier history, preserving its cache prefix. An exact repeated instruction is omitted
 only when no different system instruction intervenes. Conversation-only history can recover its
 leading static instructions from those still present in the prepared prompt. Stored history remains intact.
 
-Other providers group system instructions and the output contract before the conversation,
-keeping the last equivalent instruction and its native options. This preserves all instructions
-through Anthropic's system-message conversion; changing system context can still invalidate its
-history cache. Supply native `Prompt.systemMessage` options for provider cache controls, such as
-OpenAI's `options.openai.promptCacheBreakpoint` or Anthropic's `options.anthropic.cacheControl`.
+The engine chooses this projection for the actual model selected on each call. The native
+`LanguageModel` service's `supportsSystemMessagesInHistory` capability takes precedence over the provider
+default. Without it, only `openai` and `xai` bindings use chronological instructions. Other adapters
+group systems before the conversation, retaining the last equivalent instruction and its native
+options. Changing that grouped block can invalidate the history cache.
 
-The immutable output contract also retains its message identity across turns, allowing opt-in
+Anthropic's pinned `@effect/ai-anthropic` 4.0.0-rc.117 requires grouping. Chronological Anthropic
+history needs a release containing the [upstream adapter change](https://github.com/Effect-TS/effect/pull/8603)
+and a model supporting
+[mid-conversation system messages](https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages).
+That adapter must retain system authority and place later instructions after the corresponding
+user/tool results, before the next assistant response. A newer model name alone is insufficient.
+
+For xAI, use the native `@effect/ai-openai` Responses adapter with an `OpenAiClient` whose
+`apiUrl` is `https://api.x.ai/v1`. Where the host knows the Thread identity, bind the provider and
+[routing key](https://docs.x.ai/developers/advanced-api-usage/prompt-caching/maximizing-cache-hits):
+
+```ts
+Model.make(
+  "xai",
+  "grok-4.3",
+  OpenAiLanguageModel.layer({
+    model: "grok-4.3",
+    config: { store: false, prompt_cache_key: threadId },
+  }),
+);
+```
+
+Supply the configured `OpenAiClient` Layer to this Model, including when returning it from
+`context.prepare` as `modelCall.model`. The routing key encourages server affinity; it does not
+create a cache entry or guarantee a hit. This path uses Responses; xAI's Chat Completions header
+`x-grok-conv-id` is a separate transport setting. Do not assume OpenAI-specific request options
+such as `promptCacheBreakpoint` work on xAI.
+
+For Anthropic, place native `options.anthropic.cacheControl` on the last retained user/tool message
+before changing transient context, using context preparation. For example, use
+`{ type: "ephemeral", ttl: "5m" }`. Request-level automatic caching can instead write after the
+changing suffix; it alone does not establish reuse of the stable history. Follow Anthropic's
+[cache placement and model limits](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
+Keep trusted instructions in system messages and untrusted references in user/tool content.
+
+The immutable output contract also retains its message identity across turns, allowing OpenAI's opt-in
 native `ResponseIdTracker` reuse for ordinary append-only prompts. Context preparation, transient
 references, and appended run status use full requests so provider-held responses cannot replay
 discarded material. Full requests can still use provider prompt caching.

@@ -47,11 +47,13 @@ from successful Tool receipts can therefore read their canonical records during 
 compacts the prepared history, then loads optional references through
 `RunContextPreparation.transientContext.load`. If the references exceed the remaining budget,
 the engine can compact canonical history further while keeping the same reference snapshot.
-It appends the references to the compacted view. OpenAI requests preserve the position of system
-instructions, with the output contract after the initial system block; changing late instructions
-therefore leave earlier history reusable. Other providers group system instructions and the output
-contract before the conversation. Derived run status follows this projection, which preserves
-stored history and compaction boundaries. See [prompt caching](./run-agents) for provider differences.
+It appends the references to the compacted view. OpenAI, xAI Responses, and native adapters advertising
+support for system messages in history preserve chronological guidance, with the output contract
+after the initial system block. Changing late instructions therefore leaves earlier history reusable.
+The engine resolves this capability from the selected model on each call. Other adapters, including
+the pinned Anthropic adapter, group systems before the conversation. Derived run status follows
+this projection, which preserves stored history and compaction boundaries. See
+[prompt caching](./run-agents#prompt-caching) for provider differences.
 Compaction summaries never receive transient references. Durable
 recovery rebuilds the committed model view before applying prompt preparation; a transient loader
 receives the current Attempt's official source, Thread ID, Run ID, Turn ID, and Turn number.
@@ -95,8 +97,11 @@ matching prefixes. A transient user-message suffix can move OpenAI's implicit ca
 past the retained history, even when the reference text stays identical. To reuse that history,
 place native explicit cache markers in the stable prefix through context preparation; keep
 untrusted references in user messages. Append changing trusted system guidance after `source`;
-OpenAI keeps it after the user/tool cache boundary. Prepending changing content still invalidates
-the prefix, and Anthropic's grouped system block cannot preserve this trailing position.
+supported chronological adapters keep it after the retained history. Prepending changing content
+still invalidates the prefix. Anthropic needs both a capable upstream adapter and a supported model;
+its pinned adapter retains grouped systems. Place native Anthropic cache markers before changing
+transient context rather than relying on automatic placement after that suffix. See
+[provider cache settings](./run-agents#prompt-caching) for the release limitation and xAI routing configuration.
 
 Prepared prompts receive fresh context estimates, including replacement content. For nondurable
 compaction, retain the original instruction/input messages or an unambiguous, content-equivalent
@@ -1000,8 +1005,8 @@ balance after reserving completion capacity. The runtime also warns when that ba
 another input as large as the last call.
 
 `runStatus` defaults to `"off"`. The optional status line is built for each request and never
-enters canonical history. With OpenAI, it is trailing system/developer guidance, leaving the
-retained user/tool message as the implicit cache boundary. Other providers receive it as a
+enters canonical history. With chronological adapters, it is trailing system/developer guidance,
+leaving the retained user/tool message available as a cache boundary. Other adapters receive it as a
 trailing user message; account for their cache-boundary behavior when enabling it. Provider cache
 settings remain host-owned, and changing other prompt content can still prevent reuse.
 Host-enforced limits and `BudgetWarning` events remain active with either setting.

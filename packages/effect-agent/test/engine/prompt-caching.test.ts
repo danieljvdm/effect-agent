@@ -4,13 +4,15 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import { Agent, AgentRuntime, InMemory, ThreadHistory } from "effect-agent";
 import { ContextCompactor } from "effect-agent/context-compactor";
-import { Prompt, ResponseIdTracker, Tool, Toolkit } from "effect/unstable/ai";
+import { ModelCallContext } from "effect-agent/context-window";
+import { Model, Prompt, ResponseIdTracker, Tool, Toolkit } from "effect/unstable/ai";
 import { HttpClient, HttpClientResponse, HttpServerResponse } from "effect/unstable/http";
 
 const Request = Schema.Struct({
   input: Schema.Array(Schema.Json),
   tools: Schema.optionalKey(Schema.Array(Schema.Json)),
   previous_response_id: Schema.optionalKey(Schema.String),
+  prompt_cache_key: Schema.optionalKey(Schema.String),
 });
 
 type Request = typeof Request.Type;
@@ -33,8 +35,12 @@ const systemText = (request: Request) =>
 
 // Substitute only HTTP: prompt construction, provider serialization, streaming decoding,
 // tool execution and history all run through their production implementations.
-const captureOpenAi = Effect.fn(function* (callTool: (call: number) => boolean = () => false) {
+const captureOpenAi = Effect.fn(function* (
+  callTool: (call: number) => boolean = () => false,
+  providerName: "openai" | "xai" = "openai",
+) {
   const requests: Array<Request> = [];
+  const modelName = providerName === "xai" ? "grok-4.3" : "gpt-5.6";
 
   const client = HttpClient.make((request) =>
     Effect.gen(function* () {
@@ -67,7 +73,7 @@ const captureOpenAi = Effect.fn(function* (callTool: (call: number) => boolean =
       const response = {
         id: `response-${call}`,
         object: "response",
-        model: "gpt-5.6",
+        model: modelName,
         created_at: 0,
         output: [item],
       };
@@ -119,9 +125,16 @@ const captureOpenAi = Effect.fn(function* (callTool: (call: number) => boolean =
 
   return {
     requests,
-    model: OpenAiLanguageModel.model("gpt-5.6").pipe(
-      Layer.provide(Layer.succeed(OpenAiClient.OpenAiClient, provider)),
-    ),
+    provider,
+    model: Model.make(
+      providerName,
+      modelName,
+      OpenAiLanguageModel.layer({
+        model: modelName,
+        config:
+          providerName === "xai" ? { store: false, prompt_cache_key: "thread-route" } : undefined,
+      }),
+    ).pipe(Layer.provide(Layer.succeed(OpenAiClient.OpenAiClient, provider))),
   };
 });
 
@@ -496,11 +509,29 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
       }).pipe(Effect.provide(InMemory.layer)),
   );
 
-  it.effect(
-    "preserves history prefixes and latest precedence when instructions change and repeat",
-    () =>
+  it.effect.each(["openai", "xai"] as const)(
+    "preserves %s history prefixes and latest precedence when instructions change and repeat",
+    (providerName) =>
       Effect.gen(function* () {
-        const { model, requests } = yield* captureOpenAi();
+        const { model, requests, provider } = yield* captureOpenAi(undefined, providerName);
+
+        const context =
+          providerName !== "xai"
+            ? undefined
+            : {
+                prepare: ({ source }: { readonly source: Prompt.Prompt }) =>
+                  Effect.succeed({
+                    prompt: source,
+                    modelCall: {
+                      model,
+                      context: ModelCallContext.make({
+                        contextCapacity: 20_000,
+                        outputReserveTokens: 1_000,
+                        uncountedOverheadTokens: 0,
+                      }),
+                    },
+                  }),
+              };
 
         const agent = Agent.withModel(
           Agent.make("cache-dynamic", {
@@ -510,13 +541,17 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
             toolkit: Toolkit.empty,
             policy,
           }),
-          model,
+          context === undefined
+            ? model
+            : OpenAiLanguageModel.model("gpt-5.6").pipe(
+                Layer.provide(Layer.succeed(OpenAiClient.OpenAiClient, provider)),
+              ),
         );
 
-        const first = yield* AgentRuntime.run(agent, "French");
+        const first = yield* AgentRuntime.run(agent, "French", { context });
 
-        yield* AgentRuntime.run(agent, "German", { threadId: first.threadId });
-        yield* AgentRuntime.run(agent, "French", { threadId: first.threadId });
+        yield* AgentRuntime.run(agent, "German", { threadId: first.threadId, context });
+        yield* AgentRuntime.run(agent, "French", { threadId: first.threadId, context });
         expect(systemText(requests[1]!)).toEqual([
           "Answer in French.",
           expect.stringContaining("Final output contract:"),
@@ -531,9 +566,11 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
         for (let index = 1; index < requests.length; index++) {
           const previous = requests[index - 1]!;
 
+          if (providerName === "xai")
+            expect(requests[index]!.prompt_cache_key).toBe("thread-route");
           expect(requests[index]!.input.slice(0, previous.input.length)).toEqual(previous.input);
           expect(requests[index]!.input.at(-2)).toMatchObject({
-            role: "developer",
+            role: providerName === "xai" ? "system" : "developer",
             content: [{ text: `Answer in ${index === 1 ? "German" : "French"}.` }],
           });
         }

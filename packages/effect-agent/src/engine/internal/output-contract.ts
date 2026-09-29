@@ -147,7 +147,7 @@ export const outputSchemaContract = (definition: Agent.AnyDefinition): OutputCon
 const sameSystemMessage = Schema.toEquivalence(Prompt.SystemMessage);
 
 /**
- * Keep OpenAI system instructions in conversation order so changing late guidance
+ * Keep supported system instructions in conversation order so changing late guidance
  * cannot invalidate the preceding user/tool cache prefix. Omit an exact repeat
  * only when no distinct system instruction intervened; returning to an earlier
  * instruction after a different one must preserve the new directive's precedence.
@@ -156,17 +156,17 @@ const sameSystemMessage = Schema.toEquivalence(Prompt.SystemMessage);
  *
  * This runs after preparation and compaction. Canonical messages, protected
  * instruction/input spans and compaction coverage retain their original positions.
- * Other providers retain the grouped-system projection: keep the last equivalent
- * instruction with its native options, then the contract and conversation. This
- * prevents Anthropic's last-system-group conversion from discarding instructions.
+ * Adapters without this capability retain the grouped-system projection: keep the
+ * last equivalent instruction with its native options, then the contract and
+ * conversation. This prevents older Anthropic adapters from discarding system groups.
  */
 export const prepareModelPrompt = (
   prompt: Prompt.Prompt,
   contract: Prompt.SystemMessage | undefined,
-  provider: string,
+  systemMessagesInHistory: boolean,
   staticInstructions: Prompt.RawInput | undefined,
 ): Prompt.Prompt => {
-  if (provider === "openai") {
+  if (systemMessagesInHistory) {
     const content: Array<Prompt.Message> = [];
     let lastSystem: Prompt.SystemMessage | undefined;
     let ordered = prompt.content;

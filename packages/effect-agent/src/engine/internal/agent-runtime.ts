@@ -3248,8 +3248,8 @@ export const formatRunStatus = (view: RunStatusView): string => {
 /**
  * The run-status message is derived per request and appended only to the
  * OUTGOING prompt: official history and durable commits never carry it, so it
- * can never accumulate or replay. OpenAI receives it as trailing system guidance,
- * leaving the last user/tool result as the implicit cache-write boundary.
+ * can never accumulate or replay. Capable adapters receive trailing system guidance,
+ * leaving the preceding user/tool result available as a cache-write boundary.
  */
 const outgoingModelPrompt = (
   policy: AgentPolicy,
@@ -3257,13 +3257,13 @@ const outgoingModelPrompt = (
   prepared: Prompt.Prompt,
   turn: number,
   declaredToolCalls: number,
-): Effect.Effect<Prompt.Prompt, never, Model.ProviderName> =>
+  systemMessagesInHistory: boolean,
+): Effect.Effect<Prompt.Prompt> =>
   Effect.gen(function* () {
     if (policy.runStatus !== "appended") {
       return prepared;
     }
     const now = yield* Clock.currentTimeMillis;
-    const provider = yield* Model.ProviderName;
 
     const status = formatRunStatus({
       turn,
@@ -3280,7 +3280,7 @@ const outgoingModelPrompt = (
 
     return Prompt.fromMessages([
       ...prepared.content,
-      provider === "openai"
+      systemMessagesInHistory
         ? Prompt.systemMessage({ content: status })
         : Prompt.userMessage({ content: [Prompt.textPart({ text: status })] }),
     ]);
@@ -3880,7 +3880,7 @@ const estimateContextTokens = Effect.fn("AgentRuntime.estimateContextTokens")(fu
 const nextContextEstimate = Effect.fn("AgentRuntime.nextContextEstimate")(function* (
   context: RunContext,
   view: ReadonlyArray<Prompt.Message>,
-  provider: string,
+  systemMessagesInHistory: boolean,
   staticInstructions: Prompt.RawInput | undefined,
 ) {
   const state = context.compaction;
@@ -3898,7 +3898,12 @@ const nextContextEstimate = Effect.fn("AgentRuntime.nextContextEstimate")(functi
   }
 
   return yield* estimateContextTokens(
-    prepareModelPrompt(Prompt.fromMessages(view), undefined, provider, staticInstructions).content,
+    prepareModelPrompt(
+      Prompt.fromMessages(view),
+      undefined,
+      systemMessagesInHistory,
+      staticInstructions,
+    ).content,
   );
 });
 
@@ -5555,6 +5560,18 @@ const makeTurn = <
 
       const provider = yield* withCallModel(Model.ProviderName);
 
+      // Older adapters do not expose this native capability. Keep their safe
+      // projection; only the established OpenAI and xAI transports default to it.
+      // Evaluate against this call's services so scoped model overrides are honored.
+      const callModel: LanguageModel.LanguageModel & {
+        readonly supportsSystemMessagesInHistory?: Effect.Effect<boolean> | undefined;
+      } = yield* withCallModel(LanguageModel.LanguageModel);
+
+      const systemMessagesInHistory =
+        callModel.supportsSystemMessagesInHistory === undefined
+          ? provider === "openai" || provider === "xai"
+          : yield* withCallModel(callModel.supportsSystemMessagesInHistory);
+
       const staticInstructions =
         typeof agent.definition.instructions === "function"
           ? undefined
@@ -5699,9 +5716,14 @@ const makeTurn = <
 
       const canonicalDecoration = !admissionRequired
         ? Prompt.empty
-        : yield* outgoingModelPrompt(policy, context, Prompt.empty, turn, priorToolCalls).pipe(
-            withCallModel,
-          );
+        : yield* outgoingModelPrompt(
+            policy,
+            context,
+            Prompt.empty,
+            turn,
+            priorToolCalls,
+            systemMessagesInHistory,
+          ).pipe(withCallModel);
 
       const estimateToolSchemaTokens = Effect.suspend(() => {
         const choice = modelToolChoice();
@@ -5761,10 +5783,14 @@ const makeTurn = <
       // canonical indices still locate appended content and compaction coverage.
       const estimateSourceContext = (view: ReadonlyArray<Prompt.Message>) =>
         options.context === undefined && options.transientContext === undefined
-          ? nextContextEstimate(context, view, provider, staticInstructions)
+          ? nextContextEstimate(context, view, systemMessagesInHistory, staticInstructions)
           : estimateCallTokens(
-              prepareModelPrompt(Prompt.fromMessages(view), undefined, provider, staticInstructions)
-                .content,
+              prepareModelPrompt(
+                Prompt.fromMessages(view),
+                undefined,
+                systemMessagesInHistory,
+                staticInstructions,
+              ).content,
             );
 
       let prepared = buildCompactedView(modelContext.prompt.content, context.compaction);
@@ -6017,6 +6043,7 @@ const makeTurn = <
               transientContext,
               turn,
               priorToolCalls,
+              systemMessagesInHistory,
             ).pipe(withCallModel);
 
       const derivedPromptContentTokens = !admissionRequired
@@ -6198,11 +6225,12 @@ const makeTurn = <
             prepareModelPrompt(
               Prompt.fromMessages([...basis.content, ...transientContext.content]),
               outputContract._tag === "rendered" ? outputContract.part : undefined,
-              provider,
+              systemMessagesInHistory,
               staticInstructions,
             ),
             turn,
             priorToolCalls,
+            systemMessagesInHistory,
           ).pipe(
             withCallModel,
             Effect.flatMap((providerPrompt) =>

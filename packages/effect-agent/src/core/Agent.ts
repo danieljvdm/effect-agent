@@ -152,9 +152,11 @@ export interface Definition<
   /** Canonical schema used to decode the final model output. */
   readonly output: OutputSchema;
   /**
-   * Evaluated once while preparing each Run. OpenAI preserves chronological system messages,
-   * omitting exact repeats only when no distinct system instruction intervenes. Other providers
-   * group system messages first and keep the last exact repeat, including provider options.
+   * Evaluated once while preparing each Run. OpenAI, xAI and native adapters advertising support
+   * preserve chronological system messages, omitting exact repeats only when no distinct system
+   * instruction intervenes. The actual selected model determines support on each call. Other
+   * adapters group systems first and keep the last exact repeat, including provider options;
+   * Anthropic requires an upstream adapter with mid-conversation system-message support.
    * Stored history is unchanged.
    */
   readonly instructions: Instructions;
