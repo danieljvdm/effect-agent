@@ -10,7 +10,7 @@ import {
 import { Schema } from "effect";
 
 import { type GeneratedContentOmission } from "./generated-content.ts";
-import { reviewMarker, reviewPauseMarker } from "./selection.ts";
+import { reviewMarker, reviewPauseMarker, type ReviewHistoryItem } from "./selection.ts";
 
 const severityAppearance: Record<
   ReviewSeverity,
@@ -25,6 +25,46 @@ const countNoun = (count: number, noun: string): string =>
   `${String(count)} ${noun}${count === 1 ? "" : "s"}`;
 
 const formatNumber = (value: number): string => String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+
+const inlineText = (text: string): string => text.replace(/[\\`*_{}[\]()<>@]/g, "\\$&");
+
+/** Titles are display hints from our published finding format, never resolution evidence. */
+const renderEarlierReviews = (prior: ReviewPresentationInput["priorReviews"]): string => {
+  if (prior === undefined || prior.reviews.length === 0) return "";
+
+  const entries = prior.reviews.slice(0, 8).map((review) => {
+    const titles = review.body
+      .split("\n")
+      .filter((line) => line.startsWith("[🛑 blocking · "))
+      .map((line) => line.slice(line.indexOf("] ") + 2).trim());
+
+    const metadata = [
+      ...(review.submittedAt === undefined ? [] : [review.submittedAt.slice(0, 10)]),
+      ...(review.commitId === undefined ? [] : [`commit ${review.commitId.slice(0, 7)}`]),
+    ].join(" · ");
+
+    const summary =
+      titles.length === 0
+        ? "See the original review for its blockers."
+        : titles
+            .slice(0, 3)
+            .map((title) => inlineText(title.slice(0, 200)))
+            .join("; ") +
+          (titles.length > 3 ? `; ${titles.length - 3} more in the original review` : "");
+
+    return `- [Review #${review.id}](${prior.pullRequestUrl}#pullrequestreview-${review.id})${metadata.length === 0 ? "" : ` · ${inlineText(metadata)}`} — ${summary}`;
+  });
+
+  return [
+    "### Earlier unresolved reviews",
+    ...entries,
+    ...(prior.reviews.length > entries.length
+      ? [
+          `${prior.reviews.length - entries.length} more unresolved reviews. See the pull request's review history.`,
+        ]
+      : []),
+  ].join("\n\n");
+};
 
 const findingLabel = (finding: ReviewFinding): string => {
   const appearance = severityAppearance[finding.severity];
@@ -74,7 +114,7 @@ const renderVerdict = (
     return "> [!CAUTION]\n> **Review coverage is incomplete.** Not all changes were verified, so this result does not clear the change.";
   }
   if (unresolvedChangeRequests > 0) {
-    return `> [!CAUTION]\n> **${countNoun(unresolvedChangeRequests, "earlier change request")} ${unresolvedChangeRequests === 1 ? "remains" : "remain"} unresolved.** Request \`@effect-agent review full\` to verify earlier blockers, or dismiss each resolved review with evidence.`;
+    return `> [!CAUTION]\n> **${countNoun(unresolvedChangeRequests, "earlier change request")} ${unresolvedChangeRequests === 1 ? "remains" : "remain"} unresolved.** Both incremental and full reviews can clear earlier blockers after explicit verification. Dismiss a fixed, refuted, or explicitly accepted review with evidence.`;
   }
   if (counts.important > 0) {
     return `> [!IMPORTANT]\n> **${countNoun(counts.important, "important finding")}.** Address before merging.`;
@@ -155,6 +195,10 @@ export interface ReviewPresentationInput {
   readonly complete: boolean;
   readonly exhausted?: ReviewOutcome["exhausted"];
   readonly unresolvedChangeRequests: number;
+  readonly priorReviews?: {
+    readonly pullRequestUrl: string;
+    readonly reviews: ReadonlyArray<ReviewHistoryItem>;
+  };
   readonly inputTokens: number;
   readonly uncachedInputTokens: number;
   readonly cachedInputTokens: number;
@@ -218,6 +262,9 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
   const automaticPause = renderAutomaticPause(input.automaticReviewsRemaining);
 
   if (automaticPause !== undefined) parts.push(automaticPause);
+  const earlierReviews = renderEarlierReviews(input.priorReviews);
+
+  if (earlierReviews.length > 0) parts.push(earlierReviews);
   if (severityCounts(input.report).blocking > 0 || input.unresolvedChangeRequests > 0) {
     parts.push(renderDismissalHelp());
   }
@@ -367,6 +414,7 @@ export interface ReviewPausePresentationInput {
   readonly lastCompletedRevision: string | undefined;
   readonly headRevision: string;
   readonly unresolvedChangeRequests: number;
+  readonly priorReviews?: ReviewPresentationInput["priorReviews"];
 }
 
 export const renderReviewPauseBody = (input: ReviewPausePresentationInput): string => {
@@ -395,6 +443,7 @@ export const renderReviewPauseBody = (input: ReviewPausePresentationInput): stri
       "> The configured automatic review limit has been reached. No model call was made for this update.",
     ].join("\n"),
     ...unresolved,
+    ...[renderEarlierReviews(input.priorReviews)].filter((text) => text.length > 0),
     [
       "| Automatic attempts | Last completed review | Current head |",
       "| :-- | :-- | :-- |",

@@ -666,7 +666,7 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
           reason: "Review comments changed after verification",
         });
       }
-      message = `Verified addressed at ${input.commitId}.\n\n${decision.evidence}`;
+      message = `Verified resolved at ${input.commitId}.\n\n${decision.evidence}`;
     } else {
       // Re-read the event's comment; workflow association alone is not write authority.
       const comment = yield* readJson(

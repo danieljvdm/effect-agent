@@ -9,7 +9,8 @@ files. There are no separate patch batches, candidate pipeline, voting, or repos
 The initial prompt includes every admitted path and its character range in one literal diff
 artifact. Changes up to 32,000 characters are included directly. Larger changes use `read_diff`:
 start at offset zero and follow `nextOffset`, or select a file's start offset from the index.
-Pages contain at most 32,000 UTF-16 characters and can cross file boundaries or split lines.
+Read inline diffs directly without fetching them again. Pages contain at most 32,000 UTF-16
+characters and can cross file boundaries or split lines.
 Original unified patches, hunk coordinates, deletions, renames, and mode metadata remain intact.
 
 `read_file` reads up to 200 lines and 20,000 characters at the exact base or head.
@@ -18,7 +19,9 @@ find definitions, callers, consumers, and tests, including unchanged code. Its p
 filename substring; cursor zero starts the search. Each page scans twenty authorized files,
 returns up to five matching lines per file, and provides `nextCursor` for more files.
 `truncated` identifies omitted matching lines and `unreadablePaths` identifies failed reads.
-A partial or failed search cannot establish that a caller is absent.
+A partial or failed search cannot establish that a caller is absent. Start from supplied paths
+and line anchors, read the relevant complete definition, and widen searches only when a concrete
+question requires more context.
 
 The reviewer starts with the promised consumer outcome and traces supported execution paths,
 including unchanged callers and consumers. It distinguishes missing promised behavior from
@@ -79,6 +82,8 @@ revision. Notes preserve unresolved questions, exact evidence references, and ne
 rollover. They are model-authored context, never proof of coverage or a source of findings.
 Only the accepted-update count (`notesUpdates`) leaves the review; note text is not persisted in
 the outcome. Children cannot update the parent's notebook.
+Short reviews need no separate note-taking or final status round when the relevant evidence and
+coverage are already known. Direct submission still checks for unread ranges.
 
 Completion means a source-based assessment of the admitted changes and material supported
 hypotheses, not proof of correctness or an exhaustive audit of every dependency. The model can
@@ -177,10 +182,12 @@ summary, or transcript; prestart refusals have a declaration but no child event.
 ## Follow-ups and hosting
 
 Hosts can supply up to eight prior `ReviewFollowUp` values, each up to 32,000 characters. The
-reviewer verifies every blocker in a follow-up against current source before returning its exact
-ID and fixing evidence. Unknown or duplicate resolution IDs fail verification. Incomplete,
-exhausted, pending-path, or excluded-path results return no resolutions. History selection,
-credentials, dismissal authorization, and publication belong to the host.
+reviewer reassesses every blocker against current source and applicable contracts before returning
+its exact ID and evidence that every blocker is fixed, refuted, or obsolete. Unchanged code can
+refute an incorrect premise; a revised PR description alone cannot. Acceptance of a still-valid
+risk belongs to the host's authorized maintainer. Unknown or duplicate resolution IDs fail
+verification. Incomplete, exhausted, pending-path, or excluded-path results return no resolutions.
+History selection, credentials, dismissal authorization, and publication belong to the host.
 
 ```ts
 const reviewer = makeReviewer({ model, guidance, costControl });

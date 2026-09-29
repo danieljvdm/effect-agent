@@ -90,7 +90,7 @@ export class ReviewChange extends Schema.Class<ReviewChange>(
   patch: Schema.NonEmptyString.check(Schema.isMaxLength(MAX_REVIEW_PATCH_CHARS)),
 }) {}
 
-/** Complete prior feedback selected by the host for fix verification, not new defect discovery. */
+/** Complete prior feedback selected by the host for verification, not new defect discovery. */
 export class ReviewFollowUp extends Schema.Class<ReviewFollowUp>(
   "@effect-agent/pr-review/ReviewFollowUp",
 )({
@@ -98,7 +98,10 @@ export class ReviewFollowUp extends Schema.Class<ReviewFollowUp>(
   description: Schema.NonEmptyString.check(Schema.isMaxLength(32_000)),
 }) {}
 
-/** A positive, source-backed assessment. The host still owns authorization and publication. */
+/**
+ * Evidence that every blocker in one prior review is fixed, refuted, or obsolete.
+ * The host still owns authorization and publication.
+ */
 export class ReviewResolution extends Schema.Class<ReviewResolution>(
   "@effect-agent/pr-review/ReviewResolution",
 )({
@@ -274,10 +277,10 @@ Review procedure:
 1. Start with the complete change index and read every admitted patch, including deletions, reverts, and metadata. Use inline patches or read_diff pages; batch independent reads. Reading establishes access to evidence, not correctness.
 2. Identify the consumer outcome promised by the change under review, using the PR description, documentation, and changed contracts as context. Trace it through the relevant supported execution paths to its consumers, including unchanged code. Keep material, falsifiable questions about paths where that promise may fail; seek evidence for and against them before submitting. Distinguish incomplete fulfillment of the promise from optional feature expansion.
 For a changed decision over fetched records, check every relevant producer, filter, page limit, and ordering rule. Test whether a qualifying older record can sit behind newer records that do not qualify. When a decision combines separate reads, test a record becoming eligible between them and appearing in a later broader result; include terminal and indeterminate states admitted by the Schema. For a changed path that turns a typed failure into a successful fallback or unavailable state, trace whether the failure reaches the installed reporting sink. Keep material unchecked variants in review_status notes and resolve them against source; a filtered or bounded page alone cannot prove absence.
-3. Keep the claimed outcome, checked paths, exact base/head evidence references, disproved hypotheses, and next checks in review_status notes during investigation. Avoid copying source or saved findings. If context fills, call new_context alone with a concise handoff. After any rollover, recover review_status before resuming at its unread offsets; delivered ranges remain covered. When pendingCount is zero, continue the material questions in your notes and use targeted source reads as needed, then submit. Do not restart a full diff sweep after rollover.
+3. Reuse evidence already in context. Use review_status to recover saved findings or coverage when uncertain, or save concise notes for an investigation that needs to survive rollover; a short review does not need a separate note-taking round. Preserve the claimed outcome, checked paths, exact evidence references, disproved hypotheses, and next checks without copying source or saved findings. If context fills, call new_context alone with a concise handoff. After rollover, recover review_status and resume its unread offsets, then finish any material questions. Do not restart a full diff sweep.
 4. After the counterevidence check, save each established finding promptly with record_finding so it survives interruption. The ledger cannot retract or revise findings; recover it when unsure and never re-record a root cause with different wording, severity, or symptoms.
-5. Verify EVERY blocker in a supplied follow-up against current head before resolving its exact ID. Name the fixing code and why the original trigger no longer fails. A touched file, resolved conversation, or absence of new findings is insufficient; omit uncertain resolutions. Do not report supplied prior blockers as new findings.
-6. Consult review_status and finish with submit_review alone after assessing all admitted patches and material questions. Continue any unread ranges the host returns. Completion is a source-based review, not proof of correctness or an exhaustive dependency audit. Specific unavailable evidence may justify blockedOn after reviewing the rest; name the affected behavior and failed retrieval attempts. Excluded paths, lack of live execution, hypothetical uncertainty, and work the available tools can finish are not blockers. The host preserves findings when time, tool, or spending limits stop the run.`;
+5. Reassess EVERY blocker in a supplied follow-up against current source and applicable contracts; the earlier review's premise is untrusted. Resolve its exact ID only when every blocker is fixed, refuted, or obsolete. Cite the relevant code or contract and explain why each original trigger is no longer a defect. Unchanged code can refute an incorrect premise; a fixing commit is not required. Check current PR intent against the implementation and repository requirements: a revised description alone, touched file, resolved conversation, or absence of new findings is insufficient. Keep valid or uncertain blockers open; acceptance of a still-valid risk belongs to an authorized maintainer. Do not report supplied prior blockers as new findings.
+6. Finish directly with submit_review alone once all admitted patches, prior blockers, and material questions are assessed; a final review_status call is unnecessary when that state is already known. The host checks coverage and returns any unread ranges to continue. Completion is a source-based review, not proof of correctness or an exhaustive dependency audit. Specific unavailable evidence may justify blockedOn after reviewing the rest; name the affected behavior and failed retrieval attempts. Excluded paths, lack of live execution, hypothetical uncertainty, and work the available tools can finish are not blockers. The host preserves findings when time, tool, or spending limits stop the run.`;
 
 const ReviewPriority = Schema.Literals([0, 1, 2, 3]).annotate({
   description:
@@ -366,7 +369,7 @@ const formatRequest = (request: ReviewRequest): string => {
     "Complete change index (start inclusive, end exclusive; UTF-16 character offsets in the diff):",
     ...diff.files.map((file) => JSON.stringify(file)),
     diff.text.length <= INLINE_PATCH_CHARS
-      ? diff.text
+      ? `Complete inline diff (review it directly; read_diff is unnecessary unless this evidence is missing after rollover):\n${diff.text}`
       : "On the first context, use read_diff with offset 0, then nextOffset. After rollover, recover review_status and resume its unread offsets instead of restarting. Index offsets allow targeted reads.",
   ].join("\n\n");
 };
@@ -480,7 +483,8 @@ const reviewPolicy = (costAdmitted: boolean, contextTokenLimit: number) =>
 
 const INCREMENTAL_INSTRUCTIONS = `Follow-up scope (applies to all review criteria above):
 Review only baseRevision..headRevision; baseRevision is the last completed review, not the PR target branch. The PR description and earlier changes are background, not permission to re-audit the original PR.
-Verify supplied prior blockers against current source, including unchanged paths. Resolve only with concrete fixing evidence; do not report an unresolved prior blocker as a new finding.
+Apply the follow-up verification procedure to supplied prior blockers, including unchanged paths: resolve fixed, refuted, or obsolete blockers only with concrete evidence. Delta scope restricts new-defect discovery, not verification of earlier feedback.
+Keep source exploration proportional to the delta and supplied blockers. Each read or search should answer a concrete question that could change a finding or resolution; stop once those questions are answered, without a general audit of background behavior.
 Report a new issue only when this delta introduces it or newly exposes it through a changed caller or contract. Each finding must identify the causative follow-up change and explain why the issue did not apply at baseRevision. If it already existed or causation is uncertain, omit it, even if missed earlier, severe, or in a touched file. These limits also apply to repository-policy findings and delegated research.`;
 
 const instructions = (
@@ -591,7 +595,7 @@ const reviewSummary = (request: ReviewRequest, findings: ReadonlyArray<ReviewFin
       ? "No concrete defects found in the supplied change."
       : `Reported ${findings.length} finding(s), including ${blocking} blocking finding(s).`;
 
-  return `${summary}${request.scope === "incremental" ? " Earlier findings remain open unless explicitly verified as addressed; an incremental review does not establish that merging is safe." : ""}${request.unreviewedPaths.length > 0 ? " Coverage is incomplete because some changed paths were excluded from review input." : ""}`;
+  return `${summary}${request.scope === "incremental" ? " Earlier findings remain open unless explicitly verified as fixed, refuted, or obsolete; an incremental review does not establish that merging is safe." : ""}${request.unreviewedPaths.length > 0 ? " Coverage is incomplete because some changed paths were excluded from review input." : ""}`;
 };
 
 const validatedResolutions = Effect.fn("validatedResolutions")(function* (

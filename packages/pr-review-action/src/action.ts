@@ -72,7 +72,6 @@ import {
   reviewModeFromCommand,
   selectReview,
   type ReviewSelection,
-  unresolvedChangeRequestCount,
   unresolvedChangeRequests as selectUnresolvedChangeRequests,
 } from "./selection.ts";
 
@@ -1053,18 +1052,18 @@ const reviewPullRequest = Effect.fn("reviewPullRequest")(function* (
     ignore,
   } = prepared;
 
-  let unresolvedChangeRequests = unresolvedChangeRequestCount({ reviewAuthor, history });
+  let unresolvedReviews = selectUnresolvedChangeRequests({ reviewAuthor, history });
 
   if (selection._tag === "skip" || selection._tag === "reconcile") {
-    yield* skip(selection.reason, undefined, unresolvedChangeRequests);
+    yield* skip(selection.reason, undefined, unresolvedReviews.length);
     if (selection.reason === "head-review-incomplete") {
       return yield* ReviewAttemptIncomplete.make({});
     }
     if (selection.reason === "head-not-reviewed") {
       return yield* ReviewRequired.make({});
     }
-    if (unresolvedChangeRequests > 0) {
-      return yield* UnresolvedChangeRequests.make({ count: unresolvedChangeRequests });
+    if (unresolvedReviews.length > 0) {
+      return yield* UnresolvedChangeRequests.make({ count: unresolvedReviews.length });
     }
 
     return;
@@ -1079,7 +1078,8 @@ const reviewPullRequest = Effect.fn("reviewPullRequest")(function* (
           automaticAttempts: selection.automaticAttempts,
           lastCompletedRevision: selection.lastCompletedRevision,
           headRevision: pull.headRevision,
-          unresolvedChangeRequests,
+          unresolvedChangeRequests: unresolvedReviews.length,
+          priorReviews: { pullRequestUrl: pull.url, reviews: unresolvedReviews },
         }),
         selection.automaticReviewLimit,
       ),
@@ -1088,9 +1088,9 @@ const reviewPullRequest = Effect.fn("reviewPullRequest")(function* (
 
     publication.url = reviewUrl;
 
-    yield* skip(selection.reason, reviewUrl, unresolvedChangeRequests);
-    if (unresolvedChangeRequests > 0) {
-      return yield* UnresolvedChangeRequests.make({ count: unresolvedChangeRequests });
+    yield* skip(selection.reason, reviewUrl, unresolvedReviews.length);
+    if (unresolvedReviews.length > 0) {
+      return yield* UnresolvedChangeRequests.make({ count: unresolvedReviews.length });
     }
 
     return;
@@ -1340,7 +1340,7 @@ const reviewPullRequest = Effect.fn("reviewPullRequest")(function* (
       ["skipped", "false"],
       ["reason", "review-failed"],
       ["blocking-findings", 0],
-      ["unresolved-change-requests", unresolvedChangeRequests],
+      ["unresolved-change-requests", unresolvedReviews.length],
       ["review-url", reviewUrl],
     ]);
 
@@ -1403,12 +1403,12 @@ const reviewPullRequest = Effect.fn("reviewPullRequest")(function* (
             commitId: pull.headRevision,
             decision: { _tag: "verified", followUp, evidence: resolution.evidence },
           });
-          yield* Effect.logInfo("Dismissed addressed review", {
+          yield* Effect.logInfo("Dismissed verified review", {
             reviewId: review.id,
             headRevision: pull.headRevision,
           });
         }
-        unresolvedChangeRequests = unresolvedChangeRequestCount({
+        unresolvedReviews = selectUnresolvedChangeRequests({
           reviewAuthor,
           history: yield* github.listReviews,
         });
@@ -1447,7 +1447,8 @@ const reviewPullRequest = Effect.fn("reviewPullRequest")(function* (
       modelTurns,
       complete,
       exhausted,
-      unresolvedChangeRequests,
+      unresolvedChangeRequests: unresolvedReviews.length,
+      priorReviews: { pullRequestUrl: pull.url, reviews: unresolvedReviews },
       inputTokens,
       uncachedInputTokens,
       cachedInputTokens,
@@ -1504,7 +1505,7 @@ const reviewPullRequest = Effect.fn("reviewPullRequest")(function* (
       estimatedCost === undefined ? "" : (estimatedCost.microusd / 1_000_000).toFixed(6),
     ],
     ["blocking-findings", blocking],
-    ["unresolved-change-requests", unresolvedChangeRequests],
+    ["unresolved-change-requests", unresolvedReviews.length],
     ["review-url", reviewUrl],
   ]);
   yield* Console.log(`Posted PR review: ${reviewUrl}`);
@@ -1518,7 +1519,7 @@ const reviewPullRequest = Effect.fn("reviewPullRequest")(function* (
   const publicationFailure = reviewPublicationFailure({
     blockingFindings: blocking,
     unreviewedPaths: surface.unreviewedPaths.length,
-    unresolvedChangeRequests,
+    unresolvedChangeRequests: unresolvedReviews.length,
     exhausted,
     incomplete,
   });

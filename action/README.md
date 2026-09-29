@@ -168,11 +168,17 @@ block's copy button to copy every finding from that review, including paths, inl
 when available, and the inspected commit. The block reminds coding agents to verify findings
 before making changes. It opens by default when any finding has no inline comment.
 
-A complete pass with no new blockers can dismiss this bot's earlier change requests, but only
-when the reviewer explicitly verifies every blocker in each selected review against current source.
-The dismissal records the inspected commit and the fixing evidence. A clean delta, changed line,
-resolved conversation, or commit message alone does not clear earlier feedback. Human and other
-bots' reviews are never dismissed.
+A complete incremental or full pass with no new blockers can dismiss this bot's earlier change
+requests when every blocker in each selected review is verified as fixed, refuted, or obsolete
+against current source and applicable contracts. An incorrect premise can be refuted by unchanged
+code. The dismissal records the inspected commit and evidence. A revised PR description, clean
+delta, changed line, resolved conversation, or commit message alone does not clear earlier feedback.
+Acceptance of a still-valid risk requires an authorized maintainer's dismissal command. Human and
+other bots' reviews are never dismissed.
+
+Unresolved-review notices link to the original reviews with their dates, inspected commits,
+and available blocker titles, separately from new findings. They show up to eight reviews and
+three blocker titles per review; open the linked review for complete feedback.
 
 Incremental passes revisit unresolved reviews, including body-only findings and findings on paths
 outside the latest delta. A fix retained because its pass found a new blocker can be verified again
