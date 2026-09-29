@@ -7014,7 +7014,17 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           : {}),
         approval,
         toolAuthorization,
-        ...(journal.toolSelection === undefined ? {} : { toolSelection: journal.toolSelection }),
+        ...(journal.toolSelection === undefined
+          ? {}
+          : {
+              toolSelection: {
+                // A settled discovery receipt survives deployment; its selection only
+                // names current tools. Keep validation of fresh selections fail-closed.
+                toolNames: journal.toolSelection.toolNames.filter((name) =>
+                  Object.hasOwn(agent.definition.toolkit.tools, name),
+                ),
+              },
+            }),
         durability,
         subagent,
         delegationDepth,

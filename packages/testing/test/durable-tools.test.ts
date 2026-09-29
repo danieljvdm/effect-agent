@@ -803,6 +803,137 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         }),
     );
   }
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/08571eacf
+  // A completed discovery batch can be the last durable boundary before deployment.
+  // Resume must keep surviving selections, exclude retired/unselected tools, preserve
+  // original receipts, and never repeat discovery. Pending-batch recovery is covered above.
+  it.effect("resumes a settled discovery selection after a selected tool is removed", () =>
+    Effect.gen(function* () {
+      yield* clearFailpoint;
+
+      const discover = Tool.make("discover_tools", {
+        parameters: Schema.Struct({}),
+        success: Schema.Struct({ toolNames: Schema.Array(Schema.String) }),
+      })
+        .annotate(DiscoveryTool, true)
+        .annotate(ToolExecutionClass, "readonly");
+
+      const action = Tool.make("selected_action", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      }).annotate(ToolExecutionClass, "readonly");
+
+      const retired = Tool.make("retired_action", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      }).annotate(ToolExecutionClass, "readonly");
+
+      const hidden = Tool.make("unselected_action", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      }).annotate(ToolExecutionClass, "readonly");
+
+      const tools = Toolkit.make(discover, action, retired, hidden);
+      const requests: Array<ReadonlyArray<string>> = [];
+      let calls = 0;
+      let discoveries = 0;
+
+      const model = Model.make(
+        "test",
+        "retired-selection",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: (request) => {
+              requests.push(request.tools.map((tool) => tool.name));
+              const turn = calls++;
+
+              return Stream.fromIterable(
+                turn === 0
+                  ? toolTurn(toolCall("discover-1", "discover_tools", {}))
+                  : turn === 1
+                    ? toolTurn(toolCall("action-1", "selected_action", {}))
+                    : finalParts('{"answer":"done"}'),
+              );
+            },
+          }),
+        ),
+      );
+
+      const original = Agent.make("retired-selection", {
+        input: bookDefinition.input,
+        output: bookDefinition.output,
+        instructions: "Discover then act.",
+        toolkit: tools,
+        policy,
+        toolExposure: { maxTools: 3 },
+      });
+
+      const current = { ...original, toolkit: Toolkit.make(discover, action, hidden) };
+
+      const handlers = tools.toLayer({
+        discover_tools: () =>
+          Effect.sync(() => {
+            discoveries++;
+
+            return { toolNames: ["retired_action", "selected_action"] };
+          }),
+        selected_action: () => Effect.succeed("acted"),
+        retired_action: () => Effect.die("Retired handler executed"),
+        unselected_action: () => Effect.die("Unselected handler executed"),
+      });
+
+      const bind = (definition: typeof original | typeof current) =>
+        compileRegistrations([
+          {
+            agent: Agent.withModel(definition, model),
+            definitions: {
+              agent: "retired-selection",
+              model: "scripted",
+              tools: Object.keys(definition.toolkit.tools),
+            },
+          },
+        ]).pipe(Effect.provide(handlers));
+
+      const before = yield* bind(original);
+      const after = yield* bind(current);
+
+      const receipt = yield* DurableAgentRuntime.use((runtime) =>
+        Effect.gen(function* () {
+          const receipt = yield* runtime.submitRegistered(
+            { definition: original },
+            { question: "go" },
+            submitOptions("retired-selection", "one"),
+          );
+
+          yield* armFailpoint("turn:after-results-append");
+          expect(failureTag(yield* Effect.exit(runtime.processThreadHead(receipt.threadId)))).toBe(
+            "DurableRuntimeFailpointError",
+          );
+          yield* clearFailpoint;
+
+          return receipt;
+        }),
+      ).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(before)));
+
+      const retained = yield* readLog(receipt.threadId);
+
+      const outcome = yield* DurableAgentRuntime.use((runtime) =>
+        runtime.processThreadHead(receipt.threadId),
+      ).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(after)));
+
+      expect(Option.isSome(outcome) && outcome.value.outcome).toBe("completed");
+      expect(discoveries).toBe(1);
+      expect(requests).toEqual([
+        ["discover_tools"],
+        ["discover_tools", "selected_action"],
+        ["discover_tools", "selected_action"],
+      ]);
+      expect((yield* readLog(receipt.threadId)).slice(0, retained.length)).toEqual(retained);
+    }),
+  );
+
   it.effect("builds captured Tool services once per Attempt and finalizes before replacement", () =>
     Effect.gen(function* () {
       const lifecycle: Array<string> = [];

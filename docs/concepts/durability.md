@@ -219,6 +219,8 @@ call without executing it. `SafeToRetry` does not authorize changed code or eras
 about an unsupported operation. Unproven effects stay unknown.
 
 Later model requests preserve earlier user intent, assistant text, and settled sibling results.
+Recovered discovery selections keep only tools in the current definition. Their original
+receipts remain unchanged, and newly added tools are not added to the saved selection.
 For an incomplete earlier batch, the model-facing history uses `ToolUnavailable` with
 `execution: "not-executed"` when the recorded operation required preparation and no preparation
 or unknown-outcome evidence exists. Other missing results remain explicitly unknown, including
