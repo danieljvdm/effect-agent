@@ -6242,17 +6242,18 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       > = {
         drain: (policy) =>
           Effect.gen(function* () {
-            const state = yield* Ref.get(stateRef);
+            // Keep an empty drain's completion result and RunCompleted atomic. If this
+            // boundary joins input or fails, retain returned Tool results before leaving
+            // the Attempt so recovery never treats completed calls as unknown.
+            const preserveToolResults = Effect.gen(function* () {
+              const state = yield* Ref.get(stateRef);
 
-            // A completed Tool batch has returned its outcomes before this steering seam.
-            // Persist them before a host ledger read can halt the Attempt and make those
-            // ordinary calls appear unknown. A no-tool response still belongs to its later
-            // continuation or atomic RunCompleted commit.
-            if (
-              state.pendingTurn !== undefined &&
-              knownIds.has(modelResponseRecordId(runId, state.pendingTurn.turn))
-            )
-              yield* recordHalt(commitPendingTurn);
+              if (
+                state.pendingTurn !== undefined &&
+                knownIds.has(modelResponseRecordId(runId, state.pendingTurn.turn))
+              )
+                yield* commitPendingTurn;
+            });
 
             const joinedInputs = yield* recordHalt(
               Effect.gen(function* () {
@@ -6301,6 +6302,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                   const payload = existing.record.payload;
 
                   if (payload._tag !== "UserInputRecorded") continue;
+                  yield* preserveToolResults;
                   joinedInputs.push(payload);
                 }
                 if (joinedInputs.length < limit) {
@@ -6332,6 +6334,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                       );
                       continue;
                     }
+                    yield* preserveToolResults;
                     const recordId = submissionInputRecordId(claim.submissionId);
                     let sequence: CanonicalSequence;
                     const existing = joinedInputEnvelopes.get(claim.submissionId);
@@ -6389,7 +6392,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 }
 
                 return joinedInputs;
-              }),
+              }).pipe(
+                Effect.onExit((exit) => (Exit.isFailure(exit) ? preserveToolResults : Effect.void)),
+              ),
             );
 
             return yield* Effect.forEach(joinedInputs, (joinedInput) =>
