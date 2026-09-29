@@ -65,6 +65,8 @@ const AgentPolicyFields = Schema.Struct({
   contextTokenLimit: Schema.optionalKey(PositiveInt),
   toolResultBounds: ToolResultBounds,
   runStatus: Schema.Literals(["appended", "off"]),
+  /** Restart a disposable model call on joined input, at most twice per Run. Default off. */
+  restartOnJoinedInput: Schema.optionalKey(Schema.Boolean),
   compaction: CompactionPolicy,
 }).check(
   Schema.makeFilter((policy) =>

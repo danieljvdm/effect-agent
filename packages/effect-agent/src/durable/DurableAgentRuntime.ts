@@ -184,6 +184,7 @@ import {
   CompactionCreated,
   DefinitionDigests,
   ModelResponseInterrupted,
+  ModelCallAborted,
   PersistedJson,
   ProducerEpoch,
   RecordEnvelope,
@@ -296,6 +297,7 @@ import {
   ClaimHandoff,
   SubmissionScheduling,
   ClaimJoiningRequest,
+  type JoiningClaim,
   ClaimRequest,
   IdempotencyKey,
   LedgerError,
@@ -5009,15 +5011,43 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       // Staging also backs the cumulative summary; keep it intact and track canonical prefixes.
       const committedUsageLengths = new Map<number, number>();
+      const committedUnobservedCalls = new Map<number, number>();
+
+      const usageForCommit = (turn: number) => {
+        const staged = stagedUsage.get(turn);
+
+        if (staged === undefined) return undefined;
+        const modelUsage = staged.modelUsage.slice(committedUsageLengths.get(turn) ?? 0);
+
+        if (modelUsage.length === 0) return undefined;
+
+        return {
+          modelUsage,
+          inputTokens: modelUsage.reduce((sum, call) => sum + call.inputTokens.total, 0),
+          outputTokens: modelUsage.reduce((sum, call) => sum + call.outputTokens.total, 0),
+          costMicrousd: modelUsage.reduce((sum, call) => sum + call.costMicrousd, 0),
+        };
+      };
+
+      const unobservedForCommit = (turn: number) =>
+        (stagedUnobservedCalls.get(turn) ?? 0) - (committedUnobservedCalls.get(turn) ?? 0);
 
       const recordCommittedUsage = (batch: CanonicalBatch) => {
         for (const record of batch.records) {
-          if (record.payload._tag !== "ModelResponseRecorded") continue;
+          if (
+            record.payload._tag !== "ModelResponseRecorded" &&
+            record.payload._tag !== "ModelCallAborted"
+          )
+            continue;
           const payload = record.payload;
 
           committedUsageLengths.set(
             payload.turn,
-            Math.max(committedUsageLengths.get(payload.turn) ?? 0, payload.modelUsage?.length ?? 0),
+            (committedUsageLengths.get(payload.turn) ?? 0) + (payload.modelUsage?.length ?? 0),
+          );
+          committedUnobservedCalls.set(
+            payload.turn,
+            (committedUnobservedCalls.get(payload.turn) ?? 0) + (payload.unobservedModelCalls ?? 0),
           );
         }
       };
@@ -5430,7 +5460,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         completedExhausted: undefined,
       });
 
-      const turnCounter = yield* Ref.make(journal.committedTurns);
+      const turnCounter = yield* Ref.make(
+        journal.committedTurns + (journal.policyUsage.modelRestarts ?? 0),
+      );
 
       const idGenerator: (typeof IdGenerator)["Service"] = {
         nextThreadId: Effect.succeed(submission.threadId),
@@ -5543,6 +5575,37 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             };
 
       const durability: RunDurabilityHook<CoordinatorHalt | CompactionError, never> = {
+        commitModelRestart: (restart) =>
+          recordHalt(
+            Effect.gen(function* () {
+              if (knownIds.has(modelResponseRecordId(runId, restart.turn)))
+                return yield* RunJournalError.make({
+                  message: "Cannot restart a canonical model response",
+                });
+              const recordId = decodeRecordIdSync(`model-aborted:${runId}:${restart.restart}`);
+
+              const record = yield* makeEnvelope(
+                recordId,
+                ModelCallAborted.make({
+                  runId,
+                  ...restart,
+                  reason: "joined-input",
+                  modelUsage: usageForCommit(restart.turn)?.modelUsage ?? [],
+                  unobservedModelCalls: unobservedForCommit(restart.turn),
+                }),
+              );
+
+              const batch = CanonicalBatch.make({
+                batchId: decodeBatchIdSync(recordId),
+                producerId: config.producerId,
+                records: [record],
+              });
+
+              yield* appendBatch(ctx, batch);
+              recordCommittedUsage(batch);
+              knownIds.add(recordId);
+            }),
+          ),
         noteToolExposure: (turn, snapshot) =>
           Effect.sync(() => {
             stagedToolExposure.set(turn, snapshot);
@@ -5624,8 +5687,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                   ...(canonicalTurn === 1 && pendingSlice.length > 0
                     ? { runScopedPrefixLength: pendingSlice.length }
                     : {}),
-                  usage: stagedUsage.get(canonicalTurn),
-                  unobservedModelCalls: stagedUnobservedCalls.get(canonicalTurn),
+                  usage: usageForCommit(canonicalTurn),
+                  unobservedModelCalls: unobservedForCommit(canonicalTurn),
                 }),
               );
 
@@ -6210,10 +6273,50 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           yield* commitPendingTurn;
       });
 
+      // Claims are authority, wakes are hints. A cancelled waiter retains every claim
+      // for the seam drain; it never appends input while an old response can still commit.
+      const pendingJoinClaims: Array<JoiningClaim> = [];
+
+      const claimInputs = Effect.fnUntraced(function* (maxCount: number) {
+        const ownershipToken = yield* Ref.get(tokenRef);
+
+        const claims = yield* ledger.claimJoining(
+          ClaimJoiningRequest.make({
+            threadId: submission.threadId,
+            hostSubmissionId: submissionId,
+            ownershipToken,
+            maxCount,
+          }),
+        );
+
+        pendingJoinClaims.push(...claims);
+      }, Effect.uninterruptible);
+
+      const awaitJoin = recordHalt(
+        Effect.gen(function* () {
+          while (true) {
+            const ready = yield* Effect.scoped(
+              Effect.gen(function* () {
+                const notified = yield* wake.subscribe(submission.threadId);
+
+                if (pendingJoinClaims.length === 0) yield* claimInputs(MAX_JOIN_DRAIN);
+                if (pendingJoinClaims.length > 0) return true;
+                yield* notified;
+
+                return false;
+              }),
+            );
+
+            if (ready) return;
+          }
+        }),
+      );
+
       const input: RunInputHook<
         CoordinatorHalt | Agent.Failure<typeof agent>,
         Agent.DefinitionRequirements<(typeof agent)["definition"]>
       > = {
+        awaitJoin,
         drain: (policy) =>
           Effect.gen(function* () {
             const joinedInputs = yield* recordHalt(
@@ -6270,16 +6373,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                   joinedInputs.push(payload);
                 }
                 if (joinedInputs.length < limit) {
-                  const ownershipToken = yield* Ref.get(tokenRef);
+                  const remaining = limit - joinedInputs.length;
 
-                  const claims = yield* ledger.claimJoining(
-                    ClaimJoiningRequest.make({
-                      threadId: submission.threadId,
-                      hostSubmissionId: submissionId,
-                      ownershipToken,
-                      maxCount: limit - joinedInputs.length,
-                    }),
-                  );
+                  if (pendingJoinClaims.length < remaining)
+                    yield* claimInputs(remaining - pendingJoinClaims.length);
+                  const claims = pendingJoinClaims.splice(0, remaining);
 
                   if (claims.length > 0) {
                     yield* hit("join:after-claim");
@@ -7306,8 +7404,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               createdAt,
               ...(runScopedPrefixLength > 0 ? { runScopedPrefixLength } : {}),
               ...(completedRun === undefined ? {} : { runCompletion: completedRun }),
-              usage: stagedUsage.get(canonicalTurn),
-              unobservedModelCalls: stagedUnobservedCalls.get(canonicalTurn),
+              usage: usageForCommit(canonicalTurn),
+              unobservedModelCalls: unobservedForCommit(canonicalTurn),
             }),
           );
 
@@ -7373,6 +7471,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       const handleEvent = (event: RunEvent): Effect.Effect<void, DurableWorkerFailure> => {
         switch (event._tag) {
+          case "ModelRestarted": {
+            // A finish part can arrive before the provider stream closes. Its TurnCompleted
+            // only staged this disposable Turn; never let the next seam commit its prefix.
+            return Ref.update(stateRef, (state) => ({ ...state, pendingTurn: undefined }));
+          }
           case "TurnStarted": {
             // Suspension owns only this Turn's siblings. Earlier results are already canonical
             // under their original Turn and must never be re-recorded with a later Turn id.

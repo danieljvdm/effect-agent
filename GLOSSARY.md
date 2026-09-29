@@ -150,7 +150,8 @@ inner broker invocation. This is independent of execution class and of whether i
 
 **Steering**  
 Input delivered to an active Run after a complete assistant response and Tool Batch, before the
-next model request. Steering never mutates in-flight work.
+next model request. Steering never mutates in-flight work. An Agent may opt into cancelling a
+disposable model call on joined input, then consume that input before its replacement call.
 
 **Follow-up**  
 Input delivered only when the Agent would otherwise stop.

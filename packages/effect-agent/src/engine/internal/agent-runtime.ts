@@ -78,6 +78,7 @@ import {
   BudgetWarning,
   CompactionPerformed,
   ModelStarted,
+  ModelRestarted,
   ReasoningDelta,
   RunCompleted,
   RunFailed,
@@ -555,6 +556,7 @@ interface RunContext {
   readonly durationDeadlineMillis: number;
   history: Prompt.Prompt;
   modelCalls: number;
+  modelRestarts: number;
   usageStatus: typeof UsageCompleteness.Type;
   pricingStatus: typeof UsageCompleteness.Type;
   unobservedModelCalls: number;
@@ -1430,7 +1432,15 @@ const decodeResumeUsage = Effect.fn("AgentRuntime.decodeResumeUsage")((input: un
         };
 
         const optional = Object.fromEntries(
-          (["usageStatus", "pricingStatus", "unobservedModelCalls", "children"] as const)
+          (
+            [
+              "usageStatus",
+              "pricingStatus",
+              "unobservedModelCalls",
+              "children",
+              "modelRestarts",
+            ] as const
+          )
             .map((key) => [key, read(key, true)])
             .filter(([, value]) => value !== undefined),
         );
@@ -1893,7 +1903,11 @@ const agentTelemetryAttributes = (context: RunContext) => ({
 });
 
 /** Label Effect AI's existing span, preserving provider usage, sampling and host async context. */
-const modelTelemetryTracer = Effect.fnUntraced(function* (context: RunContext, turnId?: TurnId) {
+const modelTelemetryTracer = Effect.fnUntraced(function* (
+  context: RunContext,
+  turnId?: TurnId,
+  onSpan?: (span: Tracer.Span) => void,
+) {
   const delegate = yield* Tracer.Tracer;
   const model = yield* Model.ModelName;
   const provider = yield* Model.ProviderName;
@@ -1903,6 +1917,8 @@ const modelTelemetryTracer = Effect.fnUntraced(function* (context: RunContext, t
       if (options.name !== "LanguageModel.streamText") return delegate.span(options);
 
       const span = delegate.span({ ...options, name: `chat ${model}` });
+
+      onSpan?.(span);
 
       const attributes = {
         ...agentTelemetryAttributes(context),
@@ -5343,6 +5359,7 @@ function decodeRunDisposition<DispositionSchema extends Schema.Top>(
 /** Internal control output consumed by the driver before RunEvent publication. */
 interface NextTurn {
   readonly _tag: "NextTurn";
+  readonly restarting?: boolean;
   readonly prompt: Prompt.Prompt;
   readonly turn: number;
   readonly toolCalls: number;
@@ -5388,6 +5405,7 @@ const makeTurn = <
   turn: number,
   priorToolCalls: number,
   options: RunOptions<HookError, HookRequirements>,
+  restarting = false,
 ): Stream.Stream<
   TurnOutput,
   AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
@@ -5416,7 +5434,7 @@ const makeTurn = <
           }),
         );
       }
-      if (context.finalizationUsed) {
+      if (context.finalizationUsed && !restarting) {
         return failRunEventStream(
           AgentPolicyError.make({
             limit:
@@ -5590,6 +5608,9 @@ const makeTurn = <
           });
         }
       }
+
+      let restartRequested = false;
+      let activeModelSpan: Tracer.Span | undefined;
 
       const trace: TurnTrace = {
         responsePartCount: 0,
@@ -6206,6 +6227,10 @@ const makeTurn = <
           );
         });
 
+      let failedUsageCause:
+        | Cause.Cause<AgentRuntimeFailure<typeof agent, HookError, InstructionError>>
+        | undefined;
+
       // Failure accounting observes the already-selected failure; a secondary
       // budget/estimator failure must not replace that native outcome.
       const retainFailedUsage = Effect.fn("AgentRuntime.retainFailedUsage")(function* () {
@@ -6214,7 +6239,9 @@ const makeTurn = <
         if (trace.usage === undefined) {
           return yield* noteIncompleteUsage(context, turn);
         }
-        yield* consumeTurnUsage(0).pipe(Effect.exit);
+        const exit = yield* consumeTurnUsage(0).pipe(Effect.exit);
+
+        if (Exit.isFailure(exit)) failedUsageCause = exit.cause;
       });
 
       const attempt = (basis: Prompt.Prompt) =>
@@ -6337,7 +6364,9 @@ const makeTurn = <
                           : stream,
                       Stream.provideServiceEffect(
                         Tracer.Tracer,
-                        modelTelemetryTracer(context, turnId),
+                        modelTelemetryTracer(context, turnId, (span) => {
+                          activeModelSpan = span;
+                        }),
                       ),
                       Stream.onStart(
                         Effect.sync(() => {
@@ -6365,7 +6394,9 @@ const makeTurn = <
                         ),
                       ),
                       Stream.flatMap(Stream.fromIterable),
-                      Stream.tapCause(() => retainFailedUsage()),
+                      Stream.onExit((exit) =>
+                        Exit.isFailure(exit) ? retainFailedUsage() : Effect.void,
+                      ),
                     ),
                   ),
                 );
@@ -7059,10 +7090,83 @@ const makeTurn = <
         }),
       );
 
+      // Only the model stream is cancellable. It resolves no application Tools and
+      // closes its waiter before continuation can commit a response or start a Handler.
+      // Provider-defined Tools may execute remotely before reporting a part: fail closed
+      // for the whole call when any are exposed.
+      const restartSignal =
+        policy.restartOnJoinedInput === true &&
+        context.modelRestarts < 2 &&
+        (options.durability === undefined || options.durability.commitModelRestart !== undefined) &&
+        !Object.values(modelToolkit.tools).some(Tool.isProviderDefined)
+          ? options.input?.awaitJoin
+          : undefined;
+
+      const disposableResponse =
+        restartSignal !== undefined
+          ? response.pipe(
+              Stream.interruptWhen(
+                restartSignal.pipe(
+                  Effect.tap(() =>
+                    Effect.sync(() => {
+                      restartRequested = true;
+                      activeModelSpan?.attribute("effect_agent.model.outcome", "aborted");
+                      activeModelSpan?.attribute("effect_agent.model.abort_reason", "joined-input");
+                    }),
+                  ),
+                ),
+              ),
+            )
+          : response;
+
+      const afterResponse = Stream.unwrap(
+        Effect.gen(function* () {
+          if (!restartRequested)
+            return continuation.pipe(Stream.tapCause(() => retainFailedUsage()));
+
+          const discarded = ModelRestarted.make({
+            ...(yield* eventBase(context)),
+            turnId,
+            turn,
+            reason: "joined-input",
+          });
+
+          // Publish invalidation before any fallible persistence, input rendering or budget check.
+          return Stream.succeed(discarded).pipe(
+            Stream.concat(
+              Stream.unwrap(
+                Effect.gen(function* () {
+                  yield* retainFailedUsage();
+                  context.modelRestarts++;
+                  if (options.durability?.commitModelRestart !== undefined)
+                    yield* options.durability.commitModelRestart({
+                      turn,
+                      turnId,
+                      restart: context.modelRestarts,
+                    });
+                  if (failedUsageCause !== undefined)
+                    return yield* Effect.failCause(failedUsageCause);
+                  const inputs = yield* drainInputs(context, options);
+                  const nextPrompt = yield* appendInputs(context, prompt, inputs, options);
+
+                  return Stream.succeed<TurnOutput>({
+                    _tag: "NextTurn",
+                    prompt: nextPrompt,
+                    turn,
+                    toolCalls: priorToolCalls,
+                    restarting: true,
+                  });
+                }),
+              ),
+            ),
+          );
+        }),
+      );
+
       const events = Stream.fromIterable(preEvents).pipe(
         Stream.concat(started),
-        Stream.concat(response),
-        Stream.concat(continuation.pipe(Stream.tapCause(() => retainFailedUsage()))),
+        Stream.concat(disposableResponse),
+        Stream.concat(afterResponse),
       );
 
       return modelServices === undefined ? events : Stream.provideContext(events, modelServices);
@@ -8144,6 +8248,7 @@ function streamWithCompletion<
             // canonical response records so token budgets and the compaction
             // trigger keep accounting across ownership changes.
             modelCalls: resumeUsage?.modelCalls ?? 0,
+            modelRestarts: resumeUsage?.modelRestarts ?? 0,
             usageStatus:
               resumeUsage?.usageStatus ?? (resumeUsage === undefined ? "complete" : "unknown"),
             pricingStatus:
@@ -8379,6 +8484,7 @@ function streamWithCompletion<
                     readonly turn: number;
                     readonly toolCalls: number;
                     readonly resume?: RunTurnResume;
+                    readonly restarting?: boolean;
                   }
                 | undefined;
 
@@ -8425,6 +8531,7 @@ function streamWithCompletion<
                         request.turn,
                         request.toolCalls,
                         options,
+                        request.restarting,
                       )
                     : makeResumeTurn(
                         agent,

@@ -525,6 +525,7 @@ const PROMPT_TRANSPARENT_TAGS: ReadonlySet<string> = new Set([
   "ToolApprovalRequested",
   "ToolApprovalDecided",
   "ModelResponseInterrupted",
+  "ModelCallAborted",
   "SubagentRequested",
   "SubagentStarted",
   "SubagentJoined",
@@ -892,6 +893,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     programmaticToolCalls: seed?.policyUsage.programmaticToolCalls ?? 0,
     consecutiveToolFailures: seed?.policyUsage.consecutiveToolFailures ?? 0,
     finalizationUsed: seed?.policyUsage.finalizationUsed ?? false,
+    modelRestarts: seed?.policyUsage.modelRestarts ?? 0,
   };
 
   const accountResponse = Effect.fn("RunJournal.accountResponse")(function* (
@@ -1067,6 +1069,45 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
         }
         policyUsage.programmaticToolCalls = payload.programmaticToolCalls;
         policyUsage.finalizationUsed = payload.finalizationUsed;
+      }
+      if (payload._tag === "ModelCallAborted" && payload.runId === ownerRunId) {
+        if (seed !== undefined && envelope.sequence <= seed.throughSequence) return;
+        if (payload.restart !== policyUsage.modelRestarts + 1)
+          return yield* journalError("Model restart reservations must advance once");
+        policyUsage.modelRestarts = payload.restart;
+
+        const summary = yield* summarizeModelUsage(payload.modelUsage).pipe(
+          Effect.mapError((cause) =>
+            journalError("Aborted model usage exceeds accounting bounds", cause),
+          ),
+        );
+
+        usage.modelCalls = yield* addProjectedUsage(
+          "modelCalls",
+          usage.modelCalls,
+          summary.modelCalls,
+        );
+        usage.inputTokens = yield* addProjectedUsage(
+          "inputTokens",
+          usage.inputTokens,
+          summary.inputTokens.total,
+        );
+        usage.outputTokens = yield* addProjectedUsage(
+          "outputTokens",
+          usage.outputTokens,
+          summary.outputTokens.total,
+        );
+        usage.costMicrousd = yield* addProjectedUsage(
+          "costMicrousd",
+          usage.costMicrousd,
+          summary.costMicrousd,
+        );
+        usage.modelUsage.push(...payload.modelUsage);
+        unobservedModelCalls = yield* addProjectedUsage(
+          "unobservedModelCalls",
+          unobservedModelCalls,
+          payload.unobservedModelCalls,
+        );
       }
       if (PROMPT_TRANSPARENT_TAGS.has(payload._tag)) return;
       // The compaction record governs the fold (pre-scan) and contributes no

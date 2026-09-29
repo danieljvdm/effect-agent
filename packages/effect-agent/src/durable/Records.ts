@@ -498,6 +498,17 @@ export class ModelResponseInterrupted extends Schema.TaggedClass<ModelResponseIn
   reason: BoundedText,
 }) {}
 
+/** Disposable call cancellation: no response or Tool declaration is canonical. */
+export class ModelCallAborted extends Schema.TaggedClass<ModelCallAborted>()("ModelCallAborted", {
+  runId: RunId,
+  turnId: TurnId,
+  turn: TurnNumber,
+  restart: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 2 })),
+  reason: Schema.Literal("joined-input"),
+  modelUsage: Schema.Array(ModelCallUsage),
+  unobservedModelCalls: Schema.Natural,
+}) {}
+
 /**
  * One engine-native compaction committed before the pre-Turn view changes (RUN-026).
  * `coversThrough` is a Thread record sequence: the projection
@@ -1020,6 +1031,7 @@ export const CanonicalRecordPayload = Schema.Union([
   ToolApprovalRequested,
   ToolApprovalDecided,
   ModelResponseInterrupted,
+  ModelCallAborted,
   CompactionCreated,
   RunFailed,
   RunCompleted,

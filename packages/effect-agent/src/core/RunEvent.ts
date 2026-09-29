@@ -38,6 +38,14 @@ export class ModelStarted extends Schema.TaggedClass<ModelStarted>()("ModelStart
   turn: Schema.Int.check(Schema.isGreaterThan(0)),
 }) {}
 
+/** Discard all drafts for this turnId; a new model request will include joined input. */
+export class ModelRestarted extends Schema.TaggedClass<ModelRestarted>()("ModelRestarted", {
+  ...RunEventBase,
+  turnId: TurnId,
+  turn: Schema.Int.check(Schema.isGreaterThan(0)),
+  reason: Schema.Literal("joined-input"),
+}) {}
+
 /** Carries one live assistant text delta. */
 export class TextDelta extends Schema.TaggedClass<TextDelta>()("TextDelta", {
   ...RunEventBase,
@@ -339,6 +347,7 @@ export const RunEvent = Schema.Union([
   RunStarted,
   TurnStarted,
   ModelStarted,
+  ModelRestarted,
   TextDelta,
   ReasoningDelta,
   ToolCallDeclared,

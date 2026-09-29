@@ -152,10 +152,17 @@ export interface RunInputCommand {
  * Dependency-neutral input seam used by the interpreter.
  *
  * A capability adapter owns queue bounds and Scope finalization. The engine calls
- * `start` before the first drain, `drain` only at safe Turn seams, and `end`
+ * `start` before the first drain, `drain` only at safe Turn seams (including after
+ * cancellation of a disposable model call), and `end`
  * exactly once when the Run leaves its Scope.
  */
 export interface RunInputHook<Error = never, Requirements = never> {
+  /**
+   * Wait for an eligible join without appending it to history. Must register before checking
+   * authority and retain any claimed input for `drain`, even when this wait is interrupted.
+   * Used only with `restartOnJoinedInput`; each wait belongs to the model stream's Scope.
+   */
+  readonly awaitJoin?: Effect.Effect<void, Error, Requirements> | undefined;
   readonly start?: (() => Effect.Effect<void, Error, Requirements>) | undefined;
   readonly drain: (
     policy: CommandDrainPolicy,
@@ -577,6 +584,14 @@ export class AgentUpdateAcceptance extends Context.Service<
  * the ephemeral runtime always has.
  */
 export interface RunDurabilityHook<Error = never, Requirements = never> {
+  /** Persist replacement count and staged usage after cancellation, before starting its successor. */
+  readonly commitModelRestart?:
+    | ((restart: {
+        readonly turn: number;
+        readonly turnId: TurnId;
+        readonly restart: number;
+      }) => Effect.Effect<void, Error, Requirements>)
+    | undefined;
   /** Stage the exact request declarations for the existing canonical response append. */
   readonly noteToolExposure?:
     | ((turn: number, snapshot: Snapshot) => Effect.Effect<void, Error, Requirements>)
@@ -948,7 +963,7 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
   /** Initial or canonically restored run-scoped native selection. */
   readonly toolSelection?: Selection | undefined;
   /**
-   * Host preparation boundary before each new model Turn, including its context preparation
+   * Host preparation boundary before each new or replacement model call, including context preparation
    * and compaction calls. The preceding Tool batch and history advance have finished. A resumed
    * canonical Tool batch bypasses this hook until it continues to a new Turn. This hook does not
    * reset the Run deadline or change prompt protection, and is not automatically inherited by spawned children.

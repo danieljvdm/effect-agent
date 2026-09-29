@@ -12,6 +12,8 @@ export const RunPolicyUsage = Schema.Struct({
   programmaticToolCalls: Schema.Natural,
   consecutiveToolFailures: Schema.Natural,
   finalizationUsed: Schema.Boolean,
+  /** Joined-input replacements already reserved; absent before this feature. */
+  modelRestarts: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 2 }))),
 });
 
 export type RunPolicyUsage = typeof RunPolicyUsage.Type;
