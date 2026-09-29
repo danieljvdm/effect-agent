@@ -46,7 +46,7 @@ const Generation = Schema.Struct({
 });
 
 describe("maintenance retry deadlines", () => {
-  // Regression: https://github.com/danieljvdm/effect-agent/pull/694
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/e1c3ce677e82589a4b133840e640464472ec2c3f
   it("gives each due post-native lane a turn across full passes and coordinator rebuilds", () =>
     Effect.runPromise(
       Effect.gen(function* () {
