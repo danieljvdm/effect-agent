@@ -1,5 +1,17 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.154
+
+### Patch Changes
+
+- [#680](https://github.com/danieljvdm/effect-agent/pull/680) [`826fb91`](https://github.com/danieljvdm/effect-agent/commit/826fb911a7dfd6548182e02f103c747f1a9a567f) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reduce Browser Run action latency by resolving a unique CSS target without collecting every matching element handle. Preserve isolated selector lookup, stale-target guards, and cancellation cleanup.
+
+- [#709](https://github.com/danieljvdm/effect-agent/pull/709) [`2eed5a3`](https://github.com/danieljvdm/effect-agent/commit/2eed5a3c1b79fb83ffcea275575eb65fb95851ef) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Keep ownership and maintenance caches consistent when Durable Object instrumentation wraps SQL handles. Prevent valid attempts from being rejected and newly scheduled work from being missed.
+
+- Updated dependencies [[`826fb91`](https://github.com/danieljvdm/effect-agent/commit/826fb911a7dfd6548182e02f103c747f1a9a567f), [`2eed5a3`](https://github.com/danieljvdm/effect-agent/commit/2eed5a3c1b79fb83ffcea275575eb65fb95851ef)]:
+  - effect-agent@0.1.0-beta.154
+  - @effect-agent/storage-cloudflare@0.1.0-beta.154
+
 ## 0.1.0-beta.153
 
 ### Patch Changes

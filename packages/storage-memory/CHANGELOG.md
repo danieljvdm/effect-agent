@@ -1,5 +1,12 @@
 # @effect-agent/storage-memory
 
+## 0.1.0-beta.154
+
+### Patch Changes
+
+- Updated dependencies [[`826fb91`](https://github.com/danieljvdm/effect-agent/commit/826fb911a7dfd6548182e02f103c747f1a9a567f)]:
+  - effect-agent@0.1.0-beta.154
+
 ## 0.1.0-beta.153
 
 ### Patch Changes

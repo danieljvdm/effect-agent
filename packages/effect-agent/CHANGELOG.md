@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.154
+
+### Minor Changes
+
+- [#680](https://github.com/danieljvdm/effect-agent/pull/680) [`826fb91`](https://github.com/danieljvdm/effect-agent/commit/826fb911a7dfd6548182e02f103c747f1a9a567f) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add `BrowserUse.make({ grounding: "decision" })` to pair browser tools with handlers and opt into native DecisionModel target selection. Supply application-owned browser actions through `effect-agent/browser-use` or the `BrowserUse` namespace.
+
 ## 0.1.0-beta.153
 
 ### Patch Changes
