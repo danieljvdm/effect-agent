@@ -7,16 +7,16 @@ import { TypeSafeClient, TypeSafeDecisionModel } from "@effect/ai-typesafe";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { Agent, AgentRuntime, InMemory } from "effect-agent";
 import * as BrowserUse from "effect-agent/browser-use";
+import { Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 
 import {
-  batchTools,
-  singleTools,
   scripted,
   Observation,
   TaskResult,
   Browser,
   completionLayer,
+  completionTools,
 } from "./browser.ts";
 import {
   defaultChallenge,
@@ -26,10 +26,14 @@ import {
   type ModelApi,
   type RunInput,
 } from "./contract.ts";
-import { groundedSingleTools, groundedBatchTools, makeGroundedLayers } from "./grounding.ts";
 import { routeDecisionLayer } from "./route-probabilities.ts";
 import { traceModels, traceOpenAiClient, Trace } from "./telemetry.ts";
 import { makeWikipedia, runWikipedia, runJevWikipedia, Wikipedia } from "./wikipedia.ts";
+
+const directSingle = BrowserUse.make();
+const directBatch = BrowserUse.make({ mode: "batched" });
+const groundedSingle = BrowserUse.make({ grounding: "decision" });
+const groundedBatch = BrowserUse.make({ grounding: "decision", mode: "batched" });
 
 const definition = {
   input: Schema.String,
@@ -48,13 +52,13 @@ const definition = {
 
 const individualAgent = Agent.make("browser-speed-individual", {
   ...definition,
-  toolkit: singleTools,
+  toolkit: Toolkit.merge(completionTools, directSingle.toolkit),
   completion: { tool: "finish", required: true, project: ({ parameters }) => parameters },
 });
 
 const batchedAgent = Agent.make("browser-speed-batched", {
   ...definition,
-  toolkit: batchTools,
+  toolkit: Toolkit.merge(completionTools, directBatch.toolkit),
   completion: { tool: "finish", required: true, project: ({ parameters }) => parameters },
 });
 
@@ -66,13 +70,13 @@ const groundedDefinition = {
 
 const groundedIndividualAgent = Agent.make("browser-speed-jev-individual", {
   ...groundedDefinition,
-  toolkit: groundedSingleTools,
+  toolkit: Toolkit.merge(completionTools, groundedSingle.toolkit),
   completion: { tool: "finish", required: true, project: ({ parameters }) => parameters },
 });
 
 const groundedBatchedAgent = Agent.make("browser-speed-jev-batched", {
   ...groundedDefinition,
-  toolkit: groundedBatchTools,
+  toolkit: Toolkit.merge(completionTools, groundedBatch.toolkit),
   completion: { tool: "finish", required: true, project: ({ parameters }) => parameters },
 });
 
@@ -189,18 +193,6 @@ export const executeTask = Effect.fnUntraced(function* (
           )
     ).pipe(Layer.provide(FetchHttpClient.layer));
 
-    const grounded = yield* makeGroundedLayers(initial);
-
-    const directSingle = Layer.merge(
-      BrowserUse.singleLayer.pipe(Layer.provide(browser.actionsLayer)),
-      completionLayer,
-    );
-
-    const directBatch = Layer.merge(
-      BrowserUse.batchLayer.pipe(Layer.provide(browser.actionsLayer)),
-      completionLayer,
-    );
-
     // Supply only DecisionModel: Model's shared identity services belong to the planner.
     const run = wiki
       ? runWikipedia(input.wikipedia ?? defaultChallenge, input.grounding === "jev").pipe(
@@ -209,16 +201,20 @@ export const executeTask = Effect.fnUntraced(function* (
         )
       : input.grounding === "jev"
         ? (input.mode === "batched"
-            ? AgentRuntime.run(groundedBatchedAgent, message).pipe(Effect.provide(grounded.batched))
+            ? AgentRuntime.run(groundedBatchedAgent, message).pipe(
+                Effect.provide(groundedBatch.layer({ initialObservation: initial })),
+              )
             : AgentRuntime.run(groundedIndividualAgent, message).pipe(
-                Effect.provide(grounded.single),
+                Effect.provide(groundedSingle.layer({ initialObservation: initial })),
               )
           ).pipe(Effect.provide(decisionLayer))
         : input.mode === "batched"
-          ? AgentRuntime.run(batchedAgent, message).pipe(Effect.provide(directBatch))
-          : AgentRuntime.run(individualAgent, message).pipe(Effect.provide(directSingle));
+          ? AgentRuntime.run(batchedAgent, message).pipe(Effect.provide(directBatch.layer()))
+          : AgentRuntime.run(individualAgent, message).pipe(Effect.provide(directSingle.layer()));
 
-    const result = yield* traceModels(run.pipe(Effect.provide([InMemory.layer, modelLayer]))).pipe(
+    const result = yield* traceModels(
+      run.pipe(Effect.provide([InMemory.layer, modelLayer, browser.actionsLayer, completionLayer])),
+    ).pipe(
       Effect.mapError(
         (error) =>
           new LabError({

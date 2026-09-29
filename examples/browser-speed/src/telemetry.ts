@@ -19,7 +19,7 @@ import {
   type Phase,
   type Report,
   type RunInput,
-  type Span,
+  Span,
 } from "./contract.ts";
 
 type Details = Partial<
@@ -204,7 +204,15 @@ export const traceOpenAiClient = Effect.gen(function* () {
   });
 });
 
-/** Tap native model spans and metadata without replacing the LanguageModel service. */
+const decodeSelection = Schema.decodeUnknownOption(
+  Schema.Struct({
+    choices: Span.fields.choices,
+    inputTokens: Span.fields.inputTokens,
+    outputTokens: Span.fields.outputTokens,
+  }),
+);
+
+/** Tap native model and browser selection spans without replacing either model service. */
 export const traceModels = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
   const trace = yield* Trace;
   const delegate = yield* Tracer.Tracer;
@@ -214,12 +222,21 @@ export const traceModels = Effect.fnUntraced(function* <A, E, R>(effect: Effect.
   const tracer = Tracer.make({
     span(options) {
       const span = delegate.span(options);
+      const selection = options.name === "BrowserUse.selectTargets";
 
-      if (!options.name.startsWith("chat ") && !options.name.startsWith("LanguageModel."))
+      if (
+        !selection &&
+        !options.name.startsWith("chat ") &&
+        !options.name.startsWith("LanguageModel.")
+      )
         return span;
-      const finish = trace.begin("model", options.name);
 
-      handles.set(span.spanId, finish);
+      const finish = trace.begin(
+        selection ? "decision" : "model",
+        selection ? "Jev · select controls" : options.name,
+      );
+
+      if (!selection) handles.set(span.spanId, finish);
 
       return {
         _tag: span._tag,
@@ -239,7 +256,19 @@ export const traceModels = Effect.fnUntraced(function* <A, E, R>(effect: Effect.
           return span.status;
         },
         end(time, exit) {
-          finish.end(exit);
+          const details = selection
+            ? decodeSelection(span.attributes.get("browser.selection"))
+            : Option.none();
+
+          finish.end(
+            exit,
+            selection
+              ? {
+                  model: "jev-latest",
+                  ...(Option.isSome(details) ? details.value : {}),
+                }
+              : {},
+          );
           span.end(time, exit);
         },
       };

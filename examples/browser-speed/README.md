@@ -34,8 +34,9 @@ verified time, and hops for the **same start and destination**; a task-board win
 Wikipedia winner. Page text is untrusted input. Tools do not expose arbitrary JavaScript or URLs.
 
 The reusable browser toolkits and model + Jev element matching come from
-`effect-agent/browser-use`. This example supplies the `BrowserActions` adapter and decorates
-`TargetSelector` with report spans. Wikipedia eligibility, route choice, verification, model
+`effect-agent/browser-use`. `BrowserUse.make({ grounding, mode })` pairs tools with their handlers.
+This example supplies the `BrowserActions` adapter and reads native Effect selection spans.
+Wikipedia eligibility, route choice, verification, model
 configuration, and the comparison UI remain here. [Consumer setup](../../docs/guide/browser.md#opt-into-decision-grounded-browser-tools).
 
 The task board uses self-contained HTML and exposes observed clicks, fills, and selections.

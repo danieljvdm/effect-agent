@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema, Semaphore } from "effect";
+import { Context, Effect, Schema, Semaphore } from "effect";
 import { Decision, DecisionModel, Tool, Toolkit } from "effect/unstable/ai";
 
 const Ref = Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9-]{0,50}$/));
@@ -181,32 +181,6 @@ export const selectTargets = Effect.fnUntraced(function* (
   return { actions, choices, usage: result.usage };
 });
 
-/** Target selection is separate from dispatch so hosts can trace decisions or supply another resolver. */
-export class TargetSelector extends Context.Service<
-  TargetSelector,
-  {
-    readonly select: (
-      observation: typeof Observation.Type,
-      targets: ReadonlyArray<TargetAction>,
-    ) => Effect.Effect<Effect.Success<ReturnType<typeof selectTargets>>, BrowserUseError>;
-  }
->()("@effect-agent/BrowserUse/TargetSelector") {
-  /** Supply any native DecisionModel, including Jev. No provider is selected by the library. */
-  static readonly layer = Layer.effect(
-    TargetSelector,
-    Effect.gen(function* () {
-      const model = yield* DecisionModel.DecisionModel;
-
-      return TargetSelector.of({
-        select: (observation, targets) =>
-          selectTargets(observation, targets).pipe(
-            Effect.provideService(DecisionModel.DecisionModel, model),
-          ),
-      });
-    }),
-  );
-}
-
 const observeTool = Tool.make("observe", {
   description: "Read the visible page and controls. Only observed controls may receive actions.",
   parameters: Tool.EmptyParams,
@@ -216,7 +190,7 @@ const observeTool = Tool.make("observe", {
 });
 
 /** Model-selected refs; no DecisionModel is required. Add the application's completion tool separately. */
-export const singleTools = Toolkit.make(
+const singleTools = Toolkit.make(
   observeTool,
   Tool.make("act", {
     description:
@@ -228,7 +202,7 @@ export const singleTools = Toolkit.make(
   }),
 );
 
-export const batchTools = Toolkit.make(
+const batchTools = Toolkit.make(
   observeTool,
   Tool.make("act", {
     description:
@@ -242,8 +216,8 @@ export const batchTools = Toolkit.make(
   }),
 );
 
-/** Described targets; the host's TargetSelector resolves them before any dispatch. */
-export const groundedSingleTools = Toolkit.make(
+/** Described targets; the host's DecisionModel resolves them before any dispatch. */
+const groundedSingleTools = Toolkit.make(
   observeTool,
   Tool.make("act", {
     description:
@@ -255,7 +229,7 @@ export const groundedSingleTools = Toolkit.make(
   }),
 );
 
-export const groundedBatchTools = Toolkit.make(
+const groundedBatchTools = Toolkit.make(
   observeTool,
   Tool.make("act", {
     description:
@@ -267,7 +241,7 @@ export const groundedBatchTools = Toolkit.make(
   }),
 );
 
-export const singleLayer = singleTools.toLayer(
+const singleLayer = singleTools.toLayer(
   Effect.gen(function* () {
     const browser = yield* BrowserActions;
 
@@ -275,7 +249,7 @@ export const singleLayer = singleTools.toLayer(
   }),
 );
 
-export const batchLayer = batchTools.toLayer(
+const batchLayer = batchTools.toLayer(
   Effect.gen(function* () {
     const browser = yield* BrowserActions;
 
@@ -288,7 +262,7 @@ export const batchLayer = batchTools.toLayer(
  */
 const makeGroundedHandlers = Effect.fnUntraced(function* (initial?: typeof Observation.Type) {
   const browser = yield* BrowserActions;
-  const selector = yield* TargetSelector;
+  const model = yield* DecisionModel.DecisionModel;
   const permit = yield* Semaphore.make(1);
   let observation = initial ?? null;
 
@@ -307,7 +281,19 @@ const makeGroundedHandlers = Effect.fnUntraced(function* (initial?: typeof Obser
 
     // Invalidate before fallible work: an uncertain adapter failure must not reuse old evidence.
     observation = null;
-    const selected = yield* selector.select(current, targets);
+
+    const selected = yield* selectTargets(current, targets).pipe(
+      Effect.provideService(DecisionModel.DecisionModel, model),
+      Effect.tap(({ choices, usage }) =>
+        Effect.annotateCurrentSpan("browser.selection", {
+          choices,
+          ...(usage.inputTokens === undefined ? {} : { inputTokens: usage.inputTokens }),
+          ...(usage.outputTokens === undefined ? {} : { outputTokens: usage.outputTokens }),
+        }),
+      ),
+      Effect.withSpan("BrowserUse.selectTargets"),
+    );
+
     const result = yield* browser.act(selected.actions);
 
     observation = result.observation;
@@ -321,24 +307,61 @@ const makeGroundedHandlers = Effect.fnUntraced(function* (initial?: typeof Obser
   };
 });
 
-/** Decision-grounded single actions. Build the Layer once per browser run. */
-export const groundedSingleLayer = (initial?: typeof Observation.Type) =>
-  groundedSingleTools.toLayer(
-    makeGroundedHandlers(initial).pipe(
-      Effect.map(({ observe, act }) => ({
-        observe,
-        act: ({ action }) => act([action]),
-      })),
-    ),
-  );
+export interface Options {
+  /** Who resolves controls: the planner supplies refs by default; "decision" uses a native DecisionModel. */
+  readonly grounding?: "direct" | "decision";
+  /** One action by default; "batched" accepts 1–8 actions on already observed controls. */
+  readonly mode?: "single" | "batched";
+}
 
-/** Decision-grounded batches; all targets resolve before the first input. */
-export const groundedBatchLayer = (initial?: typeof Observation.Type) =>
-  groundedBatchTools.toLayer(
-    makeGroundedHandlers(initial).pipe(
-      Effect.map(({ observe, act }) => ({
-        observe,
-        act: ({ actions }) => act(actions),
-      })),
+export interface LayerOptions {
+  /** Already prepared observation from this page/run. Omit to observe before the first selection. */
+  readonly initialObservation?: typeof Observation.Type;
+}
+
+const single = { toolkit: singleTools, layer: () => singleLayer };
+const batched = { toolkit: batchTools, layer: () => batchLayer };
+
+const groundedSingle = {
+  toolkit: groundedSingleTools,
+  layer: (options?: LayerOptions) =>
+    groundedSingleTools.toLayer(
+      makeGroundedHandlers(options?.initialObservation).pipe(
+        Effect.map(({ observe, act }) => ({ observe, act: ({ action }) => act([action]) })),
+      ),
     ),
-  );
+};
+
+const groundedBatched = {
+  toolkit: groundedBatchTools,
+  layer: (options?: LayerOptions) =>
+    groundedBatchTools.toLayer(
+      makeGroundedHandlers(options?.initialObservation).pipe(
+        Effect.map(({ observe, act }) => ({ observe, act: ({ actions }) => act(actions) })),
+      ),
+    ),
+};
+
+/**
+ * Define browser tools and their matching handlers together. Include `toolkit` in your Agent
+ * and provide `layer()` once per page/run. All modes require BrowserActions; decision grounding
+ * also requires a native DecisionModel. The library never chooses a provider or opens a browser.
+ */
+export function make(options: { grounding: "decision"; mode: "batched" }): typeof groundedBatched;
+export function make(options: { grounding: "decision"; mode?: "single" }): typeof groundedSingle;
+export function make(options: { grounding?: "direct"; mode: "batched" }): typeof batched;
+export function make(options?: { grounding?: "direct"; mode?: "single" }): typeof single;
+
+export function make(
+  options: Options,
+): typeof single | typeof batched | typeof groundedSingle | typeof groundedBatched;
+
+export function make(options: Options = {}) {
+  return options.grounding === "decision"
+    ? options.mode === "batched"
+      ? groundedBatched
+      : groundedSingle
+    : options.mode === "batched"
+      ? batched
+      : single;
+}

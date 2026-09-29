@@ -1,6 +1,7 @@
 import { Context, Effect, Option, Schema } from "effect";
 import { Agent, AgentRuntime } from "effect-agent";
 import { CompactionPolicy } from "effect-agent/agent-policy";
+import { selectTargets } from "effect-agent/browser-use";
 import { DecisionModel, Tool, Toolkit } from "effect/unstable/ai";
 import type { HTTPRequest } from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 
@@ -12,7 +13,6 @@ import {
   type WikipediaChallenge,
   type WikiHop,
 } from "./contract.ts";
-import { selectTargets } from "./grounding.ts";
 import { Trace } from "./telemetry.ts";
 import { chooseRoute, type RoutePage } from "./wiki-routing.ts";
 
@@ -611,6 +611,8 @@ export const makeWikipedia = Effect.fnUntraced(function* (
           })),
         },
         [{ kind: "click", target: description }],
+      ).pipe(
+        Effect.mapError((error) => new LabError({ code: error.code, message: error.message })),
       ),
       ({ usage, choices }) => ({
         model: "jev-latest",

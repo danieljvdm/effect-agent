@@ -22,8 +22,6 @@ export const finishTool = Tool.make("finish", {
 
 export const completionTools = Toolkit.make(finishTool);
 export const completionLayer = completionTools.toLayer({ finish: Effect.succeed });
-export const singleTools = Toolkit.merge(completionTools, BrowserUse.singleTools);
-export const batchTools = Toolkit.merge(completionTools, BrowserUse.batchTools);
 
 export const makeBrowser = Effect.fnUntraced(function* (
   session: Pick<BrowserSession, "run">,

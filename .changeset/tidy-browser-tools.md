@@ -2,4 +2,4 @@
 "effect-agent": minor
 ---
 
-Add reusable browser toolkits with opt-in DecisionModel target selection and explicit application-owned browser actions. Consume them through `effect-agent/browser-use` or the `BrowserUse` namespace.
+Add `BrowserUse.make({ grounding: "decision" })` to pair browser tools with handlers and opt into native DecisionModel target selection. Supply application-owned browser actions through `effect-agent/browser-use` or the `BrowserUse` namespace.
