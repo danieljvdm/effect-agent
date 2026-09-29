@@ -148,6 +148,24 @@ Each case creates and drops its own database, so the server needs no preparation
 
 CI runs the adapter against Postgres 16 and 18, and the certification suite against 17.
 
+## Live credentials
+
+Local live model calls and evaluations read provider keys, such as `OPENAI_API_KEY`, from the
+Infisical project in `.infisical.json`, environment `dev`. Use the maintainer machine identity, not
+a personal `infisical login`: a personal session can select an organization that does not own the
+project and then fails with 403. Maintainer shells provide the identity as
+`INFISICAL_UNIVERSAL_AUTH_CLIENT_ID` and `INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET`. A machine identity
+needs an explicit project ID:
+
+```sh
+export INFISICAL_TOKEN="$(infisical login --method=universal-auth --silent --plain)"
+infisical run --projectId="$(bun -p 'require("./.infisical.json").workspaceId')" --env=dev -- <command>
+```
+
+The environment holds model provider keys only. The hosted checkout proof also needs the Cloudflare
+values listed in [its README](../tooling/browser-run-worker-proof/README.md#run). CI reads repository
+secrets instead.
+
 ## Documentation examples
 
 Lead implementation guides with a short, concrete code example after at most one introductory
@@ -270,7 +288,7 @@ For an authenticated manual release:
 1. Run `vp run changeset`.
 2. Run `vp run changeset:version`, then `vp install`.
 3. Run `vp run ready`.
-4. Supply the continuity and [checkout environment](../tooling/browser-run-worker-proof/README.md#run)
+4. Supply [live credentials](#live-credentials) and the [checkout environment](../tooling/browser-run-worker-proof/README.md#run)
    for the exact clean candidate. Use one checkout repetition and `CHECKOUT_HUMAN=false`.
 5. Run `vp run release:publish --dry-run`, then
    `EFFECT_AGENT_LIVE=1 vp run --no-cache release:checked-publish`.
