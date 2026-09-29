@@ -1,5 +1,14 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.152
+
+### Patch Changes
+
+- [#698](https://github.com/danieljvdm/effect-agent/pull/698) [`a12c20b`](https://github.com/danieljvdm/effect-agent/commit/a12c20b0ef545c83ef73d18e860fa288f86678a1) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Carry bounded, attributed discussion into reviews and research so rebuttals can inform source verification. Require supported admission, recovery, API, and persisted-format evidence before reporting a defect.
+
+- Updated dependencies [[`cff65f6`](https://github.com/danieljvdm/effect-agent/commit/cff65f61b7b46fb00ebecd1a6242c1d04cf0bd24)]:
+  - effect-agent@0.1.0-beta.152
+
 ## 0.1.0-beta.151
 
 ### Patch Changes

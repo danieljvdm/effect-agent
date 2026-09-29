@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.152
+
+### Patch Changes
+
+- [#700](https://github.com/danieljvdm/effect-agent/pull/700) [`cff65f6`](https://github.com/danieljvdm/effect-agent/commit/cff65f61b7b46fb00ebecd1a6242c1d04cf0bd24) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Resume settled discovery selections after a selected tool is removed, preserving surviving selections and the original receipts.
+
 ## 0.1.0-beta.151
 
 ### Patch Changes

@@ -1,5 +1,7 @@
 # @effect-agent/ai-decision
 
+## 0.1.0-beta.152
+
 ## 0.1.0-beta.151
 
 ## 0.1.0-beta.150
