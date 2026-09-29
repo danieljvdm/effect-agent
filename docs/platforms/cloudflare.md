@@ -285,7 +285,7 @@ is not replayed. Approval waits and joined input remain ordering barriers; live 
 prevents another claim. `explainThread` exposes parked operations for authorized resolution or abort.
 
 Failed and no-progress passes preserve the dirty generation and use jittered exponential
-backoff up to `alarmBackoffCap` (5 seconds by default), independently of `wakeScanInterval`.
+backoff up to `alarmBackoffCap` (5 seconds by default).
 Missing agent bindings wait 5, 10, 20, 40, then 60 seconds between attempts;
 further attempts remain one minute apart. The retry deadline survives eviction:
 `ensureAlarm` and early alarm deliveries cannot accelerate native recovery for the same
@@ -351,82 +351,69 @@ Existing retained faults announce their pending Submissions on the next native s
 resetting history or retry deadlines. This replaces `ThreadMaintenance.recoveryStatus`; hosts
 must remove their status polling and consume these transitions instead.
 
-Application outboxes supply finite, independent lanes through `ThreadHostMaintenance`:
+Application outboxes enroll independent lanes in one durable due queue:
 
 ```ts
-import { ThreadHostMaintenance } from "@effect-agent/platform-cloudflare/alarm";
-import { Context } from "effect";
+import { ThreadHostMaintenance, ThreadMutationGate } from "@effect-agent/platform-cloudflare/alarm";
+import { Context, Effect } from "effect";
 
-// Capture application services when constructing the Layer.
 const maintenance = Context.make(ThreadHostMaintenance, {
-  lanes: [
-    {
-      dispatchTimeoutMillis: 30_000,
-      pendingDeadline: admission.pendingDeadline,
-      run: admission.run,
-    },
-    {
-      dispatchTimeoutMillis: 60_000,
-      pendingDeadline: replies.pendingDeadline,
-      run: replies.run,
-    },
-  ],
+  lanes: [{ id: "replies", dispatchTimeoutMillis: 30_000, run: replies.deliverWave }],
+});
+
+const retainReply = Effect.gen(function* () {
+  const gate = yield* ThreadMutationGate;
+  yield* gate.withMutation(replies.retain, {
+    invalidatesRecovery: false,
+    lanes: ["replies"],
+  });
 });
 ```
 
-The alarm owns the scheduling loop. Each lane selects and joins one finite wave;
-it receives an initial opportunity even on a caught-up alarm. The alarm checks idle lanes
-on completion, native progress, `WakeScheduler` hints and its existing bounded scan.
-Independent lanes remain available while another lane waits on external work or fails. Failed
-auxiliary work is reported after healthy work finishes within the event's existing allowances.
-Compose hosts
-by concatenating their `lanes`; do not join independent operations into one `run`.
+Each lane has a stable ID, unique within the physical Object. Reserve `effect-agent:` IDs for
+framework lanes. `run` returns `Effect<Option<number>, DurableAlarmError, Scope>`: the next deadline
+in epoch milliseconds, or `None` when idle. Calculate it as part of the wave that commits the
+receipts and retries. The scheduler never calls a separate host deadline reader. Compose hosts
+by concatenating their lanes.
 
-`run` returns `Effect<void, DurableAlarmError, Scope>` and its Scope closes after each wave.
-Declare `dispatchTimeoutMillis` as an integer from 1 to 300000 milliseconds, covering
-selection, delivery, retry/receipt commits and cleanup. Use the sum for sequential operations within
-one lane. The alarm starts a wave only when its allowance fits the event; later arrivals
-cannot renew that allowance. A failed lane is not retried within the event.
-`pendingDeadline` returns `Effect<Option<number>, DurableAlarmError>` from bounded local
-control state. It must not read retained execution history; select current obligations first.
+A registered host lane starts idle. Producers name only the lanes receiving work, and the gate
+prearms those entries before the mutation body. A failed mutation can leave a discovery wave;
+validation and authorization should precede enrollment when they establish that no work is needed.
+`gate.schedule(id, dueAt)` explicitly enrolls an existing obligation or an earlier deadline. Use it
+inside a local source transaction, or use `withMutation` around the whole remote commit. Keep the
+same gate instance when rebuilding runtime services. Receipt bookkeeping that creates no new work
+uses `invalidatesRecovery: false` with no lanes. Native admissions and controls keep the default
+`invalidatesRecovery: true`.
 
-**Breaking API change:** replace `ThreadHostMaintenance.drainUntil` with `lanes` containing
-`run`, `pendingDeadline` and `dispatchTimeoutMillis`. Remove `ThreadMaintenanceActivity`
-(`run`, `ready`, `subscribeChanges`, `all`), dispatch-closure fibers and notification loops.
-Route producer hints through the existing native `WakeScheduler.notify(localThreadId)`
-after the mutation commits. A source-only PubSub no longer wakes maintenance.
-Native message integration replaces `ThreadMessageDelivery.drainUntil` with `prepare`,
-which returns one `{ timeoutMillis, run }` wave and retains its `pendingDeadline`.
+The queue retains each lane's own revision and deadline. A finishing wave cannot erase a newer
+producer enrollment, and a lane with a producer in flight waits for that producer to finish.
+Completions and producer notifications drive the active event; there is no wake-scan timer.
+The one alarm retains the earliest queued deadline after all admitted resources close. Constructor
+repair reads only local scheduling state, never application deadline tables or execution history.
+Future deadlines remain armed when an otherwise quiet event retires.
 
-The native scheduler owns recovery, FIFO selection and retry timing. Finite host, message
-and backfill work keep fresh native dispatch available while they run. The alarm closes new
-work when all lanes are idle or at the original native yield deadline, then joins admitted
-waves. Retry deadlines remain durable; the event does not sleep until future delivery retries.
-Receipt-only bookkeeping does not create native recovery debt.
+Declare `dispatchTimeoutMillis` as an integer from 1 to 300000 milliseconds, covering selection,
+delivery, retry/receipt commits and scoped cleanup. A wave starts only if its allowance fits the
+event. Failed lanes retain independent backoff and do not retry in the same event; healthy lanes
+and native work keep their own opportunities. A malformed deadline, missing handler or duplicate
+ID fails without discarding the obligation. Persist exact envelopes and deduplicate delivery by
+domain identity: interruption cannot roll back remote effects, and delivery remains at least once.
+Hooks must not write the raw alarm slot.
 
-Native message delivery keeps the driver's actual Claim deadline, including its timeout/retry
-commit. The driver has four parallel permits and a retained attempt allowance of at most five
-minutes. Host delivery uses its declared whole-wave allowance; disposable backfill has one wave
-bounded by `projectionDispatchTimeoutMillis` (default 30000ms, maximum 300000ms). These limits
-are independent of native arrivals. All native Attempts share the original ten-minute yield
-deadline, and the entire event shares one fourteen-minute ceiling. Neither input nor delivery
-renews these budgets. Cooperative cancellation cannot preempt synchronous code or stuck finalizers.
+Native message delivery keeps the driver's actual Claim deadline, including timeout/retry commits.
+`ThreadMessageDelivery.prepare` returns `{ timeoutMillis, run }`, with `run` returning the next
+`Option<number>` deadline. Disposable projection backfill keeps one wave per event, bounded by
+`projectionDispatchTimeoutMillis` (default 30000ms). All native Attempts share the original ten-minute
+yield deadline, and the entire event shares one fourteen-minute ceiling. New arrivals renew neither
+budget. Cooperative cancellation cannot preempt synchronous code or stuck finalizers.
 
-Each native step checkpoints its observed generation without changing the physical alarm. After
-all event resources close, the owner reads durable deadlines under the mutation gate and rearms
-or clears the alarm once. A producer racing either checkpoint or retirement retains its newer
-generation and prearmed wake. Persist exact envelopes and claims before network dispatch; local
-cancellation cannot roll back remote effects. Interrupted work remains recoverable after
-reconstruction. Typed failures, defects and a hook's own interruption retain recovery; only the
-owner's event cutoff is deferred work. Exceeding a host lane's declared allowance fails with `DurableAlarmError` while durable work stays pending.
-
-Every accepted host mutation uses the shared `ThreadMutationGate`; hooks must not write the raw
-alarm slot. Native admission, approval, abort and unknown resolution retain the default
-`invalidatesRecovery: true`. Projection, relay and reply receipt-only bookkeeping uses
-`invalidatesRecovery: false`, with its local `pendingDeadline` owning scheduling. Reuse the same
-gate instance when rebuilding maintenance or runtime services. Migrate consumer hooks only with
-an actual published release containing this API, keeping the framework packages on one matching
-release; do not pin an unpublished branch or patch installed dependencies.
+**BEHAVIOR CHANGE:** add IDs to host lanes, return their deadlines from `run`, and remove
+`pendingDeadline` callbacks and `wakeScanInterval`. Enroll each affected ID explicitly; a generic
+`WakeScheduler.notify` is only a promptness hint and does not create host work. On adoption, seed
+existing host obligations into the queue before serving traffic; registering a lane alone does not
+discover them. Built-in lanes perform one initial discovery when their queue entries are first
+created. The queue is new scheduling metadata; canonical history, retry identities, outboxes and
+receipts require no reset. Upgrade consumers after the matching framework release is published.
 
 ### Publish native lifecycle facts
 
@@ -467,8 +454,9 @@ Each batch has a 10-second delivery deadline. Retry state persists before dispat
 automatic attempts and exponential backoff from 1 second to a 60-second cap after the dispatch
 deadline. An exhausted owner parks with its payload retained; later facts for that owner wait
 behind it, while execution and other owners continue. After repairing the destination, an operator
-can call `ThreadStore.lifecyclePublications.retryParked(ownerThreadId, nowMillis)` and wake the
-existing maintenance coordinator. Serialize publication drains and operator retries per owner.
+can call `ThreadStore.lifecyclePublications.retryParked(ownerThreadId, nowMillis)` through the
+assembled Cloudflare store; it enrolls the lifecycle lane in the due queue. Serialize publication
+drains and operator retries per owner.
 
 Pending and parked obligations retain private payloads until acknowledgement. Keep native source
 admissions and Run-input records, and do not delete their Object, until publication debt is
@@ -506,14 +494,14 @@ resources. Initialization must remain local and bounded. The raw source ports ar
 publication must not mutate them or write the native alarm slot. Other consumers need no setup.
 
 The host owns schema-versioned cursors, destination idempotency, acknowledgements and retry
-policy. Implement four hooks, with failures typed as `DurableAlarmError`:
+policy. Implement three hooks, with failures typed as `DurableAlarmError`:
 
 - `invalidate` durably marks source-derived work pending after a source commit.
 - `prepareGeneration(generation)` invalidates a scan when the native generation changes. Repeated
   calls for the same generation must preserve bounded scan progress.
-- `drain` performs bounded delivery and persists acknowledgements or a retry deadline. External
-  delivery is at least once; use destination idempotency. Scope per-delivery resources explicitly.
-- `pendingDeadline` returns `Option<number>` in epoch milliseconds, or `None` when caught up.
+- `drain` performs bounded delivery, persists acknowledgements or retries, and returns the next
+  epoch-millisecond deadline as `Option<number>` (`None` when caught up). Delivery is at least once;
+  use destination idempotency and scope per-delivery resources explicitly.
 
 All hooks except `drain` must be bounded local operations, without waiting behind network I/O.
 Hooks can overlap: the host must prevent an older drain from overwriting newer cursor or retry

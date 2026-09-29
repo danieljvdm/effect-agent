@@ -55,7 +55,6 @@ const baseClass = ThreadObject.make(
     producerPrefix: phase6TravelPlannerProducerPrefix,
     ownershipLeaseDuration: 1_000,
     leaseRenewalInterval: 100,
-    wakeScanInterval: 100,
     settlementPollInterval: 25,
     abortPollInterval: 25,
     alarmBackoffBase: 10,

@@ -100,7 +100,7 @@ describe("maintenance retry deadlines", () => {
                       lanes: [
                         {
                           dispatchTimeoutMillis: 1_000,
-                          pendingDeadline: Effect.succeed(Option.some(0)),
+                          id: "test:failure",
                           run: Effect.gen(function* () {
                             failedAttempts++;
                             yield* Deferred.await(entered);
@@ -117,9 +117,7 @@ describe("maintenance retry deadlines", () => {
                         },
                         {
                           dispatchTimeoutMillis: 5_000,
-                          pendingDeadline: Effect.sync(() =>
-                            completed ? Option.none() : Option.some(0),
-                          ),
+                          id: "test:admission",
                           run: Effect.gen(function* () {
                             yield* Effect.acquireRelease(
                               Effect.sync(() => {
@@ -146,6 +144,8 @@ describe("maintenance retry deadlines", () => {
                             yield* Deferred.succeed(submitted, receipt);
                             yield* Deferred.await(finish);
                             completed = true;
+
+                            return Option.none<number>();
                           }),
                         },
                       ],
@@ -153,6 +153,9 @@ describe("maintenance retry deadlines", () => {
 
                     yield* Effect.gen(function* () {
                       const maintenance = yield* ThreadMaintenance;
+
+                      yield* gate.schedule("test:failure", 0);
+                      yield* gate.schedule("test:admission", 0);
                       const running = yield* Effect.forkChild(maintenance.pass);
 
                       yield* Deferred.await(entered);
@@ -230,7 +233,9 @@ describe("maintenance retry deadlines", () => {
         // Local ports let this physical owner exercise multiple logical Threads, rather
         // than the standard fixture's one-Thread-per-Object transport. Keep its native
         // SQL connection, clock and mutation gate; never rewrite stored submissions.
-        const run = <A, E>(body: Effect.Effect<A, E, ThreadMaintenance | DurableAgentRuntime>) =>
+        const run = <A, E>(
+          body: Effect.Effect<A, E, ThreadMaintenance | DurableAgentRuntime | ThreadMutationGate>,
+        ) =>
           Effect.promise(() =>
             runInDurableObject(stubFor(thread), (instance, state) =>
               instance[DurableObject.RunSymbol](
@@ -271,13 +276,12 @@ describe("maintenance retry deadlines", () => {
                       ...config,
                       alarmBackoffBase: 100,
                       alarmBackoffCap: 100,
-                      wakeScanInterval: 1_000,
                     }),
                     Effect.provideService(ThreadHostMaintenance, {
                       lanes: [
                         {
                           dispatchTimeoutMillis: 1_000,
-                          pendingDeadline: Effect.sync(() => Option.fromUndefinedOr(hostDeadline)),
+                          id: "test:host",
                           run: Effect.gen(function* () {
                             yield* Effect.acquireRelease(
                               Effect.sync(() => {
@@ -297,6 +301,8 @@ describe("maintenance retry deadlines", () => {
                               hostDrains++;
                               hostDeadline = undefined;
                             }
+
+                            return Option.fromUndefinedOr(hostDeadline);
                           }),
                         },
                       ],
@@ -356,6 +362,7 @@ describe("maintenance retry deadlines", () => {
           const before = yield* Clock.currentTimeMillis;
 
           hostFailure = true;
+          yield* run(ThreadMutationGate.use((gate) => gate.schedule("test:host", 0)));
           const failed = yield* run(pass);
 
           expect(Exit.isFailure(failed) ? Cause.pretty(failed.cause) : "success").toContain(
@@ -393,9 +400,10 @@ describe("maintenance retry deadlines", () => {
           const hostNow = yield* Clock.currentTimeMillis;
 
           hostDeadline = attempt === 0 ? before : before + 1_000;
+          yield* run(ThreadMutationGate.use((gate) => gate.schedule("test:host", hostDeadline!)));
           yield* run(ensure);
           expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBe(
-            attempt === 0 ? hostNow + 50 : hostDeadline,
+            attempt === 0 ? hostNow + 5 : hostDeadline,
           );
           yield* TestClock.adjust(before + 1_000 - (yield* Clock.currentTimeMillis));
           expect(Exit.isSuccess(yield* run(pass))).toBe(true);
@@ -420,6 +428,7 @@ describe("maintenance retry deadlines", () => {
         expect(generation.dirty).toBeGreaterThan(generation.processed);
 
         hostFailure = true;
+        yield* run(ThreadMutationGate.use((gate) => gate.schedule("test:host", 0)));
 
         available = true;
         const resumed = yield* run(pass);
@@ -460,7 +469,7 @@ describe("maintenance retry deadlines", () => {
     );
   }, 20_000);
 
-  it("lets no-progress backoff exceed the scan cadence while preserving a live claim", () =>
+  it("retains exponential no-progress backoff while preserving a live claim", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const thread = `maintenance-owned-${crypto.randomUUID()}`;
@@ -541,7 +550,6 @@ describe("maintenance retry deadlines", () => {
                     ...config,
                     alarmBackoffBase: 10,
                     alarmBackoffCap: 40,
-                    wakeScanInterval: 1,
                   }),
                 );
               }),

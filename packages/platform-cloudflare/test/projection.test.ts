@@ -25,8 +25,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   DurableAlarmError,
-  ThreadHostMaintenance,
   ThreadMaintenance,
+  ThreadMutationGate,
   ThreadMaintenanceFailpoint,
 } from "../src/Alarm.ts";
 import { CloudflareThreadClient } from "../src/CloudflareThreadClient.ts";
@@ -178,7 +178,7 @@ describe("live Thread projection and alarm backfill", () => {
       hostMaintenanceControls.set(thread, [
         {
           dispatchTimeoutMillis: 1_000,
-          pendingDeadline: Effect.succeed(Option.none()),
+          id: "test:cleanup",
           run: Effect.gen(function* () {
             yield* Effect.addFinalizer(() =>
               Effect.sync(finalizing).pipe(
@@ -193,9 +193,17 @@ describe("live Thread projection and alarm backfill", () => {
             );
             entered();
             yield* Effect.sleep(400);
+
+            return Option.none<number>();
           }),
         },
       ]);
+
+      await runInDurableObject(stub(thread), (instance) =>
+        instance[DurableObject.RunSymbol](
+          ThreadMutationGate.use((gate) => gate.schedule("test:cleanup", 0)),
+        ),
+      );
 
       const running = alarm(thread).then(
         () => "unexpected success",
@@ -243,7 +251,12 @@ describe("live Thread projection and alarm backfill", () => {
       body: Effect.Effect<
         A,
         E,
-        ThreadMaintenance | DurableAgentRuntime | SubmissionLedger | ThreadStore | WakeScheduler
+        | ThreadMaintenance
+        | ThreadMutationGate
+        | DurableAgentRuntime
+        | SubmissionLedger
+        | ThreadStore
+        | WakeScheduler
       >,
     ) => runInDurableObject(stubFor(thread), (instance) => instance[DurableObject.RunSymbol](body));
 
@@ -328,17 +341,21 @@ describe("live Thread projection and alarm backfill", () => {
         hostMaintenanceControls.set(thread, [
           {
             dispatchTimeoutMillis: 5_000,
-            pendingDeadline: Effect.sync(() =>
-              (command !== undefined && abort === undefined) ||
-              (freshReceipt !== undefined && published.length === 0)
-                ? Option.some(0)
-                : Option.none(),
+            id: "test:control",
+            run: control.pipe(
+              Effect.andThen(
+                Effect.sync(() =>
+                  (command !== undefined && abort === undefined) ||
+                  (freshReceipt !== undefined && published.length === 0)
+                    ? Option.some(nowMillis() + 100)
+                    : Option.none<number>(),
+                ),
+              ),
             ),
-            run: control,
           },
           {
             dispatchTimeoutMillis: 5_000,
-            pendingDeadline: Effect.succeed(Option.none()),
+            id: "test:cleanup",
             run: Effect.acquireUseRelease(
               Effect.sync(() => {
                 cleanupActive = true;
@@ -348,9 +365,13 @@ describe("live Thread projection and alarm backfill", () => {
                 Effect.sync(() => {
                   cleanupActive = false;
                 }),
-            ),
+            ).pipe(Effect.as(Option.none<number>())),
           },
         ]);
+
+        const gate = yield* ThreadMutationGate;
+
+        yield* gate.schedule("test:cleanup", 0);
 
         return {
           get oldEntered() {
@@ -375,11 +396,11 @@ describe("live Thread projection and alarm backfill", () => {
           clear: (value: AbortCommand) =>
             Effect.sync(() => {
               command = value;
-            }),
+            }).pipe(Effect.andThen(gate.schedule("test:control", 0))),
           replyTo: (receipt: Receipt) =>
             Effect.sync(() => {
               freshReceipt = receipt;
-            }),
+            }).pipe(Effect.andThen(gate.schedule("test:control", 0))),
           release: Deferred.succeed(releaseCleanup, undefined).pipe(
             Effect.andThen(Deferred.succeed(releaseModel, undefined)),
           ),
@@ -517,15 +538,6 @@ describe("live Thread projection and alarm backfill", () => {
                   at === location
                     ? Effect.sync(() => state.abort("native checkpoint eviction"))
                     : Effect.void,
-              }),
-              Effect.provideService(ThreadHostMaintenance, {
-                lanes: [
-                  {
-                    dispatchTimeoutMillis: 1_000,
-                    pendingDeadline: Effect.succeed(Option.none()),
-                    run: Effect.never,
-                  },
-                ],
               }),
               Effect.exit,
             ),

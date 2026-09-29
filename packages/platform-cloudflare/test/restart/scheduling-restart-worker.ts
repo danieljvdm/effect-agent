@@ -32,7 +32,6 @@ const threadOptions: ThreadObject.Options = {
   producerPrefix: PRODUCER_PREFIX,
   ownershipLeaseDuration: 250,
   leaseRenewalInterval: 50,
-  wakeScanInterval: 100,
   settlementPollInterval: 25,
   abortPollInterval: 25,
   alarmBackoffBase: 10,

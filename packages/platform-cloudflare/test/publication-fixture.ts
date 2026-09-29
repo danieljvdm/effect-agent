@@ -1,4 +1,4 @@
-import { Clock, Effect, Layer, Option, Schema, Stream } from "effect";
+import { Effect, Layer, Option, Schema, Stream } from "effect";
 import {
   type LifecyclePublication,
   LifecyclePublicationError,
@@ -126,15 +126,9 @@ export const publicationLayer = Layer.effect(ThreadPublication)(
           dirty: false,
           decisions: [...new Set([...cursor.decisions, ...decisions])],
         });
+
+        return Option.none<number>();
       }).pipe(Effect.scoped, Effect.mapError(failure)),
-      pendingDeadline: Effect.gen(function* () {
-        const cursor = yield* read;
-
-        if (!cursor.dirty && cursor.source >= (yield* source) && cursor.tail >= (yield* tail))
-          return Option.none();
-
-        return Option.some(yield* Clock.currentTimeMillis);
-      }).pipe(Effect.mapError(failure)),
     });
   }),
 );

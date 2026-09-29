@@ -93,7 +93,6 @@ const baseOptions: ThreadObject.Options = {
   // A dead incarnation's lease must lapse quickly so alarm passes reclaim its lane.
   ownershipLeaseDuration: 250,
   leaseRenewalInterval: 50,
-  wakeScanInterval: 100,
   settlementPollInterval: 25,
   abortPollInterval: 25,
   alarmBackoffBase: 10,
@@ -448,7 +447,6 @@ export class ContextCompactorThreadObject extends ThreadObject.make(
 const TelemetryThreadObjectBase = ThreadObject.make(testRuntimeLayer, {
   ...baseOptions,
   namespaceBinding: "TELEMETRY",
-  wakeScanInterval: 60_000,
   rpcTracing: true,
   eventLayer: observabilityProbeLayer,
 });

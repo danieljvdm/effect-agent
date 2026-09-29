@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, Layer, Option, Ref, Semaphore } from "effect";
+import { Clock, Context, Effect, Layer, Option } from "effect";
 import { type ThreadId } from "effect-agent/identifiers";
 import {
   MessageDeliveryDriver,
@@ -9,6 +9,7 @@ import { WakeScheduler } from "effect-agent/wake-scheduler";
 
 import { DurableAlarmError, ThreadMessageDelivery, ThreadMutationGate } from "../Alarm.ts";
 import { ThreadObjectPlacement } from "../CloudflareBindings.ts";
+import * as DueQueue from "./due-queue.ts";
 
 /** Every write prearms its owner; the delivery due index owns its recovery deadline. */
 export const guardedMessageDeliveryStoreLayer = Layer.effect(
@@ -18,10 +19,6 @@ export const guardedMessageDeliveryStoreLayer = Layer.effect(
     const mutations = yield* ThreadMutationGate;
     const wakes = yield* WakeScheduler;
     const { ownsThread } = yield* ThreadObjectPlacement;
-    // Reconstructed as unknown on every incarnation. The gate prevents a racing read from
-    // caching an empty deadline across a write; SQL remains the recovery authority.
-    const deadline = yield* Ref.make<number | null | undefined>(undefined);
-    const cacheGate = yield* Semaphore.make(1);
 
     const local = <A, E>(
       owner: ThreadId | undefined,
@@ -36,29 +33,22 @@ export const guardedMessageDeliveryStoreLayer = Layer.effect(
     const mutate = <A, E>(body: Effect.Effect<A, E>) =>
       mutations
         .withMutation(
-          cacheGate.withPermit(Ref.set(deadline, undefined).pipe(Effect.andThen(body))),
+          body,
           // A foreign receipt changing does not make the source ledger actionable. Keep the
           // prearm and producer gate so eviction and a racing pass cannot lose delivery work.
-          { invalidatesRecovery: false },
+          {
+            invalidatesRecovery: false,
+            lanes: [
+              DueQueue.Messages,
+              ...(store.lifecyclePublications === undefined ? [] : [DueQueue.Lifecycle]),
+            ],
+          },
         )
         .pipe(
           Effect.catchTag("DurableAlarmError", () =>
             MessageDeliveryError.make({ reason: "storage", operation: "prearm message delivery" }),
           ),
         );
-
-    const nextDeadline = cacheGate.withPermit(
-      Effect.gen(function* () {
-        const cached = yield* Ref.get(deadline);
-
-        if (cached !== undefined) return cached;
-        const current = yield* store.nextDeadline();
-
-        yield* Ref.set(deadline, current);
-
-        return current;
-      }),
-    );
 
     return MessageDeliveryStore.of({
       limits: store.limits,
@@ -82,8 +72,7 @@ export const guardedMessageDeliveryStoreLayer = Layer.effect(
             () => MessageDeliveryError.make({ reason: "validation", operation: "message owner" }),
           ),
         ),
-      nextDeadline: (owner) =>
-        local(owner, owner === undefined ? nextDeadline : store.nextDeadline(owner)),
+      nextDeadline: (owner) => local(owner, store.nextDeadline(owner)),
     });
   }),
 );
@@ -104,7 +93,7 @@ export const threadMessageDeliveryLayer = Layer.effectContext(
       const deadline = yield* store.nextDeadline();
 
       if (deadline === null || deadline > (yield* Clock.currentTimeMillis))
-        return { timeoutMillis: 1, run: Effect.void };
+        return { timeoutMillis: 1, run: Effect.succeed(Option.fromNullishOr(deadline)) };
       // The assembled driver has four permits: a wave is one parallel attempt window.
       const keys = yield* store.due(yield* Clock.currentTimeMillis, 4);
       const records = yield* Effect.forEach(keys, (key) => store.get(key));
@@ -117,15 +106,16 @@ export const threadMessageDeliveryLayer = Layer.effectContext(
         run: Effect.forEach(keys, (key) => driver.process(key), {
           concurrency: 4,
           discard: true,
-        }).pipe(Effect.mapError(failure("dispatch message delivery"))),
+        }).pipe(
+          Effect.andThen(store.nextDeadline()),
+          Effect.map(Option.fromNullishOr),
+          Effect.mapError(failure("dispatch message delivery")),
+        ),
       };
     }).pipe(Effect.mapError(failure("prepare message delivery")));
 
     return Context.make(ThreadMessageDelivery, {
       prepare,
-      pendingDeadline: store
-        .nextDeadline()
-        .pipe(Effect.map(Option.fromNullishOr), Effect.mapError(failure("read message deadline"))),
     });
   }),
 );

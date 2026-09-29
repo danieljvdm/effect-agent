@@ -9,6 +9,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { ThreadMaintenance } from "../src/Alarm.ts";
 import { CloudflareThreadClient } from "../src/CloudflareThreadClient.ts";
+import * as DueQueue from "../src/internal/due-queue.ts";
 import {
   approvalDefinition,
   plannerDefinition,
@@ -376,7 +377,15 @@ describe("durable host publication", () => {
 
           expect(resources?.acquired).toBeGreaterThan(0);
           expect(resources?.released).toBe(resources?.acquired);
-          const deadline = await scheduledAlarm(thread, namespace);
+          const scheduled = await scheduledAlarm(thread, namespace);
+
+          const deadline = await runInDurableObject(
+            stub(thread),
+            (_instance, state) =>
+              DueQueue.make(state.storage.sql)
+                .read()
+                .find((row) => row.id === DueQueue.Publication)!.dueAt,
+          );
 
           expect(deadline).toBeGreaterThanOrEqual(current + minimum);
           expect(deadline).toBeLessThanOrEqual(current + maximum);
@@ -388,7 +397,7 @@ describe("durable host publication", () => {
               ThreadMaintenance.use((maintenance) => maintenance.ensureAlarm),
             ),
           );
-          expect(await scheduledAlarm(thread, namespace)).toBe(deadline);
+          expect(await scheduledAlarm(thread, namespace)).toBe(scheduled);
           const state = await generation(thread);
 
           expect(state.dirty).toBeGreaterThan(state.processed);

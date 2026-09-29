@@ -94,11 +94,6 @@ export class CloudflareDurableRuntimeConfigValue extends Schema.Class<Cloudflare
   alarmBackoffBase: PositiveMillis,
   /** Ceiling of exponential backoff after failed or no-progress maintenance passes. */
   alarmBackoffCap: PositiveMillis,
-  /**
-   * Fallback scan cadence for newly dirty work. Failed/no-progress passes use
-   * alarmBackoffCap independently; constructor repair never shortens their retry deadline.
-   */
-  wakeScanInterval: PositiveMillis,
   /** `awaitSettlement` ledger re-check cadence when no wake arrives. */
   settlementPollInterval: PositiveMillis,
   /** Worker ownership-lease renewal cadence during an active Attempt. */
@@ -130,7 +125,6 @@ export const CLOUDFLARE_RUNTIME_DEFAULTS = {
   ownershipLeaseDuration: Duration.toMillis(DEFAULT_OWNERSHIP_LEASE_DURATION),
   alarmBackoffBase: 100,
   alarmBackoffCap: 5_000,
-  wakeScanInterval: 1_000,
   settlementPollInterval: 500,
   leaseRenewalInterval: 10_000,
   abortPollInterval: 500,

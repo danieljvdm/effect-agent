@@ -11,7 +11,12 @@ import { type PersistedJson } from "effect-agent/records";
 import { SubmissionLedger, type SubmissionLookupByKey } from "effect-agent/submission-ledger";
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 
-import { DurableAlarmError, ThreadHostMaintenance, ThreadMaintenance } from "../src/Alarm.ts";
+import {
+  DurableAlarmError,
+  ThreadHostMaintenance,
+  ThreadMaintenance,
+  ThreadMutationGate,
+} from "../src/Alarm.ts";
 import {
   DurableObjectContext,
   ThreadObjectIdentity,
@@ -84,9 +89,11 @@ const replyHost = Layer.effectContext(
       lanes: [
         {
           dispatchTimeoutMillis,
-          pendingDeadline,
+          id: "test:replies",
           run: Effect.gen(function* () {
             if (Option.isSome(yield* pendingDeadline)) yield* flush;
+
+            return Option.none<number>();
           }),
         },
       ],
@@ -120,7 +127,25 @@ export const recoveryTestLayer = (bindings: ReadonlyArray<ResolvedBinding>, host
         ),
       ).pipe(Layer.provide(threadStoreLayer));
 
-      const ports = Layer.mergeAll(observedStore, submissionLedgerLayer).pipe(
+      const observedLedger = Layer.effect(SubmissionLedger)(
+        Effect.gen(function* () {
+          const ledger = yield* SubmissionLedger;
+          const gate = yield* ThreadMutationGate;
+
+          return SubmissionLedger.of({
+            ...ledger,
+            finalizeSettlement: (request) =>
+              gate
+                .withMutation(ledger.finalizeSettlement(request), {
+                  invalidatesRecovery: false,
+                  lanes: recoveryReplies.has(owner) ? ["test:replies"] : [],
+                })
+                .pipe(Effect.catchTag("DurableAlarmError", Effect.die)),
+          });
+        }),
+      ).pipe(Layer.provide(submissionLedgerLayer));
+
+      const ports = Layer.mergeAll(observedStore, observedLedger).pipe(
         Layer.provide(
           storageConfigLayer({
             storage: ctx.storage,

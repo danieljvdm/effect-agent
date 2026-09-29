@@ -52,6 +52,8 @@ import { ThreadId, type SubmissionId } from "effect-agent/identifiers";
 import type { LifecyclePublicationHandler } from "effect-agent/lifecycle-publication";
 import {
   drainLifecyclePublications,
+  LifecyclePublicationError,
+  LifecyclePublicationFact,
   lifecyclePublicationLayer,
 } from "effect-agent/lifecycle-publication";
 import {
@@ -111,6 +113,7 @@ import {
 } from "../CloudflareConfig.ts";
 import { CloudflareThreadClient } from "../CloudflareThreadClient.ts";
 import { cloudflareWakeSchedulerLayer } from "../WakeScheduler.ts";
+import * as DueQueue from "./due-queue.ts";
 import {
   guardedMessageDeliveryStoreLayer,
   threadMessageDeliveryLayer,
@@ -135,8 +138,6 @@ export interface CloudflareDurableRuntimeOptions {
   readonly alarmBackoffBase?: number | undefined;
   /** Failed/no-progress exponential backoff ceiling in milliseconds; default 5000. */
   readonly alarmBackoffCap?: number | undefined;
-  /** Fallback scan cadence for newly dirty work in milliseconds; default 1000. */
-  readonly wakeScanInterval?: number | undefined;
   /** Milliseconds; default 500. */
   readonly settlementPollInterval?: number | undefined;
   /** Milliseconds; default 10000. */
@@ -260,7 +261,6 @@ const configFromOptions = (
       options.ownershipLeaseDuration ?? CLOUDFLARE_RUNTIME_DEFAULTS.ownershipLeaseDuration,
     alarmBackoffBase: options.alarmBackoffBase ?? CLOUDFLARE_RUNTIME_DEFAULTS.alarmBackoffBase,
     alarmBackoffCap: options.alarmBackoffCap ?? CLOUDFLARE_RUNTIME_DEFAULTS.alarmBackoffCap,
-    wakeScanInterval: options.wakeScanInterval ?? CLOUDFLARE_RUNTIME_DEFAULTS.wakeScanInterval,
     settlementPollInterval:
       options.settlementPollInterval ?? CLOUDFLARE_RUNTIME_DEFAULTS.settlementPollInterval,
     leaseRenewalInterval:
@@ -654,6 +654,24 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                 // leaves a NEW, uncertified generation. Source errors keep their native port types.
                 const observedStore = ThreadStore.of({
                   ...store,
+                  ...(store.lifecyclePublications === undefined
+                    ? {}
+                    : {
+                        lifecyclePublications: {
+                          ...store.lifecyclePublications,
+                          retryParked: (ownerThreadId, nowMillis) =>
+                            mutations
+                              .withMutation(
+                                store.lifecyclePublications!.retryParked(ownerThreadId, nowMillis),
+                                { invalidatesRecovery: false, lanes: [DueQueue.Lifecycle] },
+                              )
+                              .pipe(
+                                Effect.catchTag("DurableAlarmError", (cause) =>
+                                  LifecyclePublicationError.make({ reason: "unavailable", cause }),
+                                ),
+                              ),
+                        },
+                      }),
                   append: (request) =>
                     mutations
                       .withMutation(
@@ -679,6 +697,17 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                               ),
                           )
                           .pipe(Effect.tap(() => afterCommit)),
+                        {
+                          lanes: [
+                            ...(options.projection === undefined ? [] : [DueQueue.Projection]),
+                            ...(options.lifecyclePublication === undefined ||
+                            !request.batch.records.some((record) =>
+                              Schema.is(Schema.toType(LifecyclePublicationFact))(record.payload),
+                            )
+                              ? []
+                              : [DueQueue.Lifecycle]),
+                          ],
+                        },
                       )
                       .pipe(
                         Effect.catchTag("DurableAlarmError", (cause) =>
@@ -691,22 +720,48 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                       ),
                 });
 
-                const observeIntent = <A, Failure>(body: Effect.Effect<A, Failure>) =>
-                  mutations.withMutation(body.pipe(Effect.tap(() => afterCommit))).pipe(
-                    Effect.catchTag("DurableAlarmError", (cause) =>
-                      LedgerError.make({
-                        operation: "prearm publication intent",
-                        message: "The publication generation could not be armed",
-                        cause,
-                      }),
-                    ),
-                  );
+                const observeIntent = <A, Failure>(
+                  body: Effect.Effect<A, Failure>,
+                  invalidatesRecovery = true,
+                ) =>
+                  mutations
+                    .withMutation(
+                      body.pipe(
+                        Effect.tap(() => (invalidatesRecovery ? afterCommit : Effect.void)),
+                      ),
+                      {
+                        invalidatesRecovery,
+                        lanes:
+                          options.lifecyclePublication === undefined ? [] : [DueQueue.Lifecycle],
+                      },
+                    )
+                    .pipe(
+                      Effect.catchTag("DurableAlarmError", (cause) =>
+                        LedgerError.make({
+                          operation: "prearm publication intent",
+                          message: "The publication generation could not be armed",
+                          cause,
+                        }),
+                      ),
+                    );
 
                 const stopWorker = ledger.stopWorker;
 
                 return Context.make(ThreadStore, observedStore).pipe(
                   Context.add(SubmissionLedger, {
                     ...ledger,
+                    ...(options.lifecyclePublication === undefined
+                      ? {}
+                      : {
+                          markReady: (request) => observeIntent(ledger.markReady(request), false),
+                          suspend: (request) => observeIntent(ledger.suspend(request), false),
+                          markUnknown: (request) =>
+                            observeIntent(ledger.markUnknown(request), false),
+                          recordChildSettled: (request) =>
+                            observeIntent(ledger.recordChildSettled(request), false),
+                          finalizeSettlement: (request) =>
+                            observeIntent(ledger.finalizeSettlement(request), false),
+                        }),
                     recordApprovalDecision: (request) =>
                       observeIntent(ledger.recordApprovalDecision(request)),
                     ...(stopWorker === undefined
@@ -787,15 +842,28 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                       : error;
                   };
 
-                  const deadline =
+                  const deadline = (
                     storage === undefined
                       ? Effect.fail(failure("Native lifecycle storage unavailable"))
-                      : storage.pendingDeadline.pipe(Effect.mapError(failure));
+                      : storage.pendingDeadline.pipe(Effect.mapError(failure))
+                  ).pipe(
+                    Effect.withErrorReporting,
+                    Effect.catchCauseIf(
+                      (cause) => !Cause.hasInterrupts(cause),
+                      (cause) =>
+                        Effect.logError("Lifecycle publication deadline unavailable", cause).pipe(
+                          Effect.andThen(
+                            Effect.map(Clock.currentTimeMillis, (now) => Option.some(now + 60_000)),
+                          ),
+                        ),
+                    ),
+                  );
 
                   return {
                     lanes: [
                       ...previous.lanes,
                       {
+                        id: DueQueue.Lifecycle,
                         // Four owner batches, each with a 10s host timeout, plus local commits/cleanup.
                         dispatchTimeoutMillis: 60_000,
                         run:
@@ -803,26 +871,9 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                             ? Effect.fail(failure("Native lifecycle storage unavailable"))
                             : drainLifecyclePublications(storage).pipe(
                                 Effect.provide(context),
-                                Effect.asVoid,
                                 Effect.mapError(failure),
+                                Effect.andThen(deadline),
                               ),
-                        pendingDeadline: deadline.pipe(
-                          Effect.withErrorReporting,
-                          Effect.catchCauseIf(
-                            (cause) => !Cause.hasInterrupts(cause),
-                            (cause) =>
-                              Effect.logError(
-                                "Lifecycle publication deadline unavailable",
-                                cause,
-                              ).pipe(
-                                Effect.andThen(
-                                  Effect.map(Clock.currentTimeMillis, (now) =>
-                                    Option.some(now + 60_000),
-                                  ),
-                                ),
-                              ),
-                          ),
-                        ),
                       },
                     ],
                   };
