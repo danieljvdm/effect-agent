@@ -44,7 +44,7 @@ const states = new WeakMap<object, OwnedState>();
 /** Explicit invalidation for maintenance that writes private tables outside the adapters. */
 export const invalidateOwnedState = (storage: DurableObjectStorage): Effect.Effect<void> =>
   Effect.suspend(() => {
-    const state = states.get(storage.sql);
+    const state = states.get(storage);
 
     return state === undefined ? Effect.void : state.read(state.invalidate);
   });
@@ -62,7 +62,8 @@ export const ownedState = (sql: SqlClient) =>
       }),
     ),
     Effect.map((client) => {
-      const key = client.config.storage?.sql ?? client.config.db ?? client;
+      // Instrumentation may return a fresh SQL wrapper on every storage.sql access.
+      const key = client.config.storage ?? client.config.db ?? client;
       let state = states.get(key);
 
       if (state === undefined) {

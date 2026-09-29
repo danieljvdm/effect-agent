@@ -22,6 +22,7 @@ import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vite-plus/test";
 
+import { instrumentedStorage } from "../../../test/fixtures/instrumented-storage.ts";
 import {
   DurableAlarmError,
   ThreadHostMaintenance,
@@ -29,6 +30,7 @@ import {
   ThreadMutationGate,
   ThreadMaintenanceFailpoint,
 } from "../src/Alarm.ts";
+import { DurableObjectContext } from "../src/CloudflareBindings.ts";
 import { CloudflareDurableRuntimeConfig } from "../src/CloudflareConfig.ts";
 import { CloudflareThreadClient } from "../src/CloudflareThreadClient.ts";
 import {
@@ -42,6 +44,56 @@ import {
 import { readCanonical, runClient, scheduledAlarm, stubFor } from "./harness.ts";
 
 describe("maintenance retry deadlines", () => {
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/8085bda
+  it("drains newly enrolled host work when instrumentation returns fresh SQL handles", () =>
+    runInDurableObject(stubFor(`instrumented-due-queue-${crypto.randomUUID()}`), (instance) =>
+      instance[DurableObject.RunSymbol](
+        Effect.gen(function* () {
+          const context = yield* DurableObjectContext;
+          const storage = instrumentedStorage(context.ctx.storage);
+
+          const ctx = new Proxy(context.ctx, {
+            get(target, property) {
+              if (property === "storage") return storage;
+              const value = Reflect.get(target, property, target);
+
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+
+          let delivered = 0;
+
+          yield* Effect.gen(function* () {
+            const maintenance = yield* ThreadMaintenance;
+            const gate = yield* ThreadMutationGate;
+
+            yield* maintenance.pass;
+            yield* gate.schedule("test:instrumented-host", 0);
+            yield* maintenance.pass;
+            expect(delivered).toBe(1);
+          }).pipe(
+            Effect.provide(
+              ThreadMaintenance.layer.pipe(Layer.provideMerge(ThreadMutationGate.layer)),
+            ),
+            Effect.provideService(DurableObjectContext, { ...context, ctx }),
+            Effect.provideService(ThreadHostMaintenance, {
+              lanes: [
+                {
+                  id: "test:instrumented-host",
+                  dispatchTimeoutMillis: 1_000,
+                  run: Effect.sync(() => {
+                    delivered++;
+
+                    return Option.none();
+                  }),
+                },
+              ],
+            }),
+          );
+        }),
+      ),
+    ));
+
   // Regression: https://github.com/danieljvdm/effect-agent/commit/e1c3ce677e82589a4b133840e640464472ec2c3f
   it("gives each due post-native lane a turn across full passes and coordinator rebuilds", () =>
     Effect.runPromise(

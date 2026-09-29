@@ -27,22 +27,24 @@ export const Lifecycle = "effect-agent:lifecycle";
 
 const decode = Schema.decodeUnknownSync(Schema.Array(DueLane));
 
-const views = new WeakMap<SqlStorage, { rows: ReadonlyArray<DueLane> | undefined }>();
+const views = new WeakMap<DurableObjectStorage, { rows: ReadonlyArray<DueLane> | undefined }>();
 
-export const invalidate = (sql: SqlStorage): void => {
-  const view = views.get(sql);
+export const invalidate = (storage: DurableObjectStorage): void => {
+  const view = views.get(storage);
 
   if (view !== undefined) view.rows = undefined;
 };
 
 /** Callers reserve the shared SQL connection through commit and invalidate on rollback.
  * Retain at most 128 lanes; SQLite and the alarm still reconstruct every cold owner. */
-export const make = (sql: SqlStorage) => {
-  let view = views.get(sql);
+export const make = (storage: DurableObjectStorage) => {
+  // Instrumentation may return a fresh SQL wrapper on every access.
+  const sql = storage.sql;
+  let view = views.get(storage);
 
   if (view === undefined) {
     view = { rows: undefined };
-    views.set(sql, view);
+    views.set(storage, view);
   }
   const current = view;
 

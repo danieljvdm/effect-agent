@@ -84,7 +84,7 @@ const alarmFailure =
 const makeStorageEffect = Effect.gen(function* () {
   const sql = yield* SqlClient;
   const { ctx } = yield* DurableObjectContext;
-  const invalidate = Effect.sync(() => DueQueue.invalidate(ctx.storage.sql));
+  const invalidate = Effect.sync(() => DueQueue.invalidate(ctx.storage));
 
   return <A, R>(operation: string, execute: Effect.Effect<A, DurableAlarmError, R>) =>
     Effect.flatMap(Effect.serviceOption(sql.transactionService), (current) => {
@@ -679,7 +679,7 @@ export class ThreadMutationGate extends Context.Service<
   static readonly layer = Layer.effect(this)(
     Effect.gen(function* () {
       const { ctx } = yield* DurableObjectContext;
-      const dueQueue = DueQueue.make(ctx.storage.sql);
+      const dueQueue = DueQueue.make(ctx.storage);
       const config = yield* CloudflareDurableRuntimeConfig;
       const failpoint = yield* ThreadMaintenanceFailpoint;
       // A fresh incarnation has no live mutations; durable generations survive eviction.
@@ -891,7 +891,7 @@ export class ThreadMaintenance extends Context.Service<
       const alarm = yield* DurableAlarmService;
       const config = yield* CloudflareDurableRuntimeConfig;
       const { ctx } = yield* DurableObjectContext;
-      const dueQueue = DueQueue.make(ctx.storage.sql);
+      const dueQueue = DueQueue.make(ctx.storage);
       const storage = DurableObjectStorage.fromDurableObjectStorage(ctx.storage);
       const runStorage = yield* makeStorageEffect;
       const failpoint = yield* ThreadMaintenanceFailpoint;

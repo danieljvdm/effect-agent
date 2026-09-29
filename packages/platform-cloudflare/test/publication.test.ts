@@ -382,7 +382,7 @@ describe("durable host publication", () => {
           const deadline = await runInDurableObject(
             stub(thread),
             (_instance, state) =>
-              DueQueue.make(state.storage.sql)
+              DueQueue.make(state.storage)
                 .read()
                 .find((row) => row.id === DueQueue.Publication)!.dueAt,
           );

@@ -4,7 +4,10 @@ import {
   ledgerLayer,
   submissionLedgerLayer,
 } from "@effect-agent/storage-cloudflare/do-submission-ledger";
-import { storageConfigLayer } from "@effect-agent/storage-cloudflare/do-thread-store";
+import {
+  layer as threadStoreLayer,
+  storageConfigLayer,
+} from "@effect-agent/storage-cloudflare/do-thread-store";
 import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing/do-storage-failpoint-testing";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
@@ -28,11 +31,14 @@ import {
   UnknownResolutionCommand,
 } from "effect-agent/submission-ledger";
 import { submissionLedgerConformanceCases } from "effect-agent/testing/submission-ledger-conformance";
+import { ThreadMaterialization, ThreadStore, ThreadTailRequest } from "effect-agent/thread-store";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
+import { instrumentedStorage } from "../../../test/fixtures/instrumented-storage.ts";
 import {
   admission,
+  epoch,
   thread,
   threadStub,
   id,
@@ -47,6 +53,41 @@ const isLedgerError = Schema.is(LedgerError);
 const isDoValueBoundExceeded = Schema.is(DoValueBoundExceeded);
 
 describe("DoSubmissionLedger", () => {
+  // Regression: 8085bda keyed views by storage.sql, which instrumentation may wrap on each access.
+  it("shares producer epochs when instrumentation returns fresh SQL handles", () =>
+    withThreadStorage("claimed-epoch-shared", (rawStorage) => {
+      const storage = instrumentedStorage(rawStorage);
+
+      return Effect.gen(function* () {
+        const store = yield* ThreadStore;
+        const ledger = yield* SubmissionLedger;
+        const threadId = thread("claimed-epoch-shared");
+
+        yield* store.materialize(ThreadMaterialization.make({ threadId, producerEpoch: epoch(0) }));
+        expect((yield* store.inspectTail(ThreadTailRequest.make({ threadId }))).producerEpoch).toBe(
+          0,
+        );
+        const accepted = yield* ledger.admit(yield* admission("claimed-epoch-shared", "first", {}));
+
+        yield* ledger.markReady(MarkReadyRequest.make({ submissionId: accepted.submissionId }));
+
+        const claim = yield* ledger.claim(
+          ClaimRequest.make({ threadId, producerId: TEST_PRODUCER }),
+        );
+
+        expect(Option.isSome(claim)).toBe(true);
+        expect((yield* store.inspectTail(ThreadTailRequest.make({ threadId }))).producerEpoch).toBe(
+          1,
+        );
+      }).pipe(
+        Effect.provide([
+          threadStoreLayer({ storage }),
+          ledgerLayer({ storage }),
+          BrowserCrypto.layer,
+        ]),
+      );
+    }));
+
   for (const conformanceCase of submissionLedgerConformanceCases) {
     // oxlint-disable-next-line vitest/valid-title, vitest/expect-expect -- shared contracts own names and assertions
     it(conformanceCase.name, () =>
