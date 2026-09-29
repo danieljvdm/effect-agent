@@ -6,6 +6,7 @@ import {
 } from "@effect-agent/storage-cloudflare/do-thread-store";
 import { runInDurableObject } from "cloudflare:test";
 import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer, Logger, Option, Stream } from "effect";
+import { CurrentBindingSelection, type BindingSelection } from "effect-agent/agent-registration";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { ProducerId } from "effect-agent/records";
 import {
@@ -449,6 +450,7 @@ describe("maintenance retry deadlines", () => {
           const canonicalBefore = yield* Effect.promise(() => readCanonical(thread));
 
           yield* Effect.addFinalizer(() => Effect.sync(() => maintenanceBindings.delete(thread)));
+          const otherDefinition = { ...plannerDefinition };
           let available = false;
           let hostFailure = true;
           let hostDrains = 0;
@@ -472,13 +474,37 @@ describe("maintenance retry deadlines", () => {
                       (binding) => binding.agentId === plannerDefinition.id,
                     )!;
 
-                    const deployed = available
-                      ? bindings
-                      : unavailable === "missing"
-                        ? bindings.filter((binding) => binding.agentId !== plannerDefinition.id)
-                        : [...bindings, planner];
+                    const deployed =
+                      unavailable === "duplicate"
+                        ? [
+                            ...bindings,
+                            {
+                              ...planner,
+                              definition: otherDefinition,
+                              attempt: () => Effect.die("The wrong executable was selected"),
+                            },
+                          ]
+                        : available
+                          ? bindings
+                          : bindings.filter((binding) => binding.agentId !== plannerDefinition.id);
 
-                    maintenanceBindings.set(thread, deployed);
+                    const selection: BindingSelection | undefined =
+                      available && unavailable === "duplicate"
+                        ? {
+                            key: "planner-input-v1",
+                            select: (submission) =>
+                              Effect.succeed(
+                                submission.agentId === plannerDefinition.id &&
+                                  typeof submission.inputPayload === "object" &&
+                                  submission.inputPayload !== null &&
+                                  "question" in submission.inputPayload
+                                  ? plannerDefinition
+                                  : undefined,
+                              ),
+                          }
+                        : undefined;
+
+                    maintenanceBindings.set(thread, { bindings: deployed, selection });
 
                     const ports = Layer.mergeAll(threadStoreLayer, submissionLedgerLayer).pipe(
                       Layer.provide(
@@ -494,6 +520,7 @@ describe("maintenance retry deadlines", () => {
                       Effect.provide(
                         Layer.fresh(ThreadMaintenance.layer).pipe(
                           Layer.provideMerge(DurableAgentRuntime.layerWithBindings(deployed)),
+                          Layer.provide(Layer.succeed(CurrentBindingSelection, selection)),
                           Layer.provide(ports),
                         ),
                       ),
@@ -581,6 +608,20 @@ describe("maintenance retry deadlines", () => {
           yield* evict;
           yield* run(ensure);
           expect(yield* Effect.promise(() => scheduledAlarm(thread))).not.toBeNull();
+
+          // Exact-definition admission must replay the original receipt despite another
+          // definition sharing its stable Agent ID. Selection is not a digest migration.
+          const replay = yield* run(
+            DurableAgentRuntime.use((runtime) =>
+              runtime.submitRegistered(
+                { definition: plannerDefinition },
+                { question: "preserve the accepted contract", ref: thread },
+                submitOptions(thread, thread),
+              ),
+            ),
+          );
+
+          expect(Exit.isSuccess(replay) && replay.value).toEqual(receipt);
           yield* TestClock.adjust("1 second");
           expect(Exit.isSuccess(yield* run(pass))).toBe(true);
 

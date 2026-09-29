@@ -8,7 +8,11 @@ import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testi
 import { type Clock, Deferred, Effect, Layer, Schema, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
-import { DurableWorkerBinding, type ResolvedBinding } from "effect-agent/agent-registration";
+import {
+  DurableWorkerBinding,
+  type BindingSelection,
+  type ResolvedBinding,
+} from "effect-agent/agent-registration";
 import { estimatePromptTokens } from "effect-agent/compaction";
 import { CompactionError, ContextCompactor } from "effect-agent/context-compactor";
 import { type DurableSubmitOptions } from "effect-agent/durable-agent-runtime";
@@ -57,7 +61,13 @@ export const unavailableBindingThreads = new Set<string>();
 /** Reconstruct selected Objects with the changed booking result contract. */
 export const upgradedBookBindingThreads = new Set<string>();
 
-export const maintenanceBindings = new Map<string, ReadonlyArray<ResolvedBinding>>();
+export const maintenanceBindings = new Map<
+  string,
+  {
+    readonly bindings: ReadonlyArray<ResolvedBinding>;
+    readonly selection?: BindingSelection;
+  }
+>();
 
 export const maintenanceClocks = new Map<string, Clock.Clock>();
 

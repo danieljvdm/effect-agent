@@ -39,7 +39,7 @@ import { digestDefinitions, digestJson, DigestError } from "../Digest.ts";
 import type { DurableWorkerFailure, DurableWorkerRequirements } from "../DurableAgentRuntime.ts";
 import type { DefinitionDigestInput, PersistedJson } from "../Records.ts";
 import { DefinitionDigests, ReplayContract } from "../Records.ts";
-import type { Claim, Settlement } from "../SubmissionLedger.ts";
+import type { Claim, Settlement, SubmissionSnapshot } from "../SubmissionLedger.ts";
 
 /** No unique current executable is registered for the stable Agent identity. */
 export class BindingUnavailable extends Schema.TaggedError<BindingUnavailable>()(
@@ -48,6 +48,26 @@ export class BindingUnavailable extends Schema.TaggedError<BindingUnavailable>()
 ) {}
 
 export type DurableBindingFailure = BindingUnavailable;
+
+/** Explicit host routing for stable Agent identities shared by distinct current Definitions. */
+export interface BindingSelection {
+  /** Change when routing changes, so hosts can retry parked work without rewriting admission. */
+  readonly key: string;
+  /**
+   * Select an exact registered Definition using the canonical Submission and authoritative host
+   * state. Undefined retains unique-identity resolution. Never grant authority or mutate here;
+   * input decoding, replay contracts and current Tool authorization still apply after selection.
+   */
+  readonly select: (
+    submission: SubmissionSnapshot,
+  ) => Effect.Effect<Agent.AnyDefinition | undefined, DurableWorkerFailure | BindingUnavailable>;
+}
+
+/** Captured at runtime construction; callers cannot replace routing during an Attempt. */
+export const CurrentBindingSelection = Context.Reference<BindingSelection | undefined>(
+  "@effect-agent/thread/CurrentBindingSelection",
+  { defaultValue: () => undefined },
+);
 
 /** Exact immutable admission, lineage and delivery evidence; never an executable-code gate. */
 export const definitionDigestsEqual = (
@@ -358,50 +378,50 @@ export const DurableWorkerBinding = {
 /** INTERNAL identity-only capture retained for the legacy direct worker path. */
 export const makeLegacyWorkerBinding = capture;
 
-export const resolveWorkerBinding = (
+export const resolveWorkerBinding = Effect.fnUntraced(function* (
   bindings: ReadonlyArray<ResolvedBinding>,
-  agentId: AgentId,
-): Effect.Effect<ResolvedBinding, BindingUnavailable> => {
-  const registered = bindings.filter((binding) => binding.agentId === agentId);
+  submission: SubmissionSnapshot,
+  selection?: BindingSelection,
+) {
+  const definition = selection === undefined ? undefined : yield* selection.select(submission);
+
+  const registered = bindings.filter(
+    (binding) =>
+      binding.agentId === submission.agentId &&
+      (definition === undefined || Object.is(binding.definition, definition)),
+  );
+
   const binding = registered[0];
 
-  return registered.length === 1 && binding !== undefined
-    ? Effect.succeed(binding)
-    : Effect.fail(
-        BindingUnavailable.make({
-          agentId,
-          message: `Exactly one current Agent Binding must be registered for ${agentId}`,
-        }),
-      );
-};
+  if (registered.length !== 1 || binding === undefined)
+    return yield* BindingUnavailable.make({
+      agentId: submission.agentId,
+      message: "Exactly one current Agent Binding must match the accepted Submission",
+    });
 
-/** Resolve authoring-time admission through the one exact host registration, never by identity alone. */
+  return binding;
+});
+
+/** Resolve authoring-time admission through exact host registration, never by identity alone. */
 export const resolveDefinitionBinding = (
   bindings: ReadonlyArray<ResolvedBinding>,
   definition: Pick<Agent.AnyDefinition, "id">,
 ): Effect.Effect<ResolvedBinding, BindingUnavailable> => {
-  const candidates = bindings.filter((binding) => binding.agentId === definition.id);
+  const candidates = bindings.filter(
+    (binding) => binding.agentId === definition.id && Object.is(binding.definition, definition),
+  );
+
   const binding = candidates[0];
 
-  if (candidates.length !== 1 || binding === undefined) {
-    return Effect.fail(
-      BindingUnavailable.make({
-        agentId: definition.id,
-        message: "Registered admission requires exactly one binding for the Agent identity",
-      }),
-    );
-  }
-
-  if (!Object.is(binding.definition, definition)) {
-    return Effect.fail(
-      BindingUnavailable.make({
-        agentId: definition.id,
-        message: "Registered admission requires the exact Agent Definition used in registration",
-      }),
-    );
-  }
-
-  return Effect.succeed(binding);
+  return candidates.length === 1 && binding !== undefined
+    ? Effect.succeed(binding)
+    : Effect.fail(
+        BindingUnavailable.make({
+          agentId: definition.id,
+          message:
+            "Registered admission requires exactly one registration of the exact Agent Definition",
+        }),
+      );
 };
 
 /** Application versions and a model Layer, supplied directly or through an existing Binding. */

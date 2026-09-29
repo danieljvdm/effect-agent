@@ -15,6 +15,7 @@ import { makeSubscriptionPartitionObjectClass } from "@effect-agent/platform-clo
 import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
 import { PortRequest } from "@effect-agent/storage-cloudflare/port-protocol";
 import { Clock, Effect, Layer, Schema } from "effect";
+import { CurrentBindingSelection } from "effect-agent/agent-registration";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { RecalledMemory } from "effect-agent/memory";
 import { MemoryLookup } from "effect-agent/memory-reference";
@@ -314,7 +315,14 @@ export class TestThreadObject extends ThreadObject.make(
                 threadId.startsWith("recovery-retirement-") ? hostMaintenanceLayer : undefined,
               ).pipe(Layer.provideMerge(layerFromBindings([])))
             : maintenanceBindings.has(threadId)
-              ? layerFromBindings(maintenanceBindings.get(threadId)!)
+              ? layerFromBindings(maintenanceBindings.get(threadId)!.bindings).pipe(
+                  Layer.provide(
+                    Layer.succeed(
+                      CurrentBindingSelection,
+                      maintenanceBindings.get(threadId)!.selection,
+                    ),
+                  ),
+                )
               : unavailableBindingThreads.has(threadId)
                 ? layerFromBindings([])
                 : upgradedBookBindingThreads.has(threadId)

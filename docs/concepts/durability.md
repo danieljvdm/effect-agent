@@ -182,8 +182,9 @@ readiness. Reusing an admission key with the same input returns the same Receipt
 conflicts. Admission sequence sets queue order.
 
 Each producer write checks its ownership token and epoch. A stale attempt cannot append after a
-replacement takes ownership. Recovery uses one current binding per stable Agent ID and validates
-a strongly consistent canonical prefix before classifying the last committed boundary:
+replacement takes ownership. Recovery uses the same current binding selection as execution (unique stable Agent ID by
+default, or explicit host selection from the canonical Submission). It validates a strongly
+consistent canonical prefix before classifying the last committed boundary:
 
 | Last committed boundary                          | Recovery                                                                     |
 | ------------------------------------------------ | ---------------------------------------------------------------------------- |

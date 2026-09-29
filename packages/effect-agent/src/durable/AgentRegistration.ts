@@ -1,6 +1,8 @@
 /** Public AgentRegistration API. Implementation helpers remain private. */
 export {
   BindingUnavailable,
+  CurrentBindingSelection,
+  type BindingSelection,
   DurableWorkerBinding,
   compileRegistrations,
   definitionDigestsEqual,

@@ -151,9 +151,13 @@ Each registration supplies an agent definition, its model Layer, and explicit ag
 tool versions. The submitter passes `digestDefinitions(travelDefinitions)` through
 `DurableSubmitOptions.definitions`. Bump the agent revision when instructions, schemas, or policy
 change. Version tool implementations and model configuration when they change. Register one
-current binding per stable `agentId`: queued and resumed work uses the current binding without
-requiring historical agent or toolbox versions. Accepted inputs and prepared deliveries keep
-their original identities and payloads.
+current binding per stable `agentId` by default. Hosts with intentionally shared identities can
+provide `CurrentBindingSelection` from `effect-agent/agent-registration` when constructing the
+runtime. Its `select(submission)` returns an exact registered Definition using canonical input
+and authoritative host state; `undefined` retains unique-identity resolution. Both execution
+and recovery use this selection. Set a stable `key` and change it when routing changes. Selection
+does not bypass input decoding, operation replay contracts, or authorization. Queued work keeps
+its original identity, digests and payload without requiring historical executable versions.
 
 Application layers can use `WorkerEnvironment`, `DurableObjectState`,
 `ThreadObjectIdentity`, and Crypto. Scalar Worker vars and secrets are available through Effect
@@ -293,8 +297,8 @@ Failed and no-progress passes preserve the dirty generation and use jittered exp
 backoff up to `alarmBackoffCap` (5 seconds by default).
 Missing or duplicate agent bindings park the original submission and report the refusal once.
 The wait survives eviction and does not schedule an alarm. Unrelated host work and aborts
-remain serviceable. On the next invocation with changed registered identities or definition
-digests, constructor maintenance clears binding waits and schedules one native pass. A dormant
+remain serviceable. On the next invocation with changed registered identities, definition
+digests, or selection key, constructor maintenance clears binding waits and schedules one native pass. A dormant
 Object still needs an invocation after deployment; deployment alone does not invoke it.
 The original receipt, admission evidence and unresolved tool or child obligations remain intact.
 An obsolete pending tool operation does not wait for
