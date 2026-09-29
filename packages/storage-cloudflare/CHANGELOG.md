@@ -1,5 +1,17 @@
 # @effect-agent/storage-cloudflare
 
+## 0.1.0-beta.153
+
+### Patch Changes
+
+- [#703](https://github.com/danieljvdm/effect-agent/pull/703) [`801bfaf`](https://github.com/danieljvdm/effect-agent/commit/801bfaf8f6f0d9f409fa31120c679ecb005def8c) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Record expected ownership cleanup, stale fences, and append contention as successful storage span outcomes and skip unnecessary write transactions. Preserve concrete error and cause tags on real storage failures without adding payloads to trace attributes.
+
+- [#706](https://github.com/danieljvdm/effect-agent/pull/706) [`8085bda`](https://github.com/danieljvdm/effect-agent/commit/8085bda3355ef97bc3f7ed82612a105581648440) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Keep Cloudflare thread and submission state in bounded write-through memory, reuse decoded journal projections, and serve warm recovery snapshots without SQLite reads. Quiesce port operations during direct SQL maintenance and call `DoThreadStore.invalidate(ctx.storage)` before resuming them; adapter writes maintain the cache automatically, and stored data needs no reset.
+
+- Updated dependencies [[`4e16d81`](https://github.com/danieljvdm/effect-agent/commit/4e16d81311ad26f1666fdedd23bb409f2100a669), [`6f9e913`](https://github.com/danieljvdm/effect-agent/commit/6f9e91364cd03174bb8cf0223d0e7b468c3d7c1e), [`8085bda`](https://github.com/danieljvdm/effect-agent/commit/8085bda3355ef97bc3f7ed82612a105581648440)]:
+  - effect-agent@0.1.0-beta.153
+  - @effect-agent/storage-sql@0.1.0-beta.153
+
 ## 0.1.0-beta.152
 
 ### Patch Changes

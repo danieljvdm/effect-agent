@@ -1,5 +1,19 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.153
+
+### Patch Changes
+
+- [#705](https://github.com/danieljvdm/effect-agent/pull/705) [`6f9e913`](https://github.com/danieljvdm/effect-agent/commit/6f9e91364cd03174bb8cf0223d0e7b468c3d7c1e) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Park unavailable or ambiguous agent bindings without repeated alarm retries or error reports. Reconsider retained submissions on the next invocation after the registered identities or definition digests change.
+
+  Allow explicit current binding selection from the canonical submission for shared stable agent identities, preserving existing admission digests and receipts during execution and recovery. Exact-definition admission remains unambiguous.
+
+- [#706](https://github.com/danieljvdm/effect-agent/pull/706) [`8085bda`](https://github.com/danieljvdm/effect-agent/commit/8085bda3355ef97bc3f7ed82612a105581648440) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Keep Cloudflare thread and submission state in bounded write-through memory, reuse decoded journal projections, and serve warm recovery snapshots without SQLite reads. Quiesce port operations during direct SQL maintenance and call `DoThreadStore.invalidate(ctx.storage)` before resuming them; adapter writes maintain the cache automatically, and stored data needs no reset.
+
+- Updated dependencies [[`801bfaf`](https://github.com/danieljvdm/effect-agent/commit/801bfaf8f6f0d9f409fa31120c679ecb005def8c), [`4e16d81`](https://github.com/danieljvdm/effect-agent/commit/4e16d81311ad26f1666fdedd23bb409f2100a669), [`6f9e913`](https://github.com/danieljvdm/effect-agent/commit/6f9e91364cd03174bb8cf0223d0e7b468c3d7c1e), [`8085bda`](https://github.com/danieljvdm/effect-agent/commit/8085bda3355ef97bc3f7ed82612a105581648440)]:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.153
+  - effect-agent@0.1.0-beta.153
+
 ## 0.1.0-beta.152
 
 ### Patch Changes

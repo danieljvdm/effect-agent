@@ -144,6 +144,7 @@
     "harden-session-boundaries",
     "harden-storage-boundaries",
     "harden-testing-boundaries",
+    "healthy-cloudflare-storage-spans",
     "honest-worker-delivery",
     "host-browser-viewport",
     "in-memory-assembly",
@@ -155,6 +156,7 @@
     "initial-live-test-release",
     "interactive-browser-host-controls",
     "join-completion-followups",
+    "joined-input-restart",
     "kom-durable-recovery-authorization",
     "language-model-decisions",
     "large-review-patches",
@@ -195,6 +197,7 @@
     "optional-semantic-memory",
     "original-provider-tool-schemas",
     "owned-progress-budget",
+    "park-unavailable-bindings",
     "persist-shared-search-values",
     "persistent-conversations",
     "pin-internal-dependency-versions",
@@ -334,6 +337,7 @@
     "typed-run-disposition",
     "unknown-abort-recovery",
     "verified-pr-review",
+    "warm-owned-thread-state",
     "worker-known-tail",
     "workflow-durable-host"
   ]
