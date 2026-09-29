@@ -549,6 +549,8 @@ interface NativeRecovery {
 
 interface MaintenanceObservation {
   readonly queue: Map<string, DueQueue.DueLane>;
+  /** Initially available or serviced revisions; active producers are only failure observations. */
+  readonly available: Map<string, number>;
   generation?: bigint;
   nativeOnly: boolean;
 }
@@ -953,6 +955,7 @@ export class ThreadMaintenance extends Context.Service<
           // Include mid-pass enrollments in failure rearming if their checkpoint is
           // interrupted. CAS still protects completed waves and racing producers.
           observed.queue.set(row.id, row);
+          observed.available.set(row.id, row.revision);
 
           return work;
         }).pipe(
@@ -980,13 +983,23 @@ export class ThreadMaintenance extends Context.Service<
                     ? now + backoffDelay(row.stalls, yield* Random.next)
                     : Option.getOrNull(exit.value);
 
-                  yield* runTransaction("checkpoint maintenance lane", () =>
+                  const checkpointed = yield* runTransaction("checkpoint maintenance lane", () =>
                     ctx.storage.transaction(async () => {
                       // A producer can be between enrollment and its source commit. Never acknowledge
                       // that observation; its completion will notify the event or retain the alarm.
-                      if (!active) dueQueue.complete(row, next, failed);
+                      if (active) return;
+                      const current = dueQueue.read().find((lane) => lane.id === row.id);
+
+                      if (current?.revision !== row.revision) return;
+                      dueQueue.complete(row, next, failed);
+
+                      return row.revision + 1;
                     }),
                   );
+
+                  // This pass's own checkpoint is not fresh producer enrollment. Record it
+                  // only after commit, while the snapshot gate still excludes a new producer.
+                  if (checkpointed !== undefined) observed.available.set(row.id, checkpointed);
                 }),
               )
               .pipe(
@@ -1387,6 +1400,11 @@ export class ThreadMaintenance extends Context.Service<
           Effect.gen(function* () {
             const generation = yield* beginPass(observed);
 
+            if (activeAtStart === 0) {
+              const native = (yield* queueSnapshot).find((row) => row.id === DueQueue.Native);
+
+              if (native !== undefined) observed.available.set(native.id, native.revision);
+            }
             if (generation._tag === "Actionable" && activeAtStart === 0) {
               // The gate excludes a producer starting between the snapshot and certification.
               yield* publication.prepareGeneration(generation.generation);
@@ -1969,7 +1987,17 @@ export class ThreadMaintenance extends Context.Service<
         // Its completion must retain the original actionable observation for acknowledgement.
         const started = yield* beginNative(observed);
 
-        for (const row of yield* queueSnapshot) observed.queue.set(row.id, row);
+        yield* mutations.withSnapshot(() =>
+          Effect.gen(function* () {
+            const queued = yield* queueSnapshot;
+            const producing = yield* mutations.activeLanes;
+
+            for (const row of queued) {
+              observed.queue.set(row.id, row);
+              if (!producing.has(row.id)) observed.available.set(row.id, row.revision);
+            }
+          }),
+        );
 
         // This scope owns every admitted finite wave, including native advancement.
         // Close it before final alarm rearming, including on failure or event interruption.
@@ -2359,7 +2387,6 @@ export class ThreadMaintenance extends Context.Service<
           const queued = yield* queueSnapshot;
           const producing = yield* mutations.activeLanes;
           const dispatchEnd = DateTime.toEpochMillis(dispatchUntil);
-          const until = DateTime.toEpochMillis(yieldAfter);
           const afterNativeIds = new Set(selected.map((lane) => lane.id));
           const completed: Array<Exit.Exit<void, DurableAlarmError>> = [];
           let yielded = false;
@@ -2372,7 +2399,6 @@ export class ThreadMaintenance extends Context.Service<
               const revision = yield* mutations.revision;
               const now = yield* Clock.currentTimeMillis;
 
-              if (now >= until) return yield* Effect.never;
               const current = yield* queueSnapshot;
               const active = yield* mutations.activeLanes;
 
@@ -2383,7 +2409,7 @@ export class ThreadMaintenance extends Context.Service<
                     !active.has(row.id) &&
                     row.dueAt !== null &&
                     row.dueAt <= now &&
-                    row.revision !== observed.queue.get(row.id)?.revision,
+                    row.revision !== observed.available.get(row.id),
                 )
               ) {
                 yielded = true;
@@ -2557,7 +2583,12 @@ export class ThreadMaintenance extends Context.Service<
           const now = yield* Clock.currentTimeMillis;
           const yieldAfter = DateTime.makeUnsafe(now + 10 * 60_000);
           const dispatchUntil = DateTime.makeUnsafe(now + 14 * 60_000);
-          const observed: MaintenanceObservation = { nativeOnly: false, queue: new Map() };
+
+          const observed: MaintenanceObservation = {
+            nativeOnly: false,
+            queue: new Map(),
+            available: new Map(),
+          };
 
           return yield* alarm.withWakesDeferred(
             maintenancePassGate.withPermit(

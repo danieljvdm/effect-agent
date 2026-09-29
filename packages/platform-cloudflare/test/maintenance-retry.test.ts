@@ -95,111 +95,148 @@ describe("maintenance retry deadlines", () => {
     ));
 
   // Regression: https://linear.app/reve-ai/issue/KOM-331
-  it("yields post-native work to newly enrolled admission without acknowledging the unfinished wave", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const thread = `maintenance-preemption-${crypto.randomUUID()}`;
+  it.each(["new enrollment", "after native allowance", "producer completion"] as const)(
+    "yields post-native work without acknowledging the unfinished wave (%s)",
+    (arrival) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const thread = `maintenance-preemption-${crypto.randomUUID()}`;
 
-        yield* TestClock.setTime(Date.now() + 86_400_000);
-        maintenanceClocks.set(thread, yield* Clock.Clock);
-        yield* Effect.addFinalizer(() => Effect.sync(() => maintenanceClocks.delete(thread)));
-        yield* Effect.promise(() =>
-          runInDurableObject(stubFor(thread), (instance, state) =>
-            instance[DurableObject.RunSymbol](
-              Effect.gen(function* () {
-                yield* TestClock.setTime(Date.now() + 86_400_000);
-                const gate = yield* ThreadMutationGate;
-                const entered = yield* Deferred.make<void>();
-                let memoryActive = false;
-                let memoryWaves = 0;
-                let memoryReceipts = 0;
-                let admissions = 0;
+          yield* TestClock.setTime(Date.now() + 86_400_000);
+          maintenanceClocks.set(thread, yield* Clock.Clock);
+          yield* Effect.addFinalizer(() => Effect.sync(() => maintenanceClocks.delete(thread)));
+          yield* Effect.promise(() =>
+            runInDurableObject(stubFor(thread), (instance, state) =>
+              instance[DurableObject.RunSymbol](
+                Effect.gen(function* () {
+                  yield* TestClock.setTime(Date.now() + 86_400_000);
+                  const gate = yield* ThreadMutationGate;
+                  const entered = yield* Deferred.make<void>();
+                  const began = yield* Deferred.make<void>();
+                  const producerEntered = yield* Deferred.make<void>();
+                  const finishProducer = yield* Deferred.make<void>();
+                  let memoryActive = false;
+                  let memoryWaves = 0;
+                  let memoryReceipts = 0;
+                  let admissions = 0;
 
-                yield* Effect.gen(function* () {
-                  const maintenance = yield* ThreadMaintenance;
+                  yield* Effect.gen(function* () {
+                    const maintenance = yield* ThreadMaintenance;
 
-                  yield* gate.schedule("test:memory", 0);
-                  const running = yield* Effect.forkChild(maintenance.pass);
+                    const producer =
+                      arrival === "producer completion"
+                        ? yield* Effect.forkChild(
+                            gate.withMutation(
+                              Deferred.succeed(producerEntered, undefined).pipe(
+                                Effect.andThen(Deferred.await(finishProducer)),
+                              ),
+                              { invalidatesRecovery: false, lanes: ["test:admission"] },
+                            ),
+                          )
+                        : undefined;
 
-                  yield* Deferred.await(entered);
-                  yield* gate.schedule("test:admission", 0);
-                  yield* TestClock.adjust(1_000);
-                  expect(running.pollUnsafe()).toBeDefined();
-                  yield* Fiber.join(running);
-                  expect(memoryActive).toBe(false);
+                    if (producer !== undefined) yield* Deferred.await(producerEntered);
+                    yield* gate.schedule("test:memory", 0);
+                    const running = yield* Effect.forkChild(maintenance.pass);
 
-                  const pending = state.storage.sql
-                    .exec<{ dueAt: number | null; stalls: number }>(
-                      "SELECT dueAt, stalls FROM platform_cloudflare_due_queue WHERE id = 'test:memory'",
-                    )
-                    .one();
+                    if (arrival === "after native allowance") {
+                      yield* Deferred.await(began);
+                      yield* TestClock.adjust("10 minutes");
+                    }
+                    yield* Deferred.await(entered);
+                    if (producer === undefined) yield* gate.schedule("test:admission", 0);
+                    else {
+                      yield* Deferred.succeed(finishProducer, undefined);
+                      yield* Fiber.join(producer);
+                    }
+                    yield* TestClock.adjust(1_000);
+                    expect(running.pollUnsafe()).toBeDefined();
+                    yield* Fiber.join(running);
+                    expect(memoryActive).toBe(false);
 
-                  expect(pending.dueAt).not.toBeNull();
-                  expect(pending.stalls).toBe(0);
-                  yield* maintenance.pass;
-                  expect({ admissions, memoryWaves, memoryReceipts, memoryActive }).toEqual({
-                    admissions: 1,
-                    memoryWaves: 2,
-                    memoryReceipts: 1,
-                    memoryActive: false,
-                  });
-                  expect(
-                    state.storage.sql
-                      .exec<{ dueAt: number | null }>(
-                        "SELECT dueAt FROM platform_cloudflare_due_queue WHERE id = 'test:memory'",
+                    const pending = state.storage.sql
+                      .exec<{ dueAt: number | null; stalls: number }>(
+                        "SELECT dueAt, stalls FROM platform_cloudflare_due_queue WHERE id = 'test:memory'",
                       )
-                      .one().dueAt,
-                  ).toBeNull();
-                }).pipe(
-                  Effect.provide(Layer.fresh(ThreadMaintenance.layer)),
-                  Effect.provideService(ThreadHostMaintenance, {
-                    lanes: [
-                      {
-                        id: "test:admission",
-                        dispatchTimeoutMillis: 30_000,
-                        run: Effect.sync(() => {
-                          expect(memoryActive).toBe(false);
-                          admissions++;
+                      .one();
 
-                          return Option.none<number>();
-                        }),
-                      },
-                      {
-                        id: "test:memory",
-                        phase: "after-native",
-                        dispatchTimeoutMillis: 30_000,
-                        run: Effect.acquireRelease(
-                          Effect.sync(() => {
-                            memoryActive = true;
-                            memoryWaves++;
+                    expect(pending.dueAt).not.toBeNull();
+                    expect(pending.stalls).toBe(0);
+                    yield* maintenance.pass;
+                    expect({ admissions, memoryWaves, memoryReceipts, memoryActive }).toEqual({
+                      admissions: 1,
+                      memoryWaves: 2,
+                      memoryReceipts: 1,
+                      memoryActive: false,
+                    });
+                    expect(
+                      state.storage.sql
+                        .exec<{ dueAt: number | null }>(
+                          "SELECT dueAt FROM platform_cloudflare_due_queue WHERE id = 'test:memory'",
+                        )
+                        .one().dueAt,
+                    ).toBeNull();
+                  }).pipe(
+                    Effect.provide(Layer.fresh(ThreadMaintenance.layer)),
+                    Effect.provideService(ThreadMaintenanceFailpoint, {
+                      hit: (location) =>
+                        arrival === "after native allowance" &&
+                        memoryWaves === 0 &&
+                        location === "maintenance:begin:before"
+                          ? Deferred.succeed(began, undefined).pipe(
+                              Effect.andThen(Effect.sleep("10 minutes")),
+                            )
+                          : Effect.void,
+                    }),
+                    Effect.provideService(ThreadHostMaintenance, {
+                      lanes: [
+                        {
+                          id: "test:admission",
+                          dispatchTimeoutMillis: 30_000,
+                          run: Effect.sync(() => {
+                            expect(memoryActive).toBe(false);
+                            admissions++;
+
+                            return Option.none<number>();
                           }),
-                          () =>
+                        },
+                        {
+                          id: "test:memory",
+                          phase: "after-native",
+                          dispatchTimeoutMillis: 30_000,
+                          run: Effect.acquireRelease(
                             Effect.sync(() => {
-                              memoryActive = false;
+                              memoryActive = true;
+                              memoryWaves++;
                             }),
-                        ).pipe(
-                          Effect.andThen(
-                            Effect.gen(function* () {
-                              if (memoryWaves === 1) {
-                                yield* Deferred.succeed(entered, undefined);
-                                yield* Effect.never;
-                              }
-                              memoryReceipts++;
+                            () =>
+                              Effect.sync(() => {
+                                memoryActive = false;
+                              }),
+                          ).pipe(
+                            Effect.andThen(
+                              Effect.gen(function* () {
+                                if (memoryWaves === 1) {
+                                  yield* Deferred.succeed(entered, undefined);
+                                  yield* Effect.never;
+                                }
+                                memoryReceipts++;
 
-                              return Option.none<number>();
-                            }),
+                                return Option.none<number>();
+                              }),
+                            ),
                           ),
-                        ),
-                      },
-                    ],
-                  }),
-                );
-              }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+                        },
+                      ],
+                    }),
+                  );
+                }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+              ),
             ),
-          ),
-        );
-      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
-    ));
+          );
+        }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+      ),
+  );
 
   // Regression: https://github.com/danieljvdm/effect-agent/commit/e1c3ce677e82589a4b133840e640464472ec2c3f
   it("gives each due post-native lane a turn across full passes and coordinator rebuilds", () =>
