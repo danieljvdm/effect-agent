@@ -741,17 +741,23 @@ export class ThreadMutationGate extends Context.Service<
         return enrolled;
       });
 
-      const endMutation = (enrolled: ReadonlySet<string>) =>
-        generationGate.withPermit(
-          Effect.gen(function* () {
-            for (const id of enrolled) {
-              const remaining = (activeLanes.get(id) ?? 1) - 1;
+      const releaseLanes = (enrolled: Set<string>, committed = false) =>
+        Effect.sync(() => {
+          for (const id of enrolled) {
+            if (committed && (id === DueQueue.Native || id === DueQueue.Publication)) continue;
+            const remaining = (activeLanes.get(id) ?? 1) - 1;
 
-              if (remaining === 0) activeLanes.delete(id);
-              else activeLanes.set(id, remaining);
-            }
-            yield* Ref.update(activeMutations, (active) => Math.max(0, active - 1));
-          }),
+            if (remaining === 0) activeLanes.delete(id);
+            else activeLanes.set(id, remaining);
+            enrolled.delete(id);
+          }
+        });
+
+      const endMutation = (enrolled: Set<string>) =>
+        generationGate.withPermit(
+          releaseLanes(enrolled).pipe(
+            Effect.andThen(Ref.update(activeMutations, (active) => Math.max(0, active - 1))),
+          ),
         );
 
       const withMutation = <A, E, R>(
@@ -765,9 +771,16 @@ export class ThreadMutationGate extends Context.Service<
           generationGate.withPermit(
             beginMutation(options?.invalidatesRecovery ?? true, options?.lanes ?? []),
           ),
-          () =>
+          (enrolled) =>
             failpoint.hit("maintenance:mutation:armed").pipe(
               Effect.andThen(body),
+              // The committed outbox may be claimed by the alarm even while the caller
+              // is suspended after commit. Native certification keeps its broader guard.
+              Effect.tap(() =>
+                generationGate
+                  .withPermit(releaseLanes(enrolled, true))
+                  .pipe(Effect.andThen(notify)),
+              ),
               Effect.tap(() => failpoint.hit("maintenance:mutation:finished")),
             ),
           (enrolled) => endMutation(enrolled).pipe(Effect.andThen(notify)),
@@ -2058,6 +2071,8 @@ export class ThreadMaintenance extends Context.Service<
             const row = queued.find((row) => row.id === lane.id);
 
             if (row === undefined || row.dueAt === null || row.dueAt > now) continue;
+            const dueAt = row.dueAt;
+
             lane.fiber = yield* fork(
               Effect.gen(function* () {
                 yield* Schema.decodeEffect(AuxiliaryDispatchMillis)(
@@ -2066,7 +2081,7 @@ export class ThreadMaintenance extends Context.Service<
                 if ((yield* Clock.currentTimeMillis) + lane.dispatchTimeoutMillis > dispatchEnd) {
                   lane.exhausted = true;
 
-                  return Option.some(row.dueAt!);
+                  return Option.some(dueAt);
                 }
 
                 return yield* runQueued(
@@ -2162,9 +2177,11 @@ export class ThreadMaintenance extends Context.Service<
 
           const next = Math.min(
             native === undefined ? (result.nextAttemptAt ?? Infinity) : Infinity,
-            ...queued
-              .filter((row) => row.id !== DueQueue.Native && row.dueAt !== null && row.dueAt > now)
-              .map((row) => row.dueAt!),
+            ...queued.flatMap((row) =>
+              row.id !== DueQueue.Native && row.dueAt !== null && row.dueAt > now
+                ? [row.dueAt]
+                : [],
+            ),
             until,
           );
 

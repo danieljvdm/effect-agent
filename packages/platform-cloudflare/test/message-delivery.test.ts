@@ -451,7 +451,13 @@ describe("Thread Object message maintenance", () => {
         expect(await allSettled(source)()).toBe(true);
         expect(messageDeliveryResources.get(source)).toEqual({ acquired: 1, released: 0 });
         await advance(9_900);
-        expect(retired, "the destination response must not own the physical event").toBe(true);
+        // Queue checkpoints finish asynchronously after the driver's exact timeout. Keep
+        // the response held and the clock fixed while observing physical event retirement.
+        await expect
+          .poll(() => retired, {
+            message: "the destination response must not own the physical event",
+          })
+          .toBe(true);
         expect(await outcome).toEqual({ interrupted: false });
         expect(messageDeliveryResources.get(source)).toEqual({ acquired: 1, released: 1 });
         expect(await scheduledAlarm(source)).not.toBeNull();

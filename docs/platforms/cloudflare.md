@@ -386,7 +386,7 @@ uses `invalidatesRecovery: false` with no lanes. Native admissions and controls 
 `invalidatesRecovery: true`.
 
 The queue retains each lane's own revision and deadline. A finishing wave cannot erase a newer
-producer enrollment, and a lane with a producer in flight waits for that producer to finish.
+producer enrollment, and a lane waits for an in-flight source mutation body to finish.
 Completions and producer notifications drive the active event; there is no wake-scan timer.
 The one alarm retains the earliest queued deadline after all admitted resources close. Constructor
 repair reads only local scheduling state, never application deadline tables or execution history.
