@@ -348,13 +348,15 @@ Inspect configuration and execution separately. A handler can catch its own erro
 broker can contain an error-channel failure, and Subagent containment has its own policy. A returned
 failure may still be followed by a run failure from a sibling, a repeated-failure limit, or another budget.
 
-| Failure boundary                              | Behavior                                                                                                       |
-| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Declared handler error, `"error"`             | Propagates the original typed error and fails the model-declared call's run.                                   |
-| Declared handler error, `"return"`            | Encodes a failed tool result for the model; the loop may continue.                                             |
-| Handler defect or interruption                | Stays a defect or interruption under either mode.                                                              |
-| Invalid result encoding                       | Still fails even with `"return"`.                                                                              |
-| Invalid parameters, unknown or unexposed tool | Rejected before handler execution. Effect Agent's model/preflight validation remains strict under either mode. |
+| Failure boundary                                                       | Behavior                                                                     |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Declared handler error, `"error"`                                      | Propagates the original typed error and fails the model-declared call's run. |
+| Declared handler error, `"return"`                                     | Encodes a failed tool result for the model; the loop may continue.           |
+| Handler defect or interruption                                         | Stays a defect or interruption under either mode.                            |
+| Invalid result encoding                                                | Still fails even with `"return"`.                                            |
+| Invalid native application parameters, `"return"`                      | Returns a failed result for the model without invoking that handler.         |
+| Invalid parameters, `"error"`, or invalid provider-executed parameters | Fails the run before application handlers start.                             |
+| Unknown or unexposed tool                                              | Fails the run before application handlers start.                             |
 
 `ToolCallFailed.failureMode` reports the native configuration when known. Its `failureHandling` reports
 the actual route: `propagated` or `returned-to-model`. Older events may omit these fields; absence means

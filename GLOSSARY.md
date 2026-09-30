@@ -189,11 +189,6 @@ whole request remains unfinished.
 A deterministically named sub-operation within one Durable Tool Call. Its result is
 exactly-once-recorded but its external side effect is at-least-once-executed.
 
-**Skill**  
-A deferred runtime concept for a versioned package of instructions and bounded resources that
-could be activated for future Turns. No runtime Skill API is implemented. Contributor skills in
-`.agents/skills` are repository tooling and are unrelated to Agent execution.
-
 **Subagent**  
 An Agent Definition invoked by another agent through a declared delegation capability. A durable
 Subagent owns a child Thread with explicit provenance and either attached or background lifetime.
@@ -337,9 +332,8 @@ canonical evidence. Physical record deletion is a separate retention operation. 
 compacts natively at the pre-Turn seam when the estimated next context exceeds the Context Token
 Limit or would consume the Completion Reserve. It prunes old Tool results, summarizes through one
 metered model call, and records
-each compaction in the DN and DC assemblies as a canonical `CompactionCreated` record that
-projections fold
-(RUN-026). The engine-owned `ContextCompactor` service selects the strategy, token estimator,
+each compaction in durable assemblies as a canonical `CompactionCreated` record that
+projections fold. The engine-owned `ContextCompactor` service selects the strategy, token estimator,
 summary prompt, and Model. `ContextCompactor.layer` supplies the bounded default. Cloudflare
 Thread Objects install the same service through a scoped `ContextCompactor` Layer,
 rebuilt after eviction. The interpreter owns metering, protected messages, events, and commits;
@@ -376,8 +370,7 @@ showing Turns, Tool Calls, tokens against budget, last-call context, and elapsed
 projection-time output, never persisted as canonical history.
 
 **Token Soft Landing**  
-The token dimension's participation in the `onExhaustion: "final-answer"` resolution
-(RUN-025): a token-breaching response with decodable output settles the
+With `onExhaustion: "final-answer"`, a token-breaching response with decodable output settles the
 Run directly, and otherwise the Run takes at most one constrained grace Turn
 (`toolChoice: "none"`), completing with `finishReason: "budget-exhausted"` and the
 `exhausted` dimension marker instead of failing silently.
@@ -504,8 +497,3 @@ A concrete implementation at a Seam.
 **Core**  
 The inward domain, authoring, and engine modules that contain no provider, database, transport, or
 platform implementation.
-
-**Reference Application**  
-A cumulative, package-local set of compiling fixtures and tests that exercises the public
-framework through successive build-out phases. It is application-shaped evidence, not a deployable
-workspace or a new product package.

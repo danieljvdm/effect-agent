@@ -8,11 +8,6 @@ description: Understand Effect Agent's execution model, resource boundaries, bud
 Understand how Effect Agent runs work, bounds its resources, and recovers recorded progress.
 These pages explain the contracts behind the [implementation guides](../guide/).
 
-## Effect foundations
-
-[Built on Effect](./effect-native) explains typed errors, Schema-defined data, dependency
-Layers, and scoped resource ownership.
-
 ## Agent execution
 
 [The runtime model](./runtime-model) defines the turn, ownership, recovery, and wake rules

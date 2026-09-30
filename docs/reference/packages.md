@@ -80,7 +80,6 @@ each agent's model and version declarations; an existing Binding is also accepte
 ### In-memory defaults
 
 Import `InMemory` from `effect-agent`, or use `import * as InMemory from "effect-agent/in-memory"`.
-When upgrading, replace `Ephemeral` and `effect-agent/ephemeral` imports with these names.
 
 `InMemory.layer` supplies in-memory conversation history and a shared subagent reservation ledger.
 Provide it once around the parent program and all child handler Layers. Runs with the same Thread
@@ -97,10 +96,9 @@ For storage-backed history, provide `PersistentHistory.layer` with a store and, 
 one shared `SubagentReservationsMemoryLive` instead of `InMemory.layer`. Durable hosts select
 their own history and reservation services.
 
-When upgrading, remove routine `IdGenerator.layer` provisions and `IdGenerator` from service
-requirement unions. The key is now a `Context.Reference`; custom `Layer.succeed`, `Layer.effect`,
-and `Effect.provideService` overrides still work. To explicitly reset an override to the default,
-use the module-level `layer` export from `effect-agent/id-generator`.
+`IdGenerator` is a `Context.Reference`. Override it with `Layer.succeed`, `Layer.effect`, or
+`Effect.provideService`. The module-level `layer` from `effect-agent/id-generator` restores
+the default.
 
 Use direct module paths when you need an individual module:
 
@@ -124,24 +122,18 @@ Use direct module paths when you need an individual module:
 | Subagent authoring and handlers                  | `effect-agent/subagent`              |
 | Semantic indexing/query implementation           | `effect-agent/semantic-memory`       |
 
-Flat root imports of individual declarations are removed. Import those declarations from the
-modules above, or use the root module namespace. `CommandDrainPolicy` and
-`RunSchedulingOverride` each expose a Schema and its inferred type from `RunOptions`.
-Use `MemoryThreadStoreLive` from `@effect-agent/storage-memory/memory-thread-store` in place
-of the removed `MemoryStorageLive` alias. SQLite memory readers and writers come directly from
-`effect-agent/sql-memory-store`.
+Import individual declarations from their owning modules, or use the root module namespace.
+`CommandDrainPolicy` and `RunSchedulingOverride` each expose a Schema and its inferred type
+from `RunOptions`. `MemoryThreadStoreLive` comes from
+`@effect-agent/storage-memory/memory-thread-store`; SQLite memory readers and writers come
+from `effect-agent/sql-memory-store`.
 
-The old `/history`, `/durability`, and `/testing` aggregation paths are removed. Use the
-canonical modules below, including `/testing/module` for test controls and conformance suites.
-Browser adapters, fixtures, and other specialized paths use the same kebab-case convention.
-Unlisted source files and implementation directories are private.
+Test controls and conformance suites use `/testing/module` paths. Browser adapters, fixtures,
+and other specialized paths use the same kebab-case convention. Unlisted source files and
+implementation directories are private.
 
-The public API does not export `initialCompactionState`, `buildCompactedView`,
-`COMPACTION_INSTRUCTION`, `isContextOverflowMessage`, `formatRunStatus`, or `RunStatusView`.
-These are interpreter details.
-Use the `ContextCompactor` service to customize compaction and `AgentPolicy.runStatus` to configure status
-messages. Token estimators and the `ContextCompactionState` type remain public for compactor
-implementations.
+Use `ContextCompactor` to customize compaction and `AgentPolicy.runStatus` to configure status
+messages. Token estimators and `ContextCompactionState` support custom compactors.
 
 ## Find a capability {#capability-inventory}
 
@@ -244,22 +236,6 @@ packages/effect-agent/src/
 
 These are internal directories, not separate packages or import prefixes. Storage drivers,
 platform hosts, workflow integrations, sandbox execution, and testing remain separate packages.
-
-### Migrating imports
-
-Replace dependencies on `@effect-agent/core`, `@effect-agent/engine`,
-`@effect-agent/capabilities`, `@effect-agent/sandbox`, and `@effect-agent/thread` with `effect-agent`.
-Those packages are consolidated into this release; previously published versions remain on npm.
-Prefer root namespaces:
-
-```ts
-import { Agent, AgentRuntime, Subagent, CodeExecutor, ThreadHistory } from "effect-agent";
-```
-
-All remaining framework packages also use kebab-case module subpaths, for example
-`@effect-agent/platform-node/node-durable-host`. PascalCase namespace names remain unchanged.
-Update all framework packages together. Service identities and stored formats are unchanged by
-this import migration.
 
 ### `@effect-agent/sandbox-local`
 

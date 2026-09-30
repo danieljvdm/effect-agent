@@ -7,14 +7,9 @@ description: Keep history and recover accepted work after a crash.
 
 # Persistence & durability
 
-Effect Agent supports persistent history and durable execution as separate capabilities.
-Persistence rebuilds recorded state. Durable execution accepts work, survives lost attempts, and
-owes one terminal settlement for every acknowledged submission.
-
-`InMemory.layer` retains conversations across Runs for as long as its application Scope stays
-open, within the store's capacity limits. In-memory describes where state lives. Ephemeral
-execution means work cannot recover after process loss; it can use either in-memory or persistent
-history. Neither term implies that an application or conversation must be short-lived.
+Persistent history retains conversations; durable execution also recovers accepted work after
+process loss. The [runtime model](./runtime-model) defines ownership and settlement. This page
+covers recovery boundaries and adapter contracts; see [Threads](../guide/threads) for history setup.
 
 ## Execution modes {#four-deployment-classes}
 
@@ -30,10 +25,8 @@ See the [Node.js](../platforms/node) and [Cloudflare](../platforms/cloudflare) g
 
 ## Rebuild from the log {#canonical-history}
 
-The thread log is an append-only sequence of versioned facts. It is authoritative for
-applied input and terminal outcomes. Projections, checkpoints, indexes, and UI views can be rebuilt.
-
-Replay rebuilds state from records. It never executes a tool or repeats an external effect.
+Replay rebuilds state from canonical records without executing tools. Projections and checkpoints
+are disposable; retain canonical records when rebuilding them.
 
 An Attempt captures a fixed canonical tail and validates contiguous pages. For uncompacted history,
 it gathers control and journal metadata together. Later appends enter through a separately captured
@@ -72,9 +65,8 @@ the same reconciliation and unknown-outcome rules with or without a checkpoint.
 
 ## Track unfinished work {#operational-obligation}
 
-The submission ledger owns admission, FIFO readiness, attempt ownership, abort intent, recovery,
-and the obligation to settle accepted work. An unknown Submission without abort intent is parked:
-later input can run in the same Thread while the original settlement obligation stays open.
+An unknown Submission without abort intent is parked: later input can run in the same Thread
+while the original settlement obligation stays open.
 Suspended, joining, and joined work retain their ordering barriers. At most one live owner can
 claim a Thread; a wake hint does not acquire ownership or advance its fencing epoch.
 
@@ -103,34 +95,18 @@ default cooperative recovery bound is 30 seconds per Thread (`recoveryTimeout`).
 and global SQL/control-identity scan failures still fail the sweep. A recovery fault never settles accepted work,
 proves an external effect failed, or authorizes replay.
 
-```text
-thread log              submission ledger
-what happened                 what is still owed
-append-only                   operational, mutable, audited
-replay authority              claim and scheduling authority
-canonical settlement          outstanding settlement obligation
-```
-
 ## Exactly-once recording
 
-The runtime records one accepted settlement. It does not promise one physical execution of every
-external operation. Model calls and external APIs may repeat across crash windows.
-
-If an ordinary tool may have finished before its worker disappeared, recovery records an
-`UnknownToolOutcome`. It cannot safely infer failure or replay the call.
-
-Durable Steps record one result for each deterministic Step name. Their external execution is at
-least once and may repeat. Applications still need idempotency, reconciliation, or compensation.
+Recovery records `UnknownToolOutcome` when an ordinary tool may have acted without a recorded
+result. It cannot safely infer failure or replay the call. Durable Steps reuse recorded results;
+their external execution can repeat and still needs idempotency or reconciliation.
 
 Step identity includes the Run ID, Tool Call ID, and Step name. New Step record and batch IDs use
 a versioned JSON tuple so separator characters cannot merge distinct Steps. Recovery derives
 the same identity from each recorded payload, preserving completed Steps stored with older IDs
 without executing their bodies again.
 
-## Reuse the same agent definition {#one-authoring-model}
-
-Use the same agent definition for ephemeral runs and durable registration. Durable hosts also
-need storage, versioned registrations, and a recovery driver. See the platform setup guides above.
+## Workflow recovery {#one-authoring-model}
 
 The optional [`WorkflowAgentHost`](../guide/workflows) drives this runtime through an
 injected Effect `WorkflowEngine`. Replacing the engine Layer leaves the agent definitions and
@@ -232,9 +208,8 @@ disposition remain authoritative across later codec or completion-projector chan
 
 ## Attached subagents
 
-Use [`Subagent.make`](../guide/subagents/durable-attached#define-the-delegation) to expose a child agent as a tool.
-A durable child owns a separate thread and attempt. While waiting for it, the parent releases
-its worker permit.
+A [durable attached child](../guide/subagents/durable-attached) owns a separate thread and attempt.
+The waiting parent releases its worker permit; recovery rejoins the existing child.
 
 Recovery preserves child identity and checks the registered tool's delegation classification.
 Missing or conflicting classification fails closed. If admission cannot confirm whether a child

@@ -21,7 +21,8 @@ const run = AgentRuntime.run(definition, input).pipe(Effect.provide(ClaudeModel)
 ```
 
 Definitions contain no provider client, database connection, mutable thread, or acquired
-resource. Reuse one definition across many runs.
+resource. Reuse one definition across many runs. Effect Schema supplies the data types and runtime
+validation; provider wire schemas derive from those definitions.
 
 ## Build a definition {#definition-contract}
 
