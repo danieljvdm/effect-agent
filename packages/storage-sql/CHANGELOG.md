@@ -1,5 +1,16 @@
 # @effect-agent/storage-sql
 
+## 0.1.0-beta.158
+
+### Patch Changes
+
+- [#720](https://github.com/danieljvdm/effect-agent/pull/720) [`9a7d358`](https://github.com/danieljvdm/effect-agent/commit/9a7d3581930b1a36fed318d13c966ff8efc4baa5) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Park accepted message deliveries without status polling and acknowledge native sources on terminal settlement. Bound no-progress Cloudflare maintenance and reuse canonical hydration codecs and a bounded multi-page cache.
+
+  BEHAVIOR CHANGE: generic host envelopes need an exact terminal `Complete` acknowledgement or explicit receipt recovery. Draining a host lane resets its scheduling budget; eight unchanged self-rearming passes park pending work for hourly recovery and report once through the installed error reporter. New source-transaction `recordProgress` or a strictly increasing retained commit cursor resumes it immediately. Canonical hydration retention is bounded by one shared eight-MiB serialized-byte budget per isolate.
+
+- Updated dependencies [[`9a7d358`](https://github.com/danieljvdm/effect-agent/commit/9a7d3581930b1a36fed318d13c966ff8efc4baa5), [`a52c77f`](https://github.com/danieljvdm/effect-agent/commit/a52c77fe67ac7f729f3ea1c637474f4b8036b2dd)]:
+  - effect-agent@0.1.0-beta.158
+
 ## 0.1.0-beta.157
 
 ### Patch Changes
