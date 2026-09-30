@@ -63,6 +63,9 @@ export class SqlMemoryBatchWriter extends Context.Service<
  * releasing readers. Hosts with independent database writers must leave this unset.
  */
 export interface SqlStorageOwner {
+  /** Cache identity for transaction decorators; omission uses the owner itself.
+   * Shared identities must name the same database, reader gate and invalidator set. */
+  readonly identity?: object;
   readonly read: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   readonly transaction: <A, E, R>(
     effect: Effect.Effect<A, E, R>,
@@ -172,17 +175,18 @@ class MemoryViews {
   }
 }
 
-const ownedViews = new WeakMap<SqlStorageOwner, MemoryViews>();
+const ownedViews = new WeakMap<object, MemoryViews>();
 
 const memoryViews = Effect.fn("SqliteMemoryStore.memoryViews")(function* () {
   const owner = yield* SqlStorageOwner;
 
   if (owner === undefined) return undefined;
-  let views = ownedViews.get(owner);
+  const identity = owner.identity ?? owner;
+  let views = ownedViews.get(identity);
 
   if (views === undefined) {
     views = new MemoryViews();
-    ownedViews.set(owner, views);
+    ownedViews.set(identity, views);
     owner.invalidators.add(views.clear);
   }
 

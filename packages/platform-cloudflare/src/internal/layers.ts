@@ -37,6 +37,7 @@ import {
   Context,
   Duration,
   Effect,
+  Exit,
   ErrorReporter,
   Layer,
   Match,
@@ -84,6 +85,7 @@ import {
   RunToolAuthorization,
   toolFailureObserverLayer,
 } from "effect-agent/run-options";
+import { SqlStorageOwner } from "effect-agent/sql-memory-store";
 import {
   LedgerError,
   SubmissionLedger,
@@ -618,11 +620,41 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
       };
 
       const infrastructure = Layer.mergeAll(
-        sqlOwnerLayer,
         options.lifecyclePublication === undefined ? Layer.empty : lifecyclePublicationLayer,
         storageConfigLayer(storageOptions),
         Layer.effect(SqlClient)(SqlClient),
       );
+
+      // Preserve the database owner's reader gate and rollback invalidators, while
+      // making source transactions explicitly own the due-queue flush.
+      const sourceOwner = Layer.effect(SqlStorageOwner)(
+        Effect.gen(function* () {
+          const owner = yield* SqlStorageOwner;
+          const mutations = yield* ThreadMutationGate;
+
+          if (owner === undefined) return yield* Effect.die(new Error("SQL owner unavailable"));
+
+          return {
+            identity: owner.identity ?? owner,
+            read: owner.read,
+            invalidators: owner.invalidators,
+            transaction: <A, E, R>(body: Effect.Effect<A, E, R>) =>
+              owner.read(
+                mutations.withTransaction(body).pipe(
+                  Effect.onExit((exit) =>
+                    Exit.isFailure(exit)
+                      ? Effect.sync(() => {
+                          for (const invalidate of owner.invalidators) invalidate();
+                        })
+                      : Effect.void,
+                  ),
+                ),
+              ),
+          };
+        }),
+      ).pipe(Layer.provide(sqlOwnerLayer));
+
+      const localInfrastructure = Layer.mergeAll(infrastructure, sourceOwner);
 
       const sourceProgress = Layer.effect(SqlStorageProgress)(
         Effect.gen(function* () {
@@ -676,7 +708,7 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
       // The same local ports serve routed decorators and owner-side RPC execution.
       // The RPC executor must never receive routed ports and bounce requests between Objects.
       const rawLocalPorts = Layer.mergeAll(threadStoreLayer, submissionLedgerLayer).pipe(
-        Layer.provide(infrastructure),
+        Layer.provide(localInfrastructure),
         Layer.provide(sourceProgress),
       );
 
@@ -686,7 +718,7 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
       const messageStore = guardedMessageDeliveryStoreLayer.pipe(
         Layer.provide(
           doMessageDeliveryStoreLayer().pipe(
-            Layer.provide(infrastructure),
+            Layer.provide(localInfrastructure),
             Layer.provide(sourceProgress),
           ),
         ),
@@ -1058,6 +1090,7 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
         Layer.provideMerge(sourceProgress),
         Layer.provideMerge(publication),
         Layer.provideMerge(projection),
+        Layer.provideMerge(sourceOwner),
         Layer.provideMerge(ThreadMutationGate.layer),
         Layer.provideMerge(infrastructure),
       );

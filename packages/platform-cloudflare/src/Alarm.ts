@@ -43,6 +43,7 @@ import {
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { DurableObjectStorage } from "effect-cf";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
+import type { SqlError } from "effect/unstable/sql/SqlError";
 
 import { DurableObjectContext } from "./CloudflareBindings.ts";
 import { AuxiliaryDispatchMillis, CloudflareDurableRuntimeConfig } from "./CloudflareConfig.ts";
@@ -97,16 +98,20 @@ const makeStorageEffect = Effect.gen(function* () {
     Effect.flatMap(Effect.serviceOption(sql.transactionService), (current) => {
       const body = Effect.uninterruptible(execute);
 
-      // An enclosing source transaction can still roll back after a successful schedule.
-      // Never retain its speculative queue view beyond this nested storage operation.
-      return current._tag === "Some"
-        ? body.pipe(Effect.ensuring(invalidate))
-        : Effect.scoped(
-            Effect.andThen(
-              sql.reserve.pipe(Effect.mapError(alarmFailure(operation))),
-              body.pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? invalidate : Effect.void))),
-            ),
-          );
+      // Explicit source transactions own the view through flush and rollback.
+      // Unwrapped host SQL keeps eager writes and discards speculative cache rows.
+      if (current._tag === "Some") {
+        if (DueQueue.buffering(ctx.storage)) return body;
+
+        return body.pipe(Effect.ensuring(invalidate));
+      }
+
+      return Effect.scoped(
+        Effect.andThen(
+          sql.reserve.pipe(Effect.mapError(alarmFailure(operation))),
+          body.pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? invalidate : Effect.void))),
+        ),
+      );
     });
 });
 
@@ -692,9 +697,15 @@ const CurrentNativeSource = Context.Reference<boolean>(
 export class ThreadMutationGate extends Context.Service<
   ThreadMutationGate,
   {
+    /** Commit source facts and their scheduling intent together. The flush runs before
+     * native commit; failed or interrupted transactions discard their queue view. */
+    readonly withTransaction: <A, E, R>(
+      body: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | SqlError, R>;
     readonly withMutation: <A, E, R>(
       body: Effect.Effect<A, E, R>,
       /**
+       * Call outside SQL transactions so prearming commits before the body runs.
        * Native admission, approval, abort and unknown resolution keep the default true.
        * Host producers use false and name only the lanes for which they create work.
        * Receipt-only bookkeeping with no new obligation names no lanes. Enrollment preserves
@@ -738,6 +749,7 @@ export class ThreadMutationGate extends Context.Service<
       const { ctx } = yield* DurableObjectContext;
       const sql = yield* SqlClient;
       const dueQueue = DueQueue.make(ctx.storage);
+
       const config = yield* CloudflareDurableRuntimeConfig;
       const failpoint = yield* ThreadMaintenanceFailpoint;
       // A fresh incarnation has no live mutations; durable generations survive eviction.
@@ -759,6 +771,21 @@ export class ThreadMutationGate extends Context.Service<
 
       const runTransaction = yield* makeStorageOperation;
 
+      const validateSourceBoundary = Effect.flatMap(
+        Effect.serviceOption(sql.transactionService),
+        (current) =>
+          current._tag === "Some" &&
+          DueQueue.buffering(ctx.storage) &&
+          !DueQueue.ownsTransaction(ctx.storage, current.value[1])
+            ? Effect.fail(
+                DurableAlarmError.make({
+                  operation: "enroll maintenance source",
+                  message: "Nested source scheduling requires ThreadMutationGate.withTransaction",
+                }),
+              )
+            : Effect.void,
+      );
+
       yield* runTransaction("initialize maintenance due queue", async () => {
         dueQueue.initialize();
         dueQueue.register(DueQueue.Native);
@@ -769,6 +796,7 @@ export class ThreadMutationGate extends Context.Service<
         dueAt: number,
         progressCursor?: bigint,
       ) {
+        yield* validateSourceBoundary;
         const now = yield* Clock.currentTimeMillis;
         const current = yield* Effect.serviceOption(sql.transactionService);
 
@@ -801,7 +829,7 @@ export class ThreadMutationGate extends Context.Service<
         };
 
         yield* runTransaction("schedule maintenance lane", () =>
-          Option.isSome(current) ? enroll(ctx.storage) : ctx.storage.transaction(enroll),
+          Option.isSome(current) ? enroll(ctx.storage) : dueQueue.transaction(enroll),
         );
         yield* notify;
       });
@@ -816,7 +844,7 @@ export class ThreadMutationGate extends Context.Service<
 
         if (invalidatesRecovery || lanes.length > 0)
           yield* runTransaction("advance maintenance generation", () =>
-            ctx.storage.transaction(async (transaction) => {
+            dueQueue.transaction(async (transaction) => {
               const { state, initialized } = await readMaintenanceState(transaction);
 
               if (invalidatesRecovery) {
@@ -883,34 +911,47 @@ export class ThreadMutationGate extends Context.Service<
           readonly lanes?: ReadonlyArray<string>;
         },
       ): Effect.Effect<A, E | DurableAlarmError, R> =>
-        Effect.acquireUseRelease(
-          generationGate.withPermit(
-            beginMutation(options?.invalidatesRecovery ?? true, options?.lanes ?? []),
-          ),
-          (enrolled) =>
-            failpoint.hit("maintenance:mutation:armed").pipe(
-              Effect.andThen(
-                Effect.flatMap(CurrentMutationLanes, (current) =>
-                  body.pipe(
-                    Effect.provideService(CurrentMutationLanes, [
-                      ...new Set([...current, ...enrolled]),
-                    ]),
-                  ),
+        Effect.flatMap(Effect.serviceOption(sql.transactionService), (current) =>
+          // Reject before the generation gate: a prearmer may already be waiting
+          // for this caller's SQL connection while holding that gate.
+          Option.isSome(current)
+            ? Effect.fail(
+                DurableAlarmError.make({
+                  operation: "prearm maintenance mutation",
+                  message:
+                    "Run withMutation outside the source SQL transaction so prearming commits first",
+                }),
+              )
+            : Effect.acquireUseRelease(
+                generationGate.withPermit(
+                  beginMutation(options?.invalidatesRecovery ?? true, options?.lanes ?? []),
                 ),
+                (enrolled) =>
+                  failpoint.hit("maintenance:mutation:armed").pipe(
+                    Effect.andThen(
+                      Effect.flatMap(CurrentMutationLanes, (current) =>
+                        body.pipe(
+                          Effect.provideService(CurrentMutationLanes, [
+                            ...new Set([...current, ...enrolled]),
+                          ]),
+                        ),
+                      ),
+                    ),
+                    // The committed outbox may be claimed by the alarm even while the caller
+                    // is suspended after commit. This synchronous decrement does not acquire the
+                    // native snapshot gate: a snapshot may conservatively retain its active count.
+                    // Native certification keeps its broader guard until the mutation is released.
+                    Effect.tap(() => releaseLanes(enrolled, true).pipe(Effect.andThen(notify))),
+                    Effect.tap(() => failpoint.hit("maintenance:mutation:finished")),
+                  ),
+                (enrolled) => endMutation(enrolled).pipe(Effect.andThen(notify)),
               ),
-              // The committed outbox may be claimed by the alarm even while the caller
-              // is suspended after commit. This synchronous decrement does not acquire the
-              // native snapshot gate: a snapshot may conservatively retain its active count.
-              // Native certification keeps its broader guard until the mutation is released.
-              Effect.tap(() => releaseLanes(enrolled, true).pipe(Effect.andThen(notify))),
-              Effect.tap(() => failpoint.hit("maintenance:mutation:finished")),
-            ),
-          (enrolled) => endMutation(enrolled).pipe(Effect.andThen(notify)),
         );
 
       const recordProgress = Effect.fn("ThreadMutationGate.recordProgress")(function* (
         lanes: ReadonlyArray<string>,
       ) {
+        yield* validateSourceBoundary;
         if (Option.isNone(yield* Effect.serviceOption(sql.transactionService)))
           return yield* DurableAlarmError.make({
             operation: "record source progress",
@@ -945,6 +986,8 @@ export class ThreadMutationGate extends Context.Service<
       });
 
       return ThreadMutationGate.of({
+        withTransaction: <A, E, R>(body: Effect.Effect<A, E, R>) =>
+          dueQueue.withTransaction(body).pipe(Effect.provideService(SqlClient, sql)),
         withMutation,
         schedule,
         recordProgress,
@@ -1074,7 +1117,7 @@ export class ThreadMaintenance extends Context.Service<
           return;
 
         const rows = yield* runTransaction("mark parked maintenance reports", () =>
-          ctx.storage.transaction(async () => dueQueue.takeParkedReports()),
+          dueQueue.transaction(async () => dueQueue.takeParkedReports()),
         );
 
         for (const row of rows) {
@@ -1124,7 +1167,7 @@ export class ThreadMaintenance extends Context.Service<
           const now = yield* Clock.currentTimeMillis;
 
           const claimed = yield* runTransaction("charge maintenance attempt", () =>
-            ctx.storage.transaction(async (transaction) => {
+            dueQueue.transaction(async (transaction) => {
               const claimed = dueQueue.claim(selected, now);
               const next = DueQueue.next(dueQueue.read());
 
@@ -1173,16 +1216,15 @@ export class ThreadMaintenance extends Context.Service<
                     : Option.getOrNull(exit.value);
 
                   const checkpointed = yield* runTransaction("checkpoint maintenance lane", () =>
-                    ctx.storage.transaction(async () => {
+                    dueQueue.transaction(async () => {
                       // A producer can be between enrollment and its source commit. Never acknowledge
                       // that observation; its completion will notify the event or retain the alarm.
                       if (active) return;
                       const current = dueQueue.read().find((lane) => lane.id === row.id);
 
                       if (current?.revision !== row.revision) return;
-                      dueQueue.complete(row, next);
 
-                      return row.revision + 1;
+                      return dueQueue.complete(row, next)?.revision;
                     }),
                   );
 
@@ -1236,7 +1278,7 @@ export class ThreadMaintenance extends Context.Service<
           if (!recoveryEventsPending) return Option.none<number>();
 
           const range = yield* runTransaction("select recovery events", () =>
-            ctx.storage.transaction(async (transaction) => {
+            dueQueue.transaction(async (transaction) => {
               const { state } = await readMaintenanceState(transaction);
 
               return {
@@ -1261,7 +1303,7 @@ export class ThreadMaintenance extends Context.Service<
             const acknowledgedAt = yield* Clock.currentTimeMillis;
 
             yield* runTransaction("acknowledge recovery event", () =>
-              ctx.storage.transaction(async (transaction) => {
+              dueQueue.transaction(async (transaction) => {
                 const { state } = await readMaintenanceState(transaction);
 
                 const next = ThreadMaintenanceState.make({
@@ -1305,7 +1347,7 @@ export class ThreadMaintenance extends Context.Service<
         yield* failpoint.hit("maintenance:recovery-status:before");
 
         const retained = yield* runTransaction("record Thread recovery faults", () =>
-          ctx.storage.transaction(async (transaction) => {
+          dueQueue.transaction(async (transaction) => {
             const events: Array<Omit<ThreadRecoveryFaultEvent, "sequence">> = [];
             const newlyBlocked: Array<ThreadRecoveryFault> = [];
             const faults = new Map<ThreadId, ThreadRecoveryFault>();
@@ -1437,7 +1479,7 @@ export class ThreadMaintenance extends Context.Service<
         const now = yield* Clock.currentTimeMillis;
 
         yield* runTransaction("ensure maintenance alarm", () =>
-          ctx.storage.transaction(async (transaction) => {
+          dueQueue.transaction(async (transaction) => {
             const { state, initialized } = await readCurrentMaintenanceState(transaction);
 
             recoveryEventsPending = hasRecoveryEvents(state);
@@ -1473,7 +1515,7 @@ export class ThreadMaintenance extends Context.Service<
         const now = yield* Clock.currentTimeMillis;
 
         const result = yield* runTransaction("begin maintenance pass", () =>
-          ctx.storage.transaction(async (transaction) => {
+          dueQueue.transaction(async (transaction) => {
             const { state, initialized } = await readCurrentMaintenanceState(transaction);
 
             recoveryEventsPending = hasRecoveryEvents(state);
@@ -1563,7 +1605,7 @@ export class ThreadMaintenance extends Context.Service<
             const jitter = yield* Random.next;
 
             yield* runTransaction("back off failed maintenance", () =>
-              ctx.storage.transaction(async (transaction) => {
+              dueQueue.transaction(async (transaction) => {
                 const { state } = await readMaintenanceState(transaction);
 
                 const previous =
@@ -1771,7 +1813,7 @@ export class ThreadMaintenance extends Context.Service<
               const now = yield* Clock.currentTimeMillis;
 
               const { state } = yield* runTransaction("read native maintenance deadline", () =>
-                ctx.storage.transaction((transaction) => readMaintenanceState(transaction)),
+                dueQueue.transaction((transaction) => readMaintenanceState(transaction)),
               );
 
               const native =
@@ -1865,7 +1907,7 @@ export class ThreadMaintenance extends Context.Service<
 
             // Admissions during backoff need visibility without accelerating recovery.
             // Preserve recipients even if recovery later settles them before clearing.
-            await ctx.storage.transaction(async (transaction) => {
+            await dueQueue.transaction(async (transaction) => {
               const encoded = await transaction.get(recoveryFaultKey(threadId));
 
               if (encoded === undefined) return;
@@ -1970,7 +2012,7 @@ export class ThreadMaintenance extends Context.Service<
         yield* failpoint.hit("maintenance:select:before");
 
         const selection = yield* runTransaction("select maintenance lane", () =>
-          ctx.storage.transaction(async (transaction) => {
+          dueQueue.transaction(async (transaction) => {
             const { state } = await readMaintenanceState(transaction);
 
             const waits = (state.bindingWaits ?? []).filter(
@@ -2123,7 +2165,7 @@ export class ThreadMaintenance extends Context.Service<
 
         const nextAttemptAt = yield* mutations.withSnapshot((active) =>
           runTransaction("checkpoint native maintenance", () =>
-            ctx.storage.transaction(async (transaction) => {
+            dueQueue.transaction(async (transaction) => {
               const { state } = await readMaintenanceState(transaction);
 
               const mutationOverlap =
@@ -2293,7 +2335,7 @@ export class ThreadMaintenance extends Context.Service<
             for (const threadId of yield* Deferred.await(recovery.queue)) {
               yield* failpoint.hit("maintenance:select:before");
               yield* runTransaction("select old recovery lane", () =>
-                ctx.storage.transaction(async (transaction) => {
+                dueQueue.transaction(async (transaction) => {
                   const { state } = await readMaintenanceState(transaction);
 
                   await transaction.put(
@@ -2690,7 +2732,7 @@ export class ThreadMaintenance extends Context.Service<
 
           const cursor = yield* mutations.withSnapshot(() =>
             runTransaction("read post-native dispatch cursor", () =>
-              ctx.storage.transaction(
+              dueQueue.transaction(
                 async (transaction) =>
                   (await readMaintenanceState(transaction)).state.lastAfterNativeLaneId,
               ),
@@ -2730,7 +2772,7 @@ export class ThreadMaintenance extends Context.Service<
                 // to the lane and its due-queue revision still fences acknowledgement.
                 const admit = mutations.withSnapshot(() =>
                   runTransaction("advance post-native dispatch cursor", () =>
-                    ctx.storage.transaction(async (transaction) => {
+                    dueQueue.transaction(async (transaction) => {
                       const { state } = await readMaintenanceState(transaction);
 
                       await transaction.put(
@@ -2794,7 +2836,7 @@ export class ThreadMaintenance extends Context.Service<
             const now = yield* Clock.currentTimeMillis;
 
             return yield* runTransaction("finish maintenance event", () =>
-              ctx.storage.transaction(async (transaction) => {
+              dueQueue.transaction(async (transaction) => {
                 const { state } = await readMaintenanceState(transaction);
 
                 const native =
@@ -2859,7 +2901,7 @@ export class ThreadMaintenance extends Context.Service<
 
           return yield* alarm.withWakesDeferred(
             maintenancePassGate.withPermit(
-              Effect.scoped(pass(yieldAfter, dispatchUntil, observed)).pipe(
+              dueQueue.withView(Effect.scoped(pass(yieldAfter, dispatchUntil, observed))).pipe(
                 // Close event-owned auxiliary work and release Attempt ownership before
                 // failure rearming, while still holding the pass permit.
                 Effect.onErrorIf(

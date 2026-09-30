@@ -151,10 +151,7 @@ const pendingBytes = (records: ReadonlyArray<PendingRecord>) =>
   records.reduce((total, entry) => total + entry.storedBytes, 0);
 
 // Disposable complete pending sets shared by adapters on the same physical owner.
-const pendingViews = new WeakMap<
-  SqlStorageOwner,
-  Map<string, Map<string, ReadonlyArray<PendingRecord>>>
->();
+const pendingViews = new WeakMap<object, Map<string, Map<string, ReadonlyArray<PendingRecord>>>>();
 
 const compareMessageIds = (left: string, right: string): number => {
   const a = new TextEncoder().encode(left);
@@ -211,11 +208,12 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
   let pending: Map<string, ReadonlyArray<PendingRecord>> | undefined;
 
   if (owner !== undefined) {
-    let namespaces = pendingViews.get(owner);
+    const identity = owner.identity ?? owner;
+    let namespaces = pendingViews.get(identity);
 
     if (namespaces === undefined) {
       namespaces = new Map();
-      pendingViews.set(owner, namespaces);
+      pendingViews.set(identity, namespaces);
     }
     const namespace = options.namespace ?? "";
 

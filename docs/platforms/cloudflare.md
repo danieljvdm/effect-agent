@@ -447,8 +447,10 @@ same gate instance when rebuilding runtime services. Receipt bookkeeping that cr
 uses `invalidatesRecovery: false` with no lanes. Native admissions and controls keep the default
 `invalidatesRecovery: true`.
 
-The queue retains each lane's own revision and deadline. A finishing wave cannot erase a newer
-producer enrollment, and a lane waits for an in-flight source mutation body to finish.
+The queue retains each lane's own revision and deadline. Repeated marks in one source transaction
+merge the earliest deadline and highest progress cursor into one scheduler write per changed lane.
+A pass shares its queue view, releasing large views when it exits. The gate owns the source transaction and its flush; prearming and attempt charging commit before fallible work. Built-in stores use this boundary automatically. Custom sources can opt into coalescing with `ThreadMutationGate.withTransaction` at their outermost SQL transaction. Within that boundary, nested transactions that schedule work use it too.
+A finishing wave cannot erase a newer producer enrollment, and a lane waits for an in-flight source mutation body to finish.
 Completions and producer notifications drive the active event; there is no wake-scan timer.
 The one alarm retains the earliest queued deadline after all admitted resources close. Constructor
 repair reads only local scheduling state, never application deadline tables or execution history.
