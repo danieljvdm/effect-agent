@@ -236,7 +236,7 @@ export const documentSummaryPolicy = SubagentPolicy.make({
   maxDuration: "10 seconds",
 });
 
-export const delegateDocumentSummary = Subagent.define("delegate_document_summary", {
+export const delegateDocumentSummary = Subagent.make("delegate_document_summary", {
   description:
     "Summarize one research document through the doc-summarizer child and return a bounded finding.",
   target: DocSummarizer,

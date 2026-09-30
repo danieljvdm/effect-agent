@@ -81,7 +81,7 @@ A custom mapper receives bounded parent metadata, never the parent's transcript.
 ## Upgrade the constructor
 
 Replace `Subagent.define(name, options)` with `Subagent.make(name, options)`. The deprecated
-constructor remains an alias. Keep existing names, including `delegate_` names, when upgrading:
+constructor has been removed. Keep existing names, including `delegate_` names, when upgrading:
 the constructor migration preserves their durable identities.
 
 ## Bound child work

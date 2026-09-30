@@ -439,7 +439,7 @@ class ChaosDelegationFailed extends Schema.TaggedError<ChaosDelegationFailed>()(
   { childErrorTag: Schema.String },
 ) {}
 
-const chaosDelegation = Subagent.define("delegate_chaos", {
+const chaosDelegation = Subagent.make("delegate_chaos", {
   description: "Delegate one bounded chaos question.",
   target: childDefinition,
   parameters: Schema.Struct({ topic: Schema.String }),

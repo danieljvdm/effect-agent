@@ -187,7 +187,7 @@ const researchPolicy = SubagentPolicy.make({
   maxDuration: "10 seconds",
 });
 
-const researchDelegation = Subagent.define("delegate_research", {
+const researchDelegation = Subagent.make("delegate_research", {
   description: "Research one bounded question and return findings.",
   target: childDefinition,
   parameters: ResearchParams,

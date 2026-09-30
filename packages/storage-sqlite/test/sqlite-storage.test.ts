@@ -9,9 +9,9 @@ import {
   SqliteStorageCorruptionError,
   SqliteWriteContention,
 } from "@effect-agent/storage-sqlite/sqlite-storage-error";
+import { SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/sqlite-storage-failpoint";
 import { ledgerLayer } from "@effect-agent/storage-sqlite/sqlite-submission-ledger";
 import { threadStoreLayer, layer } from "@effect-agent/storage-sqlite/sqlite-thread-store";
-import { SqliteStorageFailpointTestControl } from "@effect-agent/storage-sqlite/testing/sqlite-storage-failpoint-testing";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, describe, it } from "@effect/vitest";
@@ -157,7 +157,7 @@ const explicitTestStorageLayer = (filename: string) =>
             verifyOnOpen: false,
           }),
         ),
-        SqliteStorageFailpointTestControl.layer,
+        SqliteStorageFailpoint.layer,
         SqliteClient.layer({ filename }),
         NodeCrypto.layer,
       ),

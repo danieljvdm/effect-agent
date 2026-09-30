@@ -45,7 +45,7 @@ it.live(
       const childDefinitions = definitionsFor(planner.id);
       const childDigests = yield* digestDefinitions(childDefinitions);
 
-      const delegation = Subagent.define("delegate_workflow", {
+      const delegation = Subagent.make("delegate_workflow", {
         target: planner,
         failureMode: "return",
       });

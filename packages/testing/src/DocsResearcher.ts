@@ -26,7 +26,7 @@
 //    (S2 travel planner, P6 planner, this one) re-implements "counters outside
 //    the Layer + decide-from-prompt". A shared `makePromptAwareCountingModel`
 //    in the testing package is an easy WP7 simplification.
-// 4. The delegation surface itself (Subagent.define + projections + policy)
+// 4. The delegation surface itself (Subagent.make + projections + policy)
 //    was pleasant to author a second time — bounds and declassification live
 //    exactly where a reviewer looks for them.
 // ---------------------------------------------------------------------------
