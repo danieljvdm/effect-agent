@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.161
+
+### Patch Changes
+
+- [#734](https://github.com/danieljvdm/effect-agent/pull/734) [`ff7f6c3`](https://github.com/danieljvdm/effect-agent/commit/ff7f6c30988b3c714f8cf4f4d26748c6baea1ccb) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reuse compacted Thread context for Cloudflare's routed Submission IDs while preserving canonical replay for ambiguous or incompatible histories. Keep eligible Thread context cached when retaining the completed Run's recovery data would exceed cache bounds.
+
 ## 0.1.0-beta.160
 
 ### Patch Changes

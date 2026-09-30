@@ -83,6 +83,7 @@
     "cloudflare-gateway-web-search",
     "cloudflare-layer-from-bindings",
     "cloudflare-publication-requirements",
+    "cloudflare-routed-replay",
     "cloudflare-shared-memory",
     "coalesce-cloudflare-scheduling",
     "code-mode-drop-allow-experimental",
