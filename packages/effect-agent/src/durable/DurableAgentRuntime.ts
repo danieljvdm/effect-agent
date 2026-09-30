@@ -4664,6 +4664,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               journalMetadata,
             );
 
+      // Do not retain the metadata snapshot across model or Tool waits, including cache hits.
+      // The projected prompt owns its needed context.
+      journalMetadata = undefined;
+
       projectedJournal = {
         threadId: ctx.threadId,
         through: canonicalThrough,
@@ -8183,12 +8187,19 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const retainControl = controlRecords([submissionId]);
 
       const collectControl = (record: CanonicalRecordEnvelope): boolean => {
-        // Compaction payloads may carry large summaries or handoffs. Keep their metadata
-        // scoped to ordinary projection, never retained across this Attempt's model waits.
-        if (record.record.payload._tag === "CompactionCreated") journalMetadata = undefined;
-        else journalMetadata?.add(record);
+        journalMetadata?.add(record);
 
         return retainControl(record);
+      };
+
+      const takeJournalMetadata = (): JournalMetadata | undefined => {
+        const metadata = journalMetadata?.snapshot();
+
+        // Reuse the validated prefix once, then release compaction payloads before model
+        // waits. An immediate resume falls back to a fresh canonical metadata scan.
+        if (metadata !== undefined && metadata.compactions.length > 0) journalMetadata = undefined;
+
+        return metadata;
       };
 
       let records: ReadonlyArray<CanonicalRecordEnvelope> = yield* Stream.runCollect(
@@ -8562,7 +8573,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           canonical,
           tail.tailSequence,
           initialView.seed,
-          journalMetadata?.snapshot(),
+          takeJournalMetadata(),
           lineage,
           approvalDecisionIntents,
           currentContracts,
