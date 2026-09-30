@@ -6,6 +6,7 @@ export default defineConfig({
       "src/index.ts",
       "src/SqlStorage.ts",
       "src/SqlStorageFailpoint.ts",
+      "src/SqlStorageProgress.ts",
       "src/SqlJournal.ts",
       "src/SqlThreadStore.ts",
       "src/SqlSubmissionLedger.ts",

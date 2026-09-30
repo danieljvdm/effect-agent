@@ -177,7 +177,16 @@ export class DurableAlarmService extends Context.Service<
           );
 
         const armNow = Clock.currentTimeMillis.pipe(
-          Effect.flatMap((now) => ensureScheduledBy(now)),
+          Effect.flatMap((now) =>
+            storageOperation("wake maintenance lanes", () =>
+              ctx.storage.transaction(async (transaction) => {
+                const next = DueQueue.next(DueQueue.make(ctx.storage).read());
+
+                if (Number.isFinite(next))
+                  await ensureTransactionAlarmBy(transaction, Math.max(now, next));
+              }),
+            ),
+          ),
         );
 
         const scheduleNow = Ref.get(runningPasses).pipe(
@@ -522,7 +531,9 @@ interface NativeDispatch {
   progressed: boolean;
   needsCheckpoint: boolean;
   generation?: bigint;
+  sourceRevision?: number;
   scanGeneration?: bigint;
+  scanRevision?: number;
 }
 
 const nativeDispatchConcurrency = 2;
@@ -549,6 +560,7 @@ interface NativeRecovery {
 
 interface MaintenanceObservation {
   readonly queue: Map<string, DueQueue.DueLane>;
+  readonly charged: Map<string, number>;
   /** Initially available or serviced revisions; active producers are only failure observations. */
   readonly available: Map<string, number>;
   generation?: bigint;
@@ -612,7 +624,7 @@ const readMaintenanceState = async (
 };
 
 const ensureTransactionAlarmBy = async (
-  transaction: DurableObjectTransaction,
+  transaction: Pick<DurableObjectTransaction, "getAlarm" | "setAlarm">,
   deadline: number,
 ): Promise<void> => {
   const scheduled = await transaction.getAlarm();
@@ -654,6 +666,22 @@ const stableExternalWait = (
  * `ThreadObject.layer` provides this same instance in its Services. Rebuilt runtime/maintenance
  * Layers must reuse that instance; a second gate cannot observe the native producers' activity.
  */
+const CurrentMutationLanes = Context.Reference<ReadonlyArray<string>>(
+  "@effect-agent/platform-cloudflare/CurrentMutationLanes",
+  {
+    defaultValue: () => [],
+  },
+);
+
+// Source changes made by this pass are certified after its Attempts join. External
+// producers still advance the dirty generation and fence that certification.
+const CurrentNativeSource = Context.Reference<boolean>(
+  "@effect-agent/platform-cloudflare/CurrentNativeSource",
+  {
+    defaultValue: () => false,
+  },
+);
+
 export class ThreadMutationGate extends Context.Service<
   ThreadMutationGate,
   {
@@ -662,15 +690,33 @@ export class ThreadMutationGate extends Context.Service<
       /**
        * Native admission, approval, abort and unknown resolution keep the default true.
        * Host producers use false and name only the lanes for which they create work.
-       * Receipt-only bookkeeping with no new obligation names no lanes. Enrollment and
-       * the alarm commit before the body; a failed body may leave a harmless discovery wave.
+       * Receipt-only bookkeeping with no new obligation names no lanes. Enrollment preserves
+       * the finite retry budget; only recordProgress or a newer source cursor replenishes it.
+       * Actual new work must record that progress in its source transaction, so a commit
+       * after parking cannot be stranded by eviction before this body returns.
        */
-      options?: { readonly invalidatesRecovery?: boolean; readonly lanes?: ReadonlyArray<string> },
+      options?: {
+        readonly invalidatesRecovery?: boolean;
+        readonly lanes?: ReadonlyArray<string>;
+      },
     ) => Effect.Effect<A, E | DurableAlarmError, R>;
-    /** Enroll a known lane and keep its earliest deadline. Call inside the local source
-     * transaction. Remote sources retain a scheduling notice with their work and retry its
-     * delivery here; prearming alone cannot fence a remote commit after Object eviction. */
-    readonly schedule: (id: string, dueAt: number) => Effect.Effect<void, DurableAlarmError>;
+    /** Enroll a known lane without accelerating its retry floor. A strictly increasing
+     * source cursor replenishes its budget; equal/older notices are replayed hints.
+     * Cursors identify committed source facts, never clocks, attempts or retry counters.
+     * Local sources call inside their source transaction. Remote sources retain the cursor
+     * notice with their work and retry delivery here; this call atomically accepts that
+     * notice and its alarm. Prearming alone cannot fence a later remote commit. */
+    readonly schedule: (
+      id: string,
+      dueAt: number,
+      progressCursor?: bigint,
+    ) => Effect.Effect<void, DurableAlarmError>;
+    /** Record an actual new fact inside its local source SQL transaction. The source
+     * transaction owns duplicate detection. Claims, lease renewals and retries are not progress.
+     * Also enrolls the lanes selected by this producer's enclosing withMutation boundary. */
+    readonly recordProgress: (
+      lanes: ReadonlyArray<string>,
+    ) => Effect.Effect<void, DurableAlarmError>;
     /** In-incarnation notification; the durable due queue is the recovery authority. */
     readonly activeLanes: Effect.Effect<ReadonlySet<string>>;
     readonly revision: Effect.Effect<number>;
@@ -683,6 +729,7 @@ export class ThreadMutationGate extends Context.Service<
   static readonly layer = Layer.effect(this)(
     Effect.gen(function* () {
       const { ctx } = yield* DurableObjectContext;
+      const sql = yield* SqlClient;
       const dueQueue = DueQueue.make(ctx.storage);
       const config = yield* CloudflareDurableRuntimeConfig;
       const failpoint = yield* ThreadMaintenanceFailpoint;
@@ -713,14 +760,41 @@ export class ThreadMutationGate extends Context.Service<
       const schedule = Effect.fn("ThreadMutationGate.schedule")(function* (
         id: string,
         dueAt: number,
+        progressCursor?: bigint,
       ) {
         const now = yield* Clock.currentTimeMillis;
+        const current = yield* Effect.serviceOption(sql.transactionService);
+
+        const enroll = async (
+          transaction: Pick<DurableObjectTransaction, "get" | "put" | "getAlarm" | "setAlarm">,
+        ) => {
+          if (progressCursor === undefined) dueQueue.dirty(id, dueAt);
+          else if (
+            dueQueue.progress(id, dueAt, progressCursor) &&
+            (id === DueQueue.Native || id === DueQueue.Publication)
+          ) {
+            // Required publication is progress for its dependent native execution too.
+            if (id === DueQueue.Publication) dueQueue.dirty(DueQueue.Native, dueAt, true);
+            const { state } = await readMaintenanceState(transaction);
+
+            await transaction.put(
+              MAINTENANCE_STATE_KEY,
+              encodeMaintenanceState(
+                ThreadMaintenanceState.make({
+                  ...Struct.omit(state, ["retry"]),
+                  dirty: state.dirty + 1n,
+                }),
+              ),
+            );
+          }
+          const next = DueQueue.next(dueQueue.read());
+
+          if (Number.isFinite(next))
+            await ensureTransactionAlarmBy(transaction, Math.max(next, now + minimumAlarmDelay));
+        };
 
         yield* runTransaction("schedule maintenance lane", () =>
-          ctx.storage.transaction(async (transaction) => {
-            dueQueue.dirty(id, dueAt);
-            await ensureTransactionAlarmBy(transaction, Math.max(dueAt, now + minimumAlarmDelay));
-          }),
+          Option.isSome(current) ? enroll(ctx.storage) : ctx.storage.transaction(enroll),
         );
         yield* notify;
       });
@@ -731,6 +805,7 @@ export class ThreadMutationGate extends Context.Service<
       ) {
         yield* failpoint.hit("maintenance:dirty:before");
         const now = yield* Clock.currentTimeMillis;
+        const nativeSource = yield* CurrentNativeSource;
 
         if (invalidatesRecovery || lanes.length > 0)
           yield* runTransaction("advance maintenance generation", () =>
@@ -741,18 +816,25 @@ export class ThreadMutationGate extends Context.Service<
                 dueQueue.dirty(DueQueue.Native, now);
                 dueQueue.dirty(DueQueue.Publication, now);
               }
-              for (const id of lanes) dueQueue.dirty(id, now);
+              // Enrollment is a crash fallback, not evidence that the body committed.
+              for (const id of lanes) dueQueue.dirty(id, now, false);
 
               const next = ThreadMaintenanceState.make({
                 ...state,
-                dirty: state.dirty + (invalidatesRecovery ? 1n : 0n),
+                dirty: state.dirty + (invalidatesRecovery && !nativeSource ? 1n : 0n),
               });
 
               if (invalidatesRecovery || !initialized)
                 await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(next));
               // The earliest configured retry bounds a newly actionable mutation without relying
               // on its best-effort immediate wake hint.
-              await ensureTransactionAlarmBy(transaction, now + minimumAlarmDelay);
+              const deadline = DueQueue.next(dueQueue.read());
+
+              if (Number.isFinite(deadline))
+                await ensureTransactionAlarmBy(
+                  transaction,
+                  Math.max(deadline, now + minimumAlarmDelay),
+                );
             }),
           );
         yield* failpoint.hit("maintenance:dirty:after");
@@ -800,7 +882,15 @@ export class ThreadMutationGate extends Context.Service<
           ),
           (enrolled) =>
             failpoint.hit("maintenance:mutation:armed").pipe(
-              Effect.andThen(body),
+              Effect.andThen(
+                Effect.flatMap(CurrentMutationLanes, (current) =>
+                  body.pipe(
+                    Effect.provideService(CurrentMutationLanes, [
+                      ...new Set([...current, ...enrolled]),
+                    ]),
+                  ),
+                ),
+              ),
               // The committed outbox may be claimed by the alarm even while the caller
               // is suspended after commit. This synchronous decrement does not acquire the
               // native snapshot gate: a snapshot may conservatively retain its active count.
@@ -811,9 +901,46 @@ export class ThreadMutationGate extends Context.Service<
           (enrolled) => endMutation(enrolled).pipe(Effect.andThen(notify)),
         );
 
+      const recordProgress = Effect.fn("ThreadMutationGate.recordProgress")(function* (
+        lanes: ReadonlyArray<string>,
+      ) {
+        if (Option.isNone(yield* Effect.serviceOption(sql.transactionService)))
+          return yield* DurableAlarmError.make({
+            operation: "record source progress",
+            message: "Source progress requires its authoritative SQL transaction",
+          });
+        const affected = new Set([...lanes, ...(yield* CurrentMutationLanes)]);
+
+        if (affected.has(DueQueue.Publication)) affected.add(DueQueue.Native);
+
+        if (affected.size === 0) return;
+        const now = yield* Clock.currentTimeMillis;
+        const nativeSource = yield* CurrentNativeSource;
+
+        yield* runTransaction("record maintenance producer progress", async () => {
+          for (const id of affected) dueQueue.dirty(id, now, true);
+          if (affected.has(DueQueue.Native)) {
+            const { state } = await readMaintenanceState(ctx.storage);
+
+            await ctx.storage.put(
+              MAINTENANCE_STATE_KEY,
+              encodeMaintenanceState(
+                ThreadMaintenanceState.make({
+                  ...Struct.omit(state, ["retry"]),
+                  dirty: state.dirty + (nativeSource ? 0n : 1n),
+                }),
+              ),
+            );
+          }
+          await ensureTransactionAlarmBy(ctx.storage, now + minimumAlarmDelay);
+        });
+        yield* notify;
+      });
+
       return ThreadMutationGate.of({
         withMutation,
         schedule,
+        recordProgress,
         activeLanes: Effect.sync(() => new Set(activeLanes.keys())),
         revision: Effect.sync(() => revision),
         awaitChange: (observed) =>
@@ -946,20 +1073,43 @@ export class ThreadMaintenance extends Context.Service<
       });
 
       const runQueued = <E, R>(
-        row: DueQueue.DueLane,
+        selected: DueQueue.DueLane,
         work: Effect.Effect<Option.Option<number>, E, R>,
         observed: MaintenanceObservation,
         yielded?: () => boolean,
-      ) =>
-        Effect.suspend(() => {
+      ) => {
+        let row = selected;
+        let charged = false;
+
+        return Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis;
+
+          const claimed = yield* runTransaction("charge maintenance attempt", () =>
+            ctx.storage.transaction(async (transaction) => {
+              const claimed = dueQueue.claim(selected, now);
+              const next = DueQueue.next(dueQueue.read());
+
+              if (Number.isFinite(next))
+                await transaction.setAlarm(Math.max(now + minimumAlarmDelay, next));
+              else await transaction.deleteAlarm();
+
+              return claimed;
+            }),
+          );
+
+          if (claimed === undefined) return Option.none<number>();
+          row = claimed;
+          charged = true;
+          observed.charged.set(row.id, row.revision);
           // Include mid-pass enrollments in failure rearming if their checkpoint is
           // interrupted. CAS still protects completed waves and racing producers.
           observed.queue.set(row.id, row);
           observed.available.set(row.id, row.revision);
 
-          return work;
+          return yield* work;
         }).pipe(
           Effect.onExit((exit) => {
+            if (!charged) return Effect.void;
             if (
               yielded?.() === true &&
               Exit.isFailure(exit) &&
@@ -991,7 +1141,7 @@ export class ThreadMaintenance extends Context.Service<
                       const current = dueQueue.read().find((lane) => lane.id === row.id);
 
                       if (current?.revision !== row.revision) return;
-                      dueQueue.complete(row, next, failed);
+                      dueQueue.complete(row, next);
 
                       return row.revision + 1;
                     }),
@@ -1010,6 +1160,7 @@ export class ThreadMaintenance extends Context.Service<
               );
           }),
         );
+      };
 
       const appendRecoveryEvents = async (
         transaction: DurableObjectTransaction,
@@ -1035,7 +1186,7 @@ export class ThreadMaintenance extends Context.Service<
             }),
           ),
         );
-        dueQueue.dirty(DueQueue.RecoveryEvents, 0);
+        dueQueue.dirty(DueQueue.RecoveryEvents, 0, true);
         recoveryEventsPending = true;
       };
 
@@ -1068,6 +1219,8 @@ export class ThreadMaintenance extends Context.Service<
 
             // No storage reservation or source mutation gate is held during host delivery.
             yield* recoveryEvents.publish(event);
+            const acknowledgedAt = yield* Clock.currentTimeMillis;
+
             yield* runTransaction("acknowledge recovery event", () =>
               ctx.storage.transaction(async (transaction) => {
                 const { state } = await readMaintenanceState(transaction);
@@ -1080,6 +1233,11 @@ export class ThreadMaintenance extends Context.Service<
                 await transaction.delete(recoveryEventKey(sequence));
                 await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(next));
                 recoveryEventsPending = hasRecoveryEvents(next);
+                dueQueue.progress(DueQueue.RecoveryEvents, acknowledgedAt, sequence);
+                const lane = dueQueue.read().find((row) => row.id === DueQueue.RecoveryEvents);
+
+                if (lane !== undefined)
+                  dueQueue.complete(lane, recoveryEventsPending ? acknowledgedAt : null);
               }),
             );
           }
@@ -1201,7 +1359,10 @@ export class ThreadMaintenance extends Context.Service<
         threadId: ThreadId,
         recovery: NativeRecovery,
       ) {
-        const result = yield* runtime.runRecovery({ threadId });
+        const result = yield* runtime
+          .runRecovery({ threadId })
+          .pipe(Effect.provideService(CurrentNativeSource, true));
+
         // Visibility is committed before a claim or any fallible auxiliary join.
         const faults = yield* recordRecoveryFaults(result, recovery);
 
@@ -1227,7 +1388,7 @@ export class ThreadMaintenance extends Context.Service<
         });
 
         await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(state));
-        dueQueue.dirty(DueQueue.Native, 0);
+        dueQueue.dirty(DueQueue.Native, 0, true);
 
         return { state, initialized: true };
       };
@@ -1266,9 +1427,9 @@ export class ThreadMaintenance extends Context.Service<
         yield* failpoint.hit("maintenance:ensure:after");
       });
 
-      const beginPass = Effect.fn("ThreadMaintenance.beginPass")(function* (observed: {
-        generation?: bigint;
-      }) {
+      const beginPass = Effect.fn("ThreadMaintenance.beginPass")(function* (
+        observed: MaintenanceObservation,
+      ) {
         yield* failpoint.hit("maintenance:begin:before");
         const now = yield* Clock.currentTimeMillis;
 
@@ -1284,21 +1445,45 @@ export class ThreadMaintenance extends Context.Service<
             }
             const retryAt = state.retry?.generation === state.dirty ? state.retry.notBefore : 0;
 
-            // Prearm before recovery or any host hook, including publication-only passes.
-            // A completed pass may move this crash fallback later to its bounded retry.
-            await ensureTransactionAlarmBy(transaction, now + minimumAlarmDelay);
-            if (state.processed >= state.dirty || retryAt > now) {
+            const rows = dueQueue.read();
+            const native = rows.find((row) => row.id === DueQueue.Native);
+            const publication = rows.find((row) => row.id === DueQueue.Publication);
+
+            if (
+              state.processed >= state.dirty ||
+              retryAt > now ||
+              native === undefined ||
+              native.dueAt === null ||
+              native.notBefore > now ||
+              publication?.state === "parked"
+            ) {
               return {
                 _tag: "CaughtUp" as const,
                 nonterminal: state.nonterminal,
               };
             }
 
+            // One debit per native progress revision in this event. Source progress may
+            // legitimately admit another wave; a generation change alone cannot.
+            const alreadyCharged = observed.charged.get(DueQueue.Native) === native.revision;
+            const charged = alreadyCharged ? native : dueQueue.claim(native, now, true);
+
+            if (charged === undefined)
+              return { _tag: "CaughtUp" as const, nonterminal: state.nonterminal };
+            observed.queue.set(DueQueue.Native, charged);
+            observed.charged.set(DueQueue.Native, charged.revision);
+            const deadline = DueQueue.next(dueQueue.read());
+
+            if (Number.isFinite(deadline))
+              await transaction.setAlarm(Math.max(now + minimumAlarmDelay, deadline));
+            else await transaction.deleteAlarm();
+
             return {
               _tag: "Actionable" as const,
               generation: state.dirty,
+              sourceRevision: charged.revision,
               nonterminal: state.nonterminal,
-              stalls: state.retry?.generation === state.dirty ? state.retry.stalls : 0,
+              stalls: charged.stalls,
             };
           }),
         );
@@ -1378,14 +1563,21 @@ export class ThreadMaintenance extends Context.Service<
                 // Defer only the unacknowledged observations from this failed event. A
                 // completed wave or racing enrollment has a different revision.
                 for (const row of observed.queue.values()) {
-                  if (row.id !== DueQueue.Native && row.dueAt !== null && row.dueAt <= now)
-                    dueQueue.complete(row, now + backoffDelay(row.stalls, jitter), true);
+                  if (row.id !== DueQueue.Native && row.dueAt !== null && row.dueAt <= now) {
+                    const charged =
+                      observed.charged.get(row.id) === row.revision
+                        ? row
+                        : dueQueue.claim(row, now);
+
+                    if (charged !== undefined)
+                      dueQueue.complete(charged, now + backoffDelay(charged.stalls, jitter));
+                  }
                 }
                 const next = DueQueue.next(dueQueue.read());
 
-                await transaction.setAlarm(
-                  Math.max(now + minimumAlarmDelay, Number.isFinite(next) ? next : retry.notBefore),
-                );
+                if (Number.isFinite(next))
+                  await transaction.setAlarm(Math.max(now + minimumAlarmDelay, next));
+                else await transaction.deleteAlarm();
               }),
             );
           }),
@@ -1404,10 +1596,6 @@ export class ThreadMaintenance extends Context.Service<
               const native = (yield* queueSnapshot).find((row) => row.id === DueQueue.Native);
 
               if (native !== undefined) observed.available.set(native.id, native.revision);
-            }
-            if (generation._tag === "Actionable" && activeAtStart === 0) {
-              // The gate excludes a producer starting between the snapshot and certification.
-              yield* publication.prepareGeneration(generation.generation);
             }
 
             return { ...generation, activeAtStart };
@@ -1430,6 +1618,7 @@ export class ThreadMaintenance extends Context.Service<
         const settlement = recovery.faults.has(selected.threadId)
           ? Option.none()
           : yield* runtime.processThreadHead(selected.threadId, { yieldAfter }).pipe(
+              Effect.provideService(CurrentNativeSource, true),
               Effect.catchTag("BindingUnavailable", (failure) => {
                 bindingFailure = failure;
 
@@ -1518,12 +1707,26 @@ export class ThreadMaintenance extends Context.Service<
           publicationRow.dueAt !== null &&
           publicationRow.dueAt <= (yield* Clock.currentTimeMillis)
         ) {
-          yield* runQueued(publicationRow, publication.drain, observed);
+          yield* runQueued(
+            publicationRow,
+            mutations
+              .withSnapshot((active) =>
+                started._tag === "Actionable" && active === 0
+                  ? publication.prepareGeneration(started.generation)
+                  : Effect.void,
+              )
+              .pipe(Effect.andThen(publication.drain)),
+            observed,
+          );
           publicationRow = (yield* queueSnapshot).find((row) => row.id === DueQueue.Publication);
         }
         const pending = Option.fromNullishOr(publicationRow?.dueAt);
 
-        if (started._tag === "CaughtUp" || Option.isSome(pending)) {
+        if (
+          started._tag === "CaughtUp" ||
+          Option.isSome(pending) ||
+          publicationRow?.state === "parked"
+        ) {
           const nextAttemptAt = yield* mutations.withSnapshot((active) =>
             Effect.gen(function* () {
               const now = yield* Clock.currentTimeMillis;
@@ -1551,14 +1754,22 @@ export class ThreadMaintenance extends Context.Service<
             nextAttemptAt,
           };
         }
-        if (native.generation !== started.generation) {
+        if (
+          native.generation !== started.generation ||
+          native.sourceRevision !== started.sourceRevision
+        ) {
           native.deferred.clear();
           native.generation = started.generation;
+          native.sourceRevision = started.sourceRevision;
         }
         // A stable generation with no freed slot needs no second ledger/history scan.
         // Enrollment precedes admission: never cache a scan overlapping a producer body,
         // which may make a head ready later without another generation increment.
-        if (native.active.size > 0 && native.scanGeneration === started.generation) {
+        if (
+          native.active.size > 0 &&
+          native.scanGeneration === started.generation &&
+          native.scanRevision === started.sourceRevision
+        ) {
           return {
             phase: "actionable",
             nonterminal: started.nonterminal,
@@ -1566,6 +1777,7 @@ export class ThreadMaintenance extends Context.Service<
           };
         }
         native.scanGeneration = started.activeAtStart === 0 ? started.generation : undefined;
+        native.scanRevision = started.activeAtStart === 0 ? started.sourceRevision : undefined;
 
         // Select from control state before reading execution history. A recovering or faulted
         // Thread cannot enter dispatch; old cleanup has its own scoped opportunity below.
@@ -1823,6 +2035,11 @@ export class ThreadMaintenance extends Context.Service<
           };
         }
 
+        const scannedGeneration = yield* runTransaction(
+          "observe native source generation",
+          async () => (await readMaintenanceState(ctx.storage)).state.dirty,
+        );
+
         const remaining = yield* Stream.runCollect(ledger.scanNonterminal);
         const waitingHeads = new Map<ThreadId, boolean>();
 
@@ -1876,8 +2093,8 @@ export class ThreadMaintenance extends Context.Service<
               // An empty control scan needs no older recovery report. Certify its fresh
               // snapshot only when no producer overlapped it or advanced the generation.
               const generation =
-                remaining.length === 0 && !mutationOverlap && state.dirty === started.generation
-                  ? started.generation
+                remaining.length === 0 && !mutationOverlap && state.dirty === scannedGeneration
+                  ? scannedGeneration
                   : observation.generation;
 
               const processed =
@@ -2223,29 +2440,29 @@ export class ThreadMaintenance extends Context.Service<
           if (delivery === undefined && !messageExhausted && !producing.has(DueQueue.Messages)) {
             // Selection is bounded local work. Fork only an actual due wave, so an empty
             // deadline check cannot extend retirement or consume another scheduling turn.
-            const selected = yield* Effect.gen(function* () {
-              const row = queued.find((row) => row.id === DueQueue.Messages);
+            const row = queued.find((row) => row.id === DueQueue.Messages);
 
-              return row !== undefined &&
-                row.dueAt !== null &&
-                row.dueAt <= (yield* Clock.currentTimeMillis)
-                ? Option.some({ row, wave: yield* messages.prepare })
-                : Option.none();
-            }).pipe(Effect.exit);
+            if (row !== undefined && row.dueAt !== null && row.dueAt <= now) {
+              // Selection can fail too, so charge its attempt before preparing the wave.
+              delivery = yield* fork(
+                runQueued(
+                  row,
+                  Effect.gen(function* () {
+                    const wave = yield* messages.prepare;
+                    const selectedAt = yield* Clock.currentTimeMillis;
 
-            if (Exit.isFailure(selected)) {
-              failure ??= selected.cause;
-              messageExhausted = true;
-            } else if (Option.isSome(selected.value)) {
-              const { row, wave } = selected.value.value;
-              const selectedAt = yield* Clock.currentTimeMillis;
+                    if (selectedAt >= until || selectedAt + wave.timeoutMillis > dispatchEnd) {
+                      messageExhausted = true;
 
-              if (selectedAt >= until || selectedAt + wave.timeoutMillis > dispatchEnd) {
-                messageExhausted = true;
-              } else {
-                // No second timeout: the driver owes the Claim's timeout/retry commit.
-                delivery = yield* fork(runQueued(row, wave.run, observed).pipe(Effect.asVoid));
-              }
+                      return Option.fromNullishOr(row.dueAt);
+                    }
+
+                    // No second timeout: the driver owes the Claim's timeout/retry commit.
+                    return yield* wave.run;
+                  }),
+                  observed,
+                ).pipe(Effect.asVoid),
+              );
             }
           }
 
@@ -2386,6 +2603,11 @@ export class ThreadMaintenance extends Context.Service<
           if (selected.length === 0) return [];
           const queued = yield* queueSnapshot;
           const producing = yield* mutations.activeLanes;
+
+          // Finished native work may have produced new source facts. They are already
+          // present at this phase boundary; only arrivals during the host wave preempt it.
+          for (const row of queued)
+            if (!producing.has(row.id)) observed.available.set(row.id, row.revision);
           const dispatchEnd = DateTime.toEpochMillis(dispatchUntil);
           const afterNativeIds = new Set(selected.map((lane) => lane.id));
           const completed: Array<Exit.Exit<void, DurableAlarmError>> = [];
@@ -2587,6 +2809,7 @@ export class ThreadMaintenance extends Context.Service<
           const observed: MaintenanceObservation = {
             nativeOnly: false,
             queue: new Map(),
+            charged: new Map(),
             available: new Map(),
           };
 

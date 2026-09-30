@@ -1,4 +1,4 @@
-import { DateTime, Effect, Schema } from "effect";
+import { Cause, DateTime, Effect, Schema } from "effect";
 import { ThreadId } from "effect-agent/identifiers";
 import {
   applyMessageDeliveryChange,
@@ -28,6 +28,7 @@ import type { Statement } from "effect/unstable/sql/Statement";
 import { sqliteJsonText, queryIdentifier } from "./internal/sql-json.ts";
 import { makeSqlLifecyclePublication } from "./SqlLifecyclePublication.ts";
 import { makeSqlQuery, SqlInteger } from "./SqlStorage.ts";
+import { SqlStorageProgress } from "./SqlStorageProgress.ts";
 
 const workerPaths = {
   delegationId: ["envelope", "workerAdmission", "origin", "worker", "delegationId"],
@@ -191,6 +192,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
   limits: MessageDeliveryStoreLimits = defaultMessageDeliveryStoreLimits,
   options: SqlMessageDeliveryStoreOptions = {},
 ) {
+  const progress = yield* SqlStorageProgress;
   const config = yield* validateMessageDelivery(MessageDeliveryStoreLimits, limits, "limits");
 
   const maxStoredValueBytes = yield* validateMessageDelivery(
@@ -226,6 +228,14 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
       owner.invalidators.add(() => view.clear());
     }
   }
+
+  const recordProgress = progress
+    .committed("delivery")
+    .pipe(
+      Effect.catchCause((cause) =>
+        Effect.failCause(Cause.map(cause, (error) => storage("enroll delivery progress", error))),
+      ),
+    );
 
   const isPending = (record: MessageDeliveryRecord) =>
     record.status !== "processed" && record.status !== "refused";
@@ -387,6 +397,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
           sql`INSERT INTO ${relation("effect_agent_message_deliveries")} (owner_thread_id, message_id, version, state, deadline_at_millis, record_json ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, read_metadata` })}) VALUES (${input.key.ownerThreadId}, ${input.key.messageId}, ${input.version}, ${input.status}, ${messageDeliveryDeadline(input)}, ${text} ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, ${deliveryMetadata(input)}::jsonb` })})`,
         );
         updatePending(input, bytes(text));
+        yield* recordProgress;
 
         if (lifecycle !== undefined)
           yield* lifecycle
@@ -433,11 +444,13 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
         if (current === null)
           return yield* MessageDeliveryError.make({ reason: "not-found", operation: "change" });
         const next = yield* Effect.fromResult(applyMessageDeliveryChange(current, input));
+
+        if (next === current) return current;
         const text = yield* encode(next);
 
         const updated = yield* query(
           "change",
-          sql`UPDATE ${relation("effect_agent_message_deliveries")} SET version = ${next.version}, state = ${next.status}, deadline_at_millis = ${messageDeliveryDeadline(next)}, record_json = ${text} ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, read_metadata = ${deliveryMetadata(next)}::jsonb` })} WHERE owner_thread_id = ${decodedKey.ownerThreadId} AND message_id = ${decodedKey.messageId} AND version = ${input.expectedVersion} RETURNING owner_thread_id, message_id, version, state, deadline_at_millis, record_json`,
+          sql`UPDATE ${relation("effect_agent_message_deliveries")} SET version = ${next.version}, state = ${next.status}, deadline_at_millis = ${messageDeliveryDeadline(next)}, record_json = ${text} ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, read_metadata = ${deliveryMetadata(next)}::jsonb` })} WHERE owner_thread_id = ${decodedKey.ownerThreadId} AND message_id = ${decodedKey.messageId} AND version = ${current.version} RETURNING owner_thread_id, message_id, version, state, deadline_at_millis, record_json`,
         );
 
         const rows = yield* decodeRows(updated);
@@ -473,6 +486,15 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
               },
             })
             .pipe(Effect.mapError((cause) => storage("retain lifecycle", cause)));
+
+        if (
+          input._tag === "Accept" ||
+          input._tag === "Process" ||
+          input._tag === "Refuse" ||
+          input._tag === "Complete" ||
+          input._tag === "Recover"
+        )
+          yield* recordProgress;
 
         return rows[0];
       }),

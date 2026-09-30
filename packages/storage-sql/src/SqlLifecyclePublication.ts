@@ -1,4 +1,4 @@
-import { Array, Context, Crypto, DateTime, Effect, Option, Schema } from "effect";
+import { Array, Cause, Context, Crypto, DateTime, Effect, Option, Schema } from "effect";
 import { digestJson } from "effect-agent/digest";
 import type { ThreadId } from "effect-agent/identifiers";
 import {
@@ -13,6 +13,7 @@ import { SqlStorageOwner } from "effect-agent/sql-memory-store";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
 import { makeSqlQuery, SqlInteger } from "./SqlStorage.ts";
+import { SqlStorageProgress } from "./SqlStorageProgress.ts";
 
 const codec = Schema.fromJsonString(LifecyclePublication);
 const maxPendingPayloadBytes = 4 * 1024 * 1024;
@@ -98,6 +99,7 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
   const active = yield* LifecyclePublicationConfig;
 
   if (Option.isNone(active)) return undefined;
+  const progress = yield* SqlStorageProgress;
   const sql = yield* SqlClient;
   const crypto = active.value;
   const { table, execute } = yield* makeSqlQuery(namespace);
@@ -351,7 +353,12 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
         }
         remember(rows);
       }
-      if (insert.length > 0) invalidateDeadline();
+      if (insert.length > 0) {
+        yield* progress
+          .committed("lifecycle")
+          .pipe(Effect.catchCause((cause) => Effect.failCause(Cause.map(cause, failure))));
+        invalidateDeadline();
+      }
     },
     read,
   );
@@ -556,10 +563,17 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
       transaction(
         Effect.gen(function* () {
           yield* verifyBatch(batch);
-          yield* sql`UPDATE ${relation} SET payload_json = NULL, due_at_millis = NULL WHERE owner_thread_id = ${batch[0].ownerThreadId} AND ordinal BETWEEN ${batch[0].ordinal} AND ${Array.lastNonEmpty(batch).ordinal}`.pipe(
-            execute,
-            Effect.mapError(failure),
-          );
+
+          const acknowledged =
+            yield* sql`UPDATE ${relation} SET payload_json = NULL, due_at_millis = NULL WHERE owner_thread_id = ${batch[0].ownerThreadId} AND ordinal BETWEEN ${batch[0].ordinal} AND ${Array.lastNonEmpty(batch).ordinal} AND payload_json IS NOT NULL RETURNING id`.pipe(
+              execute,
+              Effect.mapError(failure),
+            );
+
+          if (acknowledged.length > 0)
+            yield* progress
+              .committed("lifecycle")
+              .pipe(Effect.catchCause((cause) => Effect.failCause(Cause.map(cause, failure))));
           yield* sql`DELETE FROM ${retries} WHERE id IN (
             SELECT id FROM ${relation} WHERE owner_thread_id = ${batch[0].ownerThreadId}
             AND ordinal BETWEEN ${batch[0].ordinal} AND ${Array.lastNonEmpty(batch).ordinal}

@@ -29,6 +29,7 @@ import {
   ThreadMaintenance,
   ThreadMutationGate,
   ThreadMaintenanceFailpoint,
+  ThreadPublication,
 } from "../src/Alarm.ts";
 import { DurableObjectContext } from "../src/CloudflareBindings.ts";
 import { CloudflareDurableRuntimeConfig } from "../src/CloudflareConfig.ts";
@@ -44,6 +45,230 @@ import {
 import { readCanonical, runClient, scheduledAlarm, stubFor } from "./harness.ts";
 
 describe("maintenance retry deadlines", () => {
+  // Regression: https://linear.app/reve-ai/issue/KOM-291
+  // Empty and rejected native producers must not renew a failing discovery wave.
+  it("keeps the native budget across no-op and failed producers", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const thread = `native-no-progress-${crypto.randomUUID()}`;
+
+        yield* TestClock.setTime(Date.now() + 86_400_000);
+        const clock = yield* Clock.Clock;
+
+        maintenanceClocks.set(thread, clock);
+        yield* Effect.addFinalizer(() => Effect.sync(() => maintenanceClocks.delete(thread)));
+        yield* Effect.promise(() =>
+          runInDurableObject(stubFor(thread), (instance, state) =>
+            instance[DurableObject.RunSymbol](
+              Effect.gen(function* () {
+                const gate = yield* ThreadMutationGate;
+                const maintenance = yield* ThreadMaintenance;
+                let attempts = 0;
+
+                const publication = ThreadPublication.of({
+                  invalidate: Effect.void,
+                  prepareGeneration: () =>
+                    Effect.sync(() => {
+                      attempts++;
+                    }).pipe(
+                      Effect.andThen(
+                        Effect.fail(
+                          DurableAlarmError.make({
+                            operation: "native discovery",
+                            message: "pending",
+                          }),
+                        ),
+                      ),
+                    ),
+                  drain: Effect.succeed(Option.none()),
+                });
+
+                yield* Effect.gen(function* () {
+                  const guarded = yield* ThreadMaintenance;
+
+                  for (let pass = 0; pass < 20; pass++) {
+                    yield* gate.withMutation(Effect.void);
+                    yield* Effect.exit(gate.withMutation(Effect.fail("rejected")));
+                    yield* Effect.exit(guarded.pass);
+                    yield* Effect.promise(() =>
+                      Effect.runPromise(
+                        TestClock.adjust(60_000).pipe(Effect.provideService(Clock.Clock, clock)),
+                      ),
+                    );
+                  }
+                  expect(attempts).toBeLessThanOrEqual(8);
+                  yield* gate.withMutation(Effect.void);
+                  yield* maintenance.ensureAlarm;
+                  expect(yield* Effect.promise(() => state.storage.getAlarm())).toBeNull();
+                }).pipe(
+                  Effect.provide(Layer.fresh(ThreadMaintenance.layer)),
+                  Effect.provideService(ThreadPublication, publication),
+                );
+              }),
+            ),
+          ),
+        );
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    ));
+
+  // Regression: https://linear.app/reve-ai/issue/KOM-291
+  it.each([false, true])(
+    "distinguishes parked required publication from final-attempt completion (%s)",
+    (finishes) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const thread = `required-publication-${crypto.randomUUID()}`;
+
+          yield* TestClock.setTime(Date.now() + 86_400_000);
+          const clock = yield* Clock.Clock;
+
+          maintenanceClocks.set(thread, clock);
+          yield* Effect.addFinalizer(() => Effect.sync(() => maintenanceClocks.delete(thread)));
+          yield* Effect.promise(() =>
+            runClient(
+              CloudflareThreadClient.use((client) =>
+                client.submit(
+                  { definition: plannerDefinition },
+                  { question: "publication is required", ref: thread },
+                  submitOptions(thread, thread),
+                ),
+              ),
+            ),
+          );
+          yield* Effect.promise(() =>
+            runInDurableObject(stubFor(thread), (instance, state) =>
+              instance[DurableObject.RunSymbol](
+                Effect.gen(function* () {
+                  let attempts = 0;
+                  let settled = 0;
+                  let publicationReady = finishes;
+
+                  yield* Effect.gen(function* () {
+                    const maintenance = yield* ThreadMaintenance;
+
+                    for (let pass = 0; pass < 12; pass++) {
+                      settled += (yield* maintenance.pass).settled;
+                      yield* Effect.promise(() =>
+                        Effect.runPromise(
+                          TestClock.adjust(60_000).pipe(Effect.provideService(Clock.Clock, clock)),
+                        ),
+                      );
+                    }
+                    if (!finishes) expect(attempts).toBeLessThanOrEqual(8);
+                    expect(settled).toBe(finishes ? 1 : 0);
+                    expect(yield* Effect.promise(() => state.storage.getAlarm())).toBeNull();
+                    const ledger = yield* SubmissionLedger;
+
+                    expect((yield* Stream.runCollect(ledger.scanNonterminal)).length).toBe(
+                      finishes ? 0 : 1,
+                    );
+                    if (!finishes) {
+                      publicationReady = true;
+                      const gate = yield* ThreadMutationGate;
+
+                      yield* gate.schedule("effect-agent:publication", 0, 1n);
+                      expect((yield* maintenance.pass).settled).toBe(1);
+                    }
+                  }).pipe(
+                    Effect.provide(Layer.fresh(ThreadMaintenance.layer)),
+                    Effect.provideService(ThreadPublication, {
+                      invalidate: Effect.void,
+                      prepareGeneration: () => Effect.void,
+                      drain: Effect.gen(function* () {
+                        attempts++;
+                        if (publicationReady && attempts >= 8) return Option.none<number>();
+
+                        return Option.some((yield* Clock.currentTimeMillis) + 1);
+                      }),
+                    }),
+                  );
+                }),
+              ),
+            ),
+          );
+        }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+      ),
+  );
+
+  // Regression: https://linear.app/reve-ai/issue/KOM-291
+  it("parks any lane that repeatedly rearms without committed progress", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const thread = `no-progress-lane-${crypto.randomUUID()}`;
+
+        yield* TestClock.setTime(Date.now() + 86_400_000);
+        const clock = yield* Clock.Clock;
+
+        const adjust = (millis: number) =>
+          Effect.runPromise(
+            TestClock.adjust(millis).pipe(Effect.provideService(Clock.Clock, clock)),
+          );
+
+        maintenanceClocks.set(thread, clock);
+        yield* Effect.addFinalizer(() => Effect.sync(() => maintenanceClocks.delete(thread)));
+        yield* Effect.promise(() =>
+          runInDurableObject(stubFor(thread), (instance) =>
+            instance[DurableObject.RunSymbol](
+              Effect.gen(function* () {
+                const context = yield* DurableObjectContext;
+                let calls = 0;
+                let renew: Effect.Effect<void, DurableAlarmError> = Effect.void;
+
+                yield* Effect.gen(function* () {
+                  const maintenance = yield* ThreadMaintenance;
+                  const gate = yield* ThreadMutationGate;
+
+                  renew = gate.schedule("test:no-progress", 0);
+                  yield* maintenance.pass;
+                  yield* gate.schedule("test:no-progress", 0, 1n);
+                  for (let pass = 0; pass < 40; pass++) {
+                    yield* Effect.promise(() => adjust(60_000));
+                    yield* maintenance.pass;
+                  }
+                  expect(calls).toBeLessThan(20);
+                  expect(yield* Effect.promise(() => context.ctx.storage.getAlarm())).toBeNull();
+                  const parkedCalls = calls;
+
+                  yield* gate.schedule("test:no-progress", 0, 2n);
+                  yield* maintenance.pass;
+                  expect(calls).toBe(parkedCalls + 1);
+                  // Redelivering old source notices cannot replenish the same budget.
+                  for (let replay = 0; replay < 20; replay++) {
+                    yield* gate.schedule("test:no-progress", 0, 1n);
+                    yield* gate.schedule("test:no-progress", 0, 2n);
+                    yield* Effect.promise(() => adjust(60_000));
+                    yield* maintenance.pass;
+                  }
+                  expect(calls).toBeLessThanOrEqual(parkedCalls + 8);
+                  yield* gate.schedule("test:no-progress", 0);
+                  expect(yield* Effect.promise(() => context.ctx.storage.getAlarm())).toBeNull();
+                }).pipe(
+                  Effect.provide(
+                    ThreadMaintenance.layer.pipe(Layer.provideMerge(ThreadMutationGate.layer)),
+                  ),
+                  Effect.provideService(ThreadHostMaintenance, {
+                    lanes: [
+                      {
+                        id: "test:no-progress",
+                        dispatchTimeoutMillis: 1_000,
+                        run: Effect.gen(function* () {
+                          calls++;
+                          // Renewing an unchanged deadline inside a lane is not source progress.
+                          yield* renew;
+
+                          return Option.some((yield* Clock.currentTimeMillis) + 1);
+                        }),
+                      },
+                    ],
+                  }),
+                  Effect.provideService(Clock.Clock, clock),
+                );
+              }),
+            ),
+          ),
+        );
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    ));
   // Regression: https://github.com/danieljvdm/effect-agent/commit/8085bda
   it("drains newly enrolled host work when instrumentation returns fresh SQL handles", () =>
     runInDurableObject(stubFor(`instrumented-due-queue-${crypto.randomUUID()}`), (instance) =>
@@ -161,7 +386,7 @@ describe("maintenance retry deadlines", () => {
                       .one();
 
                     expect(pending.dueAt).not.toBeNull();
-                    expect(pending.stalls).toBe(0);
+                    expect(pending.stalls).toBe(1);
                     yield* maintenance.pass;
                     expect({ admissions, memoryWaves, memoryReceipts, memoryActive }).toEqual({
                       admissions: 1,
@@ -898,7 +1123,21 @@ describe("maintenance retry deadlines", () => {
                 const ledger = yield* SubmissionLedger;
                 const config = yield* CloudflareDurableRuntimeConfig;
 
-                const claim = yield* ledger.claim(
+                const leaseLedger = yield* SubmissionLedger.pipe(
+                  Effect.provide(
+                    submissionLedgerLayer.pipe(
+                      Layer.provide(
+                        storageConfigLayer({
+                          storage: state.storage,
+                          ownershipLeaseDuration: 60_000,
+                        }),
+                      ),
+                      Layer.provide(DoStorageFailpoint.layer),
+                    ),
+                  ),
+                );
+
+                const claim = yield* leaseLedger.claim(
                   ClaimRequest.make({
                     threadId: decodeThreadId(thread),
                     producerId: ProducerId.make("other-live-owner"),
@@ -910,8 +1149,8 @@ describe("maintenance retry deadlines", () => {
                 yield* Effect.gen(function* () {
                   const maintenance = yield* ThreadMaintenance;
 
-                  // Two backoff stages fit inside the fixture's 250ms lease even at their
-                  // maximum delays (10 + 20 + 40 + 40), so no pass may steal ownership.
+                  // The long live lease spans both mandatory retry floors; neither pass
+                  // may steal ownership while exercising the no-progress budget.
                   for (let stage = 0; stage < 2; stage++) {
                     const now = yield* Clock.currentTimeMillis;
 
@@ -922,9 +1161,7 @@ describe("maintenance retry deadlines", () => {
                     expect(report.settled).toBe(0);
                     const deadline = yield* Effect.promise(() => state.storage.getAlarm());
 
-                    expect(deadline).toBeGreaterThan(now + 1);
-                    expect(deadline).toBeGreaterThanOrEqual(now + [5, 10][stage]!);
-                    expect(deadline).toBeLessThanOrEqual(now + 40);
+                    expect(deadline).toBe(now + [1_000, 2_000][stage]!);
                     yield* maintenance.ensureAlarm;
                     expect(yield* Effect.promise(() => state.storage.getAlarm())).toBe(deadline);
                     if (stage < 1) yield* clock.adjust(deadline! - now);
@@ -935,7 +1172,7 @@ describe("maintenance retry deadlines", () => {
                   );
 
                   expect(snapshot.ownership?.attemptId).toBe(claim.value.attemptId);
-                  // An accepted durable mutation supersedes the retry, before its deadline.
+                  // Releasing a claim changes ownership bookkeeping, not source progress.
                   yield* maintenance.withMutation(
                     ledger.releaseOwnership(
                       ReleaseOwnershipRequest.make({
@@ -944,6 +1181,8 @@ describe("maintenance retry deadlines", () => {
                       }),
                     ),
                   );
+                  expect((yield* maintenance.pass).settled).toBe(0);
+                  yield* clock.adjust(2_000);
                   expect((yield* maintenance.pass).settled).toBe(1);
                 }).pipe(
                   Effect.provide(Layer.fresh(ThreadMaintenance.layer)),

@@ -5,6 +5,7 @@ import {
   SqlLifecycleRetainer,
 } from "@effect-agent/storage-sql/sql-lifecycle-publication";
 import { createMessageDeliveryPendingIndex } from "@effect-agent/storage-sql/sql-message-delivery-store";
+import { SqlStorageProgress } from "@effect-agent/storage-sql/sql-storage-progress";
 import { checkV2ThreadLayout } from "@effect-agent/storage-sql/sql-storage-v2-upgrade";
 import {
   createNativeReadIndexes,
@@ -13,7 +14,7 @@ import {
   canonicalRecordOutstanding,
 } from "@effect-agent/storage-sql/sql-thread-native-reads";
 import { SqliteMigrator } from "@effect/sql-sqlite-do";
-import { Clock, Effect, Option, Schema, Stream } from "effect";
+import { Cause, Clock, Effect, Option, Schema, Stream } from "effect";
 import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
 import { ThreadId } from "effect-agent/identifiers";
 import {
@@ -72,6 +73,9 @@ const MAX_RECORDS_PER_THREAD = MAX_THREAD_EXPORT_RECORDS;
 const ZERO_SEQUENCE = Schema.decodeSync(CanonicalSequence)(0);
 const MAX_IDENTIFIER_LENGTH = 1_024;
 const MAX_READ_PAGE_JSON_BYTES = 4 * 1024 * 1024;
+// SQL pages and an incarnation's hydration window serve different limits. Keeping
+// only one page evicts the first page of ordinary multi-page journals on every read.
+const MAX_RECORD_CACHE_JSON_BYTES = 16 * 1024 * 1024;
 /** Durable Object SQL storage allows at most 100 bound parameters per statement. */
 const MAX_BOUND_PARAMETERS = 100;
 const isSqlError = Schema.is(SqlError);
@@ -132,7 +136,7 @@ class RecordRow extends Schema.Class<RecordRow>("RecordRow")({
 const recordCaches = new WeakMap<OwnedState, ReturnType<typeof makeRecordCache>>();
 
 const makeRecordCache = () => {
-  const records = new Map<string, RecordRow>();
+  const records = new Map<string, { readonly row: RecordRow; readonly bytes: number }>();
   let bytes = 0;
   const key = (thread: string, sequence: number) => JSON.stringify([thread, sequence]);
 
@@ -141,7 +145,7 @@ const makeRecordCache = () => {
       records.clear();
       bytes = 0;
     },
-    get: (thread: string, sequence: number) => records.get(key(thread, sequence)),
+    get: (thread: string, sequence: number) => records.get(key(thread, sequence))?.row,
     prefix: (thread: string, through: number): ReadonlyArray<RecordRow> | undefined => {
       const prefix: Array<RecordRow> = [];
 
@@ -149,7 +153,7 @@ const makeRecordCache = () => {
         const row = records.get(key(thread, sequence));
 
         if (row === undefined) return undefined;
-        prefix.push(row);
+        prefix.push(row.row);
       }
 
       return prefix;
@@ -158,16 +162,19 @@ const makeRecordCache = () => {
       const id = key(row.thread_id, row.sequence);
       const prior = records.get(id);
 
-      if (prior !== undefined) bytes -= storedTextBytes(prior.record_json);
+      if (prior?.row === row) return;
+      const size = storedTextBytes(row.record_json);
+
+      if (prior !== undefined) bytes -= prior.bytes;
       records.delete(id);
-      records.set(id, row);
-      bytes += storedTextBytes(row.record_json);
-      while (bytes > MAX_READ_PAGE_JSON_BYTES) {
+      records.set(id, { row, bytes: size });
+      bytes += size;
+      while (bytes > MAX_RECORD_CACHE_JSON_BYTES) {
         const oldest = records.entries().next().value;
 
         if (oldest === undefined) break;
         records.delete(oldest[0]);
-        bytes -= storedTextBytes(oldest[1].record_json);
+        bytes -= oldest[1].bytes;
       }
     },
   };
@@ -567,6 +574,8 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
   failpoint: DoJournalFailpoint = noFailpoint,
   maxStoredValueBytes: number,
 ) {
+  const progress = yield* SqlStorageProgress;
+
   const verifyWorkerPredecessor = Effect.fnUntraced(function* (workerContract: boolean) {
     const requiredRows = yield* sql<Record<string, unknown>>`
     SELECT name
@@ -993,7 +1002,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
     ),
   );
 
-  journal = makeJournal(sql, failpoint, maxStoredValueBytes, lifecycle, state);
+  journal = makeJournal(sql, failpoint, maxStoredValueBytes, lifecycle, state, progress);
   if (lifecycle !== undefined) yield* journal.initializeLifecycleSource();
 
   return journal;
@@ -1005,6 +1014,7 @@ const makeJournal = (
   maxStoredValueBytes: number,
   lifecycle: Effect.Success<ReturnType<typeof makeSqlLifecyclePublication>>,
   state: OwnedState,
+  progress: Effect.Success<typeof SqlStorageProgress>,
 ) => {
   const threads = threadRows(state, sql);
   const recovery = recoveryRows(state, sql);
@@ -1522,6 +1532,20 @@ const makeJournal = (
                 }),
               ),
             );
+
+          yield* progress.committed("canonical").pipe(
+            Effect.catchCause((cause) =>
+              Effect.failCause(
+                Cause.map(cause, (error) =>
+                  DoStorageError.make({
+                    operation: "enroll canonical progress",
+                    message: error.message,
+                    cause: error,
+                  }),
+                ),
+              ),
+            ),
+          );
 
           return RawAppendResult.make({
             firstSequence,

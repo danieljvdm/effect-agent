@@ -32,21 +32,20 @@ export const guardedMessageDeliveryStoreLayer = Layer.effect(
 
     const mutate = <A, E>(body: Effect.Effect<A, E>) =>
       mutations
-        .withMutation(
-          body,
-          // A foreign receipt changing does not make the source ledger actionable. Keep the
-          // prearm and producer gate so eviction and a racing pass cannot lose delivery work.
-          {
-            invalidatesRecovery: false,
-            lanes: [
-              DueQueue.Messages,
-              ...(store.lifecyclePublications === undefined ? [] : [DueQueue.Lifecycle]),
-            ],
-          },
-        )
+        .withMutation(body, {
+          invalidatesRecovery: false,
+          lanes: [
+            DueQueue.Messages,
+            ...(store.lifecyclePublications === undefined ? [] : [DueQueue.Lifecycle]),
+          ],
+        })
         .pipe(
-          Effect.catchTag("DurableAlarmError", () =>
-            MessageDeliveryError.make({ reason: "storage", operation: "prearm message delivery" }),
+          Effect.catchTag("DurableAlarmError", (cause) =>
+            MessageDeliveryError.make({
+              reason: "storage",
+              operation: "prearm message delivery",
+              cause,
+            }),
           ),
         );
 

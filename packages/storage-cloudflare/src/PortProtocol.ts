@@ -3,6 +3,10 @@ import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
 import { ThreadId } from "effect-agent/identifiers";
 import {
   MessageDeliveryError,
+  MessageDeliveryFailpointError,
+  MessageDeliveryKey,
+  MessageDeliveryCompletion,
+  MessageDeliveryRecord,
   MessageDeliveryPageRequest,
   MessageDeliveryPage,
 } from "effect-agent/message-delivery";
@@ -222,10 +226,16 @@ export class MessageDeliveryListCall extends Schema.TaggedClass<MessageDeliveryL
   { request: MessageDeliveryPageRequest },
 ) {}
 
+export class MessageDeliveryCompleteCall extends Schema.TaggedClass<MessageDeliveryCompleteCall>()(
+  "MessageDeliveryComplete",
+  { key: MessageDeliveryKey, completion: MessageDeliveryCompletion },
+) {}
+
 /** Every request that may cross a Durable Object boundary — the CLOSED route-capable subset. */
 export const PortRequest = Schema.Union([
   WorkerAdmitCall,
   MessageDeliveryListCall,
+  MessageDeliveryCompleteCall,
   LedgerAdmitCall,
   LedgerMarkReadyCall,
   LedgerLookupCall,
@@ -339,10 +349,16 @@ export class MessageDeliveryListResult extends Schema.TaggedClass<MessageDeliver
   { page: MessageDeliveryPage },
 ) {}
 
+export class MessageDeliveryCompleteResult extends Schema.TaggedClass<MessageDeliveryCompleteResult>()(
+  "MessageDeliveryCompleteResult",
+  { record: MessageDeliveryRecord },
+) {}
+
 /** Every successful routed result. Callers narrow by the tag their request implies. */
 export const PortResult = Schema.Union([
   WorkerAdmitResult,
   MessageDeliveryListResult,
+  MessageDeliveryCompleteResult,
   LedgerAdmitResult,
   LedgerMarkReadyResult,
   LedgerLookupResult,
@@ -374,6 +390,7 @@ export type PortResult = typeof PortResult.Type;
 export const PortFailure = Schema.Union([
   DurableRuntimeFailpointError,
   MessageDeliveryError,
+  MessageDeliveryFailpointError,
   AdmissionConflict,
   AdmissionPolicyError,
   SettlementConflict,

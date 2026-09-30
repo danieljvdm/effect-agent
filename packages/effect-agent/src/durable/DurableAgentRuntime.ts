@@ -167,6 +167,7 @@ import { makeMessagingRuntime } from "./internal/messaging-host.ts";
 import * as ThreadInitialization from "./internal/thread-initialization.ts";
 import { makeWorkerRuntime, WorkerInputControl } from "./internal/worker-host.ts";
 import { WorkerRuntime } from "./internal/worker-runtime.ts";
+import { MessageDeliveryStore } from "./MessageDelivery.ts";
 import {
   OperationAuthorizationRequest,
   OperationAuthorizer,
@@ -1266,6 +1267,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   const ledger = yield* SubmissionLedger;
   const submissionScheduling = yield* SubmissionScheduling;
   const store = yield* ThreadStore;
+  const deliveries = yield* Effect.serviceOption(MessageDeliveryStore);
 
   // Disposable: canonical tail and owner identify the exact projection, never ownership.
   // Retain only the most recent view; persisted checkpoints still govern cold recovery.
@@ -3112,7 +3114,75 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
    */
   const notifyParentOfChildSettlement = Effect.fn(
     "DurableAgentRuntime.notifyParentOfChildSettlement",
-  )(function* (submission: SubmissionSnapshot): Effect.fn.Return<void, LedgerError> {
+  )(function* (
+    submission: SubmissionSnapshot,
+    record: RecordEnvelope,
+  ): Effect.fn.Return<void, LedgerError> {
+    const admission = submission.messageAdmission;
+    const worker = submission.workerAdmission;
+
+    const key =
+      admission === undefined
+        ? worker === undefined
+          ? undefined
+          : {
+              ownerThreadId: worker.origin.source.threadId,
+              messageId: worker.messageId,
+            }
+        : Schema.is(MessageAdmission)(admission)
+          ? admission.message
+          : {
+              ownerThreadId:
+                admission._tag === "WorkerCompletion"
+                  ? admission.report.worker.threadId
+                  : admission.worker.threadId,
+              messageId: submission.idempotencyKey,
+            };
+
+    // Commit the destination's exact canonical acknowledgement at the source before
+    // making the ledger terminal. A failed/lost response is replayed during recovery.
+    if (key !== undefined && Option.isSome(deliveries)) {
+      const settled = yield* settlementPayloadFromRecord(record, submission.submissionId);
+
+      yield* deliveries.value
+        .change(key, {
+          _tag: "Complete",
+          nowMillis: yield* Clock.currentTimeMillis,
+          admissionKey: submission.idempotencyKey,
+          inputDigest: submission.inputDigest,
+          receipt: Receipt.make({
+            threadId: submission.threadId,
+            submissionId: submission.submissionId,
+            receiptId: submission.receiptId,
+            queueSequence: submission.queueSequence,
+          }),
+          settlement: Settlement.make({
+            submissionId: settled.submissionId,
+            receiptId: settled.receiptId,
+            settlementId: settled.settlementId,
+            outcome: settled.outcome,
+            settledAt: record.createdAt,
+            ...(settled.outcome === "failed" ? { failure: settled.result } : {}),
+            ...(settled.usageSummary === undefined ? {} : { usageSummary: settled.usageSummary }),
+            ...(settled.runDisposition === undefined
+              ? {}
+              : { runDisposition: settled.runDisposition }),
+          }),
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.failCause(
+              Cause.map(cause, (error) =>
+                LedgerError.make({
+                  operation: "delivery-completion",
+                  message: "Destination acknowledgement remains pending",
+                  cause: error,
+                }),
+              ),
+            ),
+          ),
+        );
+    }
     if (submission.workerAdmission?.origin.reporting?.mode === "standard")
       yield* updateRuntime.repair(submission.threadId).pipe(
         Effect.mapError(() =>
@@ -3227,14 +3297,14 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       Effect.asVoid,
     );
     yield* hit("terminalize:after-canonical-append");
-    yield* notifyParentOfChildSettlement(submission);
+    yield* notifyParentOfChildSettlement(submission, record);
 
     const settlement = yield* ledger.finalizeSettlement(
       SettlementFinalization.make({ submissionId, settlementId }),
     );
 
     yield* wake.notify(submission.threadId);
-    yield* notifyParentOfChildSettlement(submission);
+    yield* notifyParentOfChildSettlement(submission, record);
 
     return settlement;
   });
@@ -3349,7 +3419,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       Effect.asVoid,
     );
     yield* hit("terminalize:after-canonical-append");
-    yield* notifyParentOfChildSettlement(submission);
+    yield* notifyParentOfChildSettlement(submission, reserved.record);
 
     const settlement = yield* ledger.finalizeSettlement(
       SettlementFinalization.make({ submissionId, settlementId }),
@@ -3358,7 +3428,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     const canonicalSettlement = yield* settlementPayloadFromRecord(reserved.record, submissionId);
 
     yield* wake.notify(submission.threadId);
-    yield* notifyParentOfChildSettlement(submission);
+    yield* notifyParentOfChildSettlement(submission, reserved.record);
     yield* settleJoinedSubmissions(ctx, canonicalSettlement);
 
     return materializeSettlement(settlement, reserved.record);
@@ -3385,7 +3455,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       );
       yield* hit("terminalize:after-canonical-append");
     }
-    yield* notifyParentOfChildSettlement(submission);
+    yield* notifyParentOfChildSettlement(submission, reservation.record);
 
     const settlement = yield* ledger.finalizeSettlement(
       SettlementFinalization.make({
@@ -3400,7 +3470,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     );
 
     yield* wake.notify(submission.threadId);
-    yield* notifyParentOfChildSettlement(submission);
+    yield* notifyParentOfChildSettlement(submission, reservation.record);
     yield* settleJoinedSubmissions(ctx, canonicalSettlement);
 
     return materializeSettlement(settlement, reservation.record);
@@ -3413,7 +3483,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   ): Effect.fn.Return<Settlement, LedgerError | SettlementConflict> {
     const canonicalSettlement = yield* settlementPayloadFromRecord(record, submission.submissionId);
 
-    yield* notifyParentOfChildSettlement(submission);
+    yield* notifyParentOfChildSettlement(submission, record);
 
     const settlement = yield* ledger.finalizeSettlement(
       SettlementFinalization.make({
@@ -3427,7 +3497,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     );
 
     yield* wake.notify(submission.threadId);
-    yield* notifyParentOfChildSettlement(submission);
+    yield* notifyParentOfChildSettlement(submission, record);
 
     return materializeSettlement(settlement, snapshot.reservation?.record);
   });

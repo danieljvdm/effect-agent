@@ -1,6 +1,21 @@
+import {
+  SqlStorageProgress,
+  type SqlStorageProgressKind,
+} from "@effect-agent/storage-sql/sql-storage-progress";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
-import { Clock, Context, Crypto, DateTime, Effect, Layer, Option, Schema, Stream } from "effect";
+import {
+  Cause,
+  Clock,
+  Context,
+  Crypto,
+  DateTime,
+  Effect,
+  Layer,
+  Option,
+  Schema,
+  Stream,
+} from "effect";
 import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
 import type { LifecyclePublicationFact } from "effect-agent/lifecycle-publication";
 import { InputMessage } from "effect-agent/messaging";
@@ -428,6 +443,17 @@ const submissionWorkRows = ownedRows(
 );
 
 const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
+  const progress = yield* SqlStorageProgress;
+
+  const recordProgress = (kind: SqlStorageProgressKind, operation: string) =>
+    progress
+      .committed(kind)
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.failCause(Cause.map(cause, internalFailure(operation))),
+        ),
+      );
+
   const config = yield* DoStorageConfig;
   const failpoint = yield* DoStorageFailpoint;
   const sql = yield* SqlClientService.SqlClient;
@@ -1419,6 +1445,8 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           rows.childReservations.seed("parent_submission_id", mintedSubmissionId, []);
           rows.childSettlements.seed("parent_submission_id", mintedSubmissionId, []);
 
+          yield* recordProgress("submission", operation);
+
           return yield* decodeAdmissionResult({
             submissionId: mintedSubmissionId,
             receiptId: mintedReceiptId,
@@ -1458,6 +1486,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           SET state = 'ready', ready_at = ${now.iso}
           WHERE submission_id = ${validated.submissionId}
          RETURNING *`.pipe(rows.submissions.write, Effect.mapError(internalFailure(operation)));
+        yield* recordProgress("submission", operation);
         yield* retainLifecycle(submission, {
           _tag: "SubmissionReady",
           submissionId: validated.submissionId,
@@ -2253,6 +2282,8 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           WHERE submission_id = ${validated.submissionId}
          RETURNING *`.pipe(rows.ownership.remove, Effect.mapError(internalFailure(operation)));
 
+        yield* recordProgress("submission", operation);
+
         if (sealedTerminal !== undefined)
           yield* retainWorkerSeal(submission.thread_id, sealedTerminal);
 
@@ -2336,12 +2367,13 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             Effect.mapError(internalFailure(operation)),
           );
 
-        yield* sql`INSERT OR IGNORE INTO effect_agent_abort_intents (submission_id, author, reason, requested_at)
+        const aborted =
+          yield* sql`INSERT OR IGNORE INTO effect_agent_abort_intents (submission_id, author, reason, requested_at)
         SELECT submission_id, ${validated.author}, 'Worker owner stopped the worker', ${now.iso}
         FROM effect_agent_submissions WHERE thread_id = ${validated.threadId} AND state <> 'settled' RETURNING *`.pipe(
-          rows.aborts.write,
-          Effect.mapError(internalFailure(operation)),
-        );
+            rows.aborts.write,
+            Effect.mapError(internalFailure(operation)),
+          );
 
         const owners = yield* sql`SELECT o.submission_id FROM effect_agent_submission_ownership o
         JOIN effect_agent_submissions s ON s.submission_id = o.submission_id
@@ -2349,6 +2381,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           Effect.mapError(sqlFailure(operation)),
         );
 
+        if (sealed.length > 0 || aborted.length > 0) yield* recordProgress("control", operation);
         if (sealed.length > 0) yield* retainWorkerSeal(validated.threadId, null);
 
         return owners.length;
@@ -2434,6 +2467,8 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             ${now.iso}
           )
          RETURNING *`.pipe(rows.aborts.write, Effect.mapError(internalFailure(operation)));
+
+        yield* recordProgress("control", operation);
 
         const canonicalRecordId = yield* canonicalAbortRecordId(
           operation,
@@ -2875,6 +2910,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             ${now.iso}
           )
          RETURNING *`.pipe(rows.approvals.write, Effect.mapError(internalFailure(operation)));
+        yield* recordProgress("control", operation);
         yield* wakeSuspendedIfCovered(operation, submission);
 
         return yield* decodeApprovalDecisionIntent({
@@ -3043,6 +3079,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
               ${now.iso}
             )
            RETURNING *`.pipe(rows.resolutions.write, Effect.mapError(internalFailure(operation)));
+          yield* recordProgress("control", operation);
 
           const resolution = yield* parseStoredJsonText(resolutionJson).pipe(
             Effect.mapError(internalFailure(operation)),
@@ -3130,7 +3167,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
         // check, even when the parent is not (or not yet) suspended.
         const now = yield* currentInstant;
 
-        yield* sql`
+        const added = yield* sql`
           INSERT INTO effect_agent_child_settlements (
             parent_submission_id,
             child_submission_id,
@@ -3153,6 +3190,8 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           rows.childSettlements.write,
           Effect.mapError(internalFailure(operation)),
         );
+
+        if (added.length > 0) yield* recordProgress("control", operation);
 
         if (parent.state !== "suspended" || parent.suspended_reason_json === null) {
           return NOT_WAITING;
