@@ -66,16 +66,17 @@ export class RecoveryCheckpointContents extends Schema.Class<RecoveryCheckpointC
   digest: Digest,
 }) {}
 
-export const RECOVERY_ENGINE_VERSION = "effect-agent/recovery@3";
+export const RECOVERY_ENGINE_VERSION = "effect-agent/recovery@4";
 
 /**
  * Prove that indexed original-input absence also means absent prefix Run/control evidence.
- * Only cache consumers with colon-free Submission IDs use this certificate. For those IDs,
- * every possible control marker is exactly :run:<submission-id>:. Parsing here can only decline
- * caching; it never supplies an execution identity. Separator-bearing identities use full replay.
+ * A certificate covers only Run IDs with the given length. Every possible control marker for
+ * those IDs is exactly :<run-id>:, including markers nested inside opaque IDs. Cache consumers
+ * must have the checkpoint owner's ID length; shorter/longer aliases require full replay.
+ * Parsing here can only decline caching; it never supplies an execution identity.
  * The temporary anchor set is discarded after certification, not persisted with the context.
  */
-export const makeThreadContextCertificate = () => {
+export const makeThreadContextCertificate = (runIdLength: number) => {
   const anchored = new Set<string>();
   let valid = true;
 
@@ -99,9 +100,9 @@ export const makeThreadContextCertificate = () => {
         start !== -1;
         start = record.recordId.indexOf(":run:", start + 1)
       ) {
-        const end = record.recordId.indexOf(":", start + 5);
+        const end = start + 1 + runIdLength;
 
-        if (end !== -1 && !anchored.has(record.recordId.slice(start + 1, end))) {
+        if (record.recordId[end] === ":" && !anchored.has(record.recordId.slice(start + 1, end))) {
           valid = false;
 
           return;

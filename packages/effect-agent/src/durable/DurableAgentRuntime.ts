@@ -1670,7 +1670,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     submissionId: SubmissionId,
   ): boolean => {
     const runId = runIdForSubmission(submissionId);
-    const certificate = makeThreadContextCertificate();
+    const certificate = makeThreadContextCertificate(runId.length);
 
     for (const entry of records) {
       const { payload, recordId } = entry.record;
@@ -1727,7 +1727,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     if (
       state.context !== undefined &&
       submissionId !== undefined &&
-      !submissionId.includes(":") &&
+      submissionId.length === state.submissionId.length &&
       (journalOwner === undefined || journalOwner === runIdForSubmission(submissionId))
     ) {
       const runId = runIdForSubmission(submissionId);
@@ -1804,32 +1804,32 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     return { canonical: Stream.fromIterable([...state.records, ...suffix]), seed: state.seed };
   });
 
+  const encodeRecoveryCheckpoint = Effect.fnUntraced(function* (
+    state: RecoveryCheckpointState,
+  ): Effect.fn.Return<Option.Option<PersistedJson>, DurableWorkerFailure> {
+    const encoded = yield* Schema.encodeEffect(RecoveryCheckpointState)(state).pipe(Effect.option);
+
+    if (Option.isNone(encoded)) return Option.none();
+    const digest = yield* withCrypto(digestJson(encoded.value));
+
+    // Serialization removes shared in-memory references before applying persisted JSON bounds.
+    return yield* Schema.encodeEffect(Schema.fromJsonString(RecoveryCheckpointContents))(
+      RecoveryCheckpointContents.make({ state, digest }),
+    ).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(PersistedJson))),
+      Effect.option,
+    );
+  });
+
   const persistRecoveryCheckpoint = Effect.fn("DurableAgentRuntime.persistRecoveryCheckpoint")(
     function* (
       ctx: AttemptAppendContext,
       submission: SubmissionSnapshot,
-      state: RecoveryCheckpointState,
+      contents: PersistedJson,
       tail: { readonly sequence: CanonicalSequence; readonly digest: Digest },
       createdAt: DateTime.Utc,
     ): Effect.fn.Return<void, DurableWorkerFailure> {
       if (store.recoveryCheckpoints === undefined) return;
-
-      const encoded = yield* Schema.encodeEffect(RecoveryCheckpointState)(state).pipe(
-        Effect.option,
-      );
-
-      if (Option.isNone(encoded)) return;
-      const digest = yield* withCrypto(digestJson(encoded.value));
-
-      // Serialization removes shared in-memory references before applying persisted JSON bounds.
-      const contents = yield* Schema.encodeEffect(
-        Schema.fromJsonString(RecoveryCheckpointContents),
-      )(RecoveryCheckpointContents.make({ state, digest })).pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(PersistedJson))),
-        Effect.option,
-      );
-
-      if (Option.isNone(contents)) return;
 
       const checkpoint = ThreadCheckpoint.make({
         schemaVersion: 1,
@@ -1840,7 +1840,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         agentDefinitionDigest: submission.agentDigests.agent,
         modelDigest: submission.agentDigests.model,
         toolDigest: submission.agentDigests.tools,
-        state: contents.value,
+        state: contents,
         createdAt,
       });
 
@@ -1890,7 +1890,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
     if (projection === undefined) {
       const source = canonicalRange(ctx.threadId, tail.sequence);
-      const certificate = makeThreadContextCertificate();
+
+      const certificate = makeThreadContextCertificate(
+        runIdForSubmission(submission.submissionId).length,
+      );
+
       const metadata = makeJournalMetadata(undefined);
       const retained: Array<CanonicalRecordEnvelope> = [];
 
@@ -1920,9 +1924,23 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     );
 
     if (Option.isNone(prompt)) return;
-    let seed: JournalCheckpointSeed | undefined;
-    let records = identities;
-    let submissionIds: ReadonlyArray<SubmissionId> = [submission.submissionId];
+
+    const contextState = RecoveryCheckpointState.make({
+      schemaVersion: 2,
+      policyAccountingVersion: 1,
+      submissionId: submission.submissionId,
+      submissionIds: [submission.submissionId],
+      context: ThreadContextCheckpoint.make({
+        throughSequence: tail.sequence,
+        prompt: prompt.value,
+        ...(projection.contextWindowId === undefined
+          ? {}
+          : { contextWindowId: projection.contextWindowId }),
+      }),
+      records: identities,
+    });
+
+    let state = contextState;
 
     if (
       previous.state.submissionId === submission.submissionId &&
@@ -1934,33 +1952,24 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       );
 
       if (checkpointSuffixCompatible(previous.state.seed, suffix, previous.state.records)) {
-        seed = previous.state.seed;
-        records = [...previous.state.records, ...suffix];
-        submissionIds = previous.state.submissionIds;
+        state = RecoveryCheckpointState.make({
+          ...contextState,
+          seed: previous.state.seed,
+          records: [...previous.state.records, ...suffix],
+          submissionIds: previous.state.submissionIds,
+        });
       }
     }
 
-    yield* persistRecoveryCheckpoint(
-      ctx,
-      submission,
-      RecoveryCheckpointState.make({
-        schemaVersion: 2,
-        policyAccountingVersion: 1,
-        submissionId: submission.submissionId,
-        submissionIds,
-        ...(seed === undefined ? {} : { seed }),
-        context: ThreadContextCheckpoint.make({
-          throughSequence: tail.sequence,
-          prompt: prompt.value,
-          ...(projection.contextWindowId === undefined
-            ? {}
-            : { contextWindowId: projection.contextWindowId }),
-        }),
-        records,
-      }),
-      tail,
-      yield* DateTime.now,
-    );
+    let contents = yield* encodeRecoveryCheckpoint(state);
+
+    // Prefer retaining same-Run recovery, but keep eligible Thread context when the combined
+    // cache exceeds bounds. That Run can still recover from its unchanged canonical history.
+    if (Option.isNone(contents) && state.seed !== undefined)
+      contents = yield* encodeRecoveryCheckpoint(contextState);
+    if (Option.isNone(contents)) return;
+
+    yield* persistRecoveryCheckpoint(ctx, submission, contents.value, tail, yield* DateTime.now);
   });
 
   const readAllTolerant = Effect.fn("DurableAgentRuntime.readAllTolerant")(
@@ -5183,10 +5192,14 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           )
             return;
 
+          const contents = yield* encodeRecoveryCheckpoint(validated.value);
+
+          if (Option.isNone(contents)) return;
+
           yield* persistRecoveryCheckpoint(
             ctx,
             submission,
-            validated.value,
+            contents.value,
             tail,
             replacement.record.createdAt,
           );

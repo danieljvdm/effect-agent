@@ -52,6 +52,8 @@ conversation. A later Run can start from that context and its own records, with 
 and accounting. Each completion refreshes the context from the new records, so sequential Runs
 need not reread the retired archive. The snapshot contains canonical messages, never transient
 context or provider-only prompt transformations.
+If retaining the completed Run's recovery data would exceed cache bounds, the snapshot keeps
+only Thread context and identity records; recovering that Run uses canonical history.
 
 This optional cache holds one latest snapshot per Thread. Saves require the current producer
 epoch and bind the snapshot to a canonical batch tail. It is separate from the generic
@@ -66,10 +68,13 @@ cache capacity never justifies dropping control or Step evidence. Storage infras
 remain typed failures.
 
 Cross-Run reuse requires proven original-input boundaries and an unambiguous, single-Run suffix.
-Interleaved continuations, late results, joined settlements, unsupported identities, or a new
-compaction can require full replay. New compaction reconstructs its canonical coverage before
-certifying another snapshot. Context without compaction can still grow with the conversation;
-a checkpoint does not make every Thread operation independent of history size.
+Opaque Submission IDs, including Cloudflare's routed IDs, can reuse context when their lengths
+match the checkpoint owner's. A different length, ambiguous control markers, interleaved
+continuations, late results, joined settlements, or a new compaction can require full replay.
+New compaction reconstructs canonical coverage and certifies another snapshot. This also replaces
+checkpoints from an incompatible runtime version; caching resumes after that compaction. Context
+without compaction can still grow with the conversation; a checkpoint does not make every Thread
+operation independent of history size.
 
 The canonical log and submission ledger remain authoritative. A history-search index supplies
 retrieval candidates and cannot stand in for this recovery state. Ordinary unresolved tools keep
