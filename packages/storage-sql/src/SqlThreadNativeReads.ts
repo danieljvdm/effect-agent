@@ -123,11 +123,26 @@ export const createNativeReadIndexes = (namespace?: string) =>
     });
   });
 
+/** Initial index metadata belongs to the canonical record INSERT. */
+export const canonicalRecordOutstanding = (record: CanonicalRecord): number => {
+  switch (record.payload._tag) {
+    case "ToolCallPrepared":
+      return 1;
+    case "ToolCallUnknown":
+      return 2;
+    case "WorkerInputRequested":
+      return 3;
+    default:
+      return 0;
+  }
+};
+
 /** Must run in the canonical append/upgrade transaction, after inserting this record. */
 export const indexCanonicalRecord = Effect.fnUntraced(function* (
   threadId: string,
   record: CanonicalRecord,
   namespace?: string,
+  inserted?: { readonly sequence: number },
 ) {
   const sql = yield* SqlClient.SqlClient;
   const { table: relation, execute } = yield* makeSqlQuery(namespace);
@@ -141,33 +156,37 @@ export const indexCanonicalRecord = Effect.fnUntraced(function* (
         UPDATE ${relation("effect_agent_canonical_records")} SET outstanding = 0
         WHERE thread_id = ${threadId} AND ${canonicalField(sql, "tag")} = 'ToolCallPrepared'
           AND ${canonicalField(sql, "runId")} = ${queryIdentifier(sql, payload.runId)}
-          AND ${canonicalField(sql, "toolCallId")} = ${queryIdentifier(sql, payload.toolCallId)}`.pipe(
+          AND ${canonicalField(sql, "toolCallId")} = ${queryIdentifier(sql, payload.toolCallId)}
+          ${inserted === undefined ? sql`` : sql`AND sequence < ${inserted.sequence}`}`.pipe(
           execute,
         );
-      yield* sql`UPDATE ${relation("effect_agent_canonical_records")} SET outstanding = ${payload._tag === "ToolCallPrepared" ? 1 : 2}
+      if (inserted === undefined)
+        yield* sql`UPDATE ${relation("effect_agent_canonical_records")} SET outstanding = ${canonicalRecordOutstanding(record)}
         WHERE thread_id = ${threadId} AND record_id = ${record.recordId}`.pipe(execute);
       break;
     }
     case "ToolCallSettled":
-      for (const tag of ["ToolCallPrepared", "ToolCallUnknown"])
-        yield* sql`
+      yield* sql`
         UPDATE ${relation("effect_agent_canonical_records")} SET outstanding = 0
-        WHERE thread_id = ${threadId} AND ${canonicalField(sql, "tag")} = ${tag}
+        WHERE thread_id = ${threadId} AND ${canonicalField(sql, "tag")} IN ('ToolCallPrepared', 'ToolCallUnknown')
           AND ${canonicalField(sql, "runId")} = ${queryIdentifier(sql, payload.runId)}
-          AND ${canonicalField(sql, "toolCallId")} = ${queryIdentifier(sql, payload.toolCallId)}`.pipe(
-          execute,
-        );
-      break;
-    case "WorkerInputRequested":
-      yield* sql`UPDATE ${relation("effect_agent_canonical_records")} SET outstanding = 3 WHERE thread_id = ${threadId} AND record_id = ${record.recordId}`.pipe(
+          AND ${canonicalField(sql, "toolCallId")} = ${queryIdentifier(sql, payload.toolCallId)}
+          ${inserted === undefined ? sql`` : sql`AND sequence < ${inserted.sequence}`}`.pipe(
         execute,
       );
+      break;
+    case "WorkerInputRequested":
+      if (inserted === undefined)
+        yield* sql`UPDATE ${relation("effect_agent_canonical_records")} SET outstanding = 3 WHERE thread_id = ${threadId} AND record_id = ${record.recordId}`.pipe(
+          execute,
+        );
       break;
     case "WorkerInputCompleted":
       yield* sql`
         UPDATE ${relation("effect_agent_canonical_records")} SET outstanding = ${payload.effectsResolved ? 0 : 4}
         WHERE thread_id = ${threadId} AND ${canonicalField(sql, "tag")} = 'WorkerInputRequested'
-          AND ${canonicalField(sql, "messageId")} = ${queryIdentifier(sql, payload.messageId)}`.pipe(
+          AND ${canonicalField(sql, "messageId")} = ${queryIdentifier(sql, payload.messageId)}
+          ${inserted === undefined ? sql`` : sql`AND sequence < ${inserted.sequence}`}`.pipe(
         execute,
       );
       break;

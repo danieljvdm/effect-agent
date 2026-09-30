@@ -443,6 +443,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     submissions: {
       by: submissionViews.by,
       byFields: submissionViews.byFields,
+      seed: submissionViews.seed,
       // The same RETURNING rows update the full-row views and the small discovery index.
       write: <E, R>(effect: Effect.Effect<ReadonlyArray<unknown>, E, R>) =>
         submissionViews
@@ -482,6 +483,30 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       ? undefined
       : [...work].sort((a, b) => a.queue_sequence - b.queue_sequence);
   });
+
+  const byKey = Effect.fnUntraced(function* (
+    request: Pick<SubmissionLookupByKey, "threadId" | "principal" | "idempotencyKey">,
+    operation: string,
+  ) {
+    const lane = yield* laneWork(request.threadId, operation);
+
+    if (lane === undefined)
+      return yield* cached(
+        rows.submissions.byFields([
+          ["thread_id", request.threadId],
+          ["principal", request.principal],
+          ["idempotency_key", request.idempotencyKey],
+        ]),
+        operation,
+      );
+
+    const matches = lane.filter(
+      (row) =>
+        row.principal === request.principal && row.idempotency_key === request.idempotencyKey,
+    );
+
+    return yield* Effect.forEach(matches, (row) => requireSubmission(operation, row.submission_id));
+  }, state.read);
 
   const retainLifecycle = (submission: SubmissionRow, fact: LifecyclePublicationFact) =>
     lifecycle === undefined
@@ -1168,14 +1193,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
         Effect.gen(function* () {
           const keyRowKey = `${validated.threadId}/${validated.principal}/${validated.idempotencyKey}`;
 
-          const existingRows = yield* cached(
-            rows.submissions.byFields([
-              ["thread_id", validated.threadId],
-              ["principal", validated.principal],
-              ["idempotency_key", validated.idempotencyKey],
-            ]),
-            operation,
-          );
+          const existingRows = yield* byKey(validated, operation);
 
           const existing = yield* decodeSubmissionRows(operation, keyRowKey, existingRows);
 
@@ -1390,6 +1408,17 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             )
            RETURNING *`.pipe(rows.submissions.write, Effect.mapError(internalFailure(operation)));
 
+          // The INSERT (never replay or hydration) proves these new submission-owned sets
+          // empty. Gated writes update them; rollback/invalidation discards that proof.
+          rows.aborts.seed("submission_id", mintedSubmissionId, []);
+          rows.ownership.seed("submission_id", mintedSubmissionId, []);
+          rows.reservations.seed("submission_id", mintedSubmissionId, []);
+          rows.submissions.seed("joined_host_submission_id", mintedSubmissionId, []);
+          rows.approvals.seed("submission_id", mintedSubmissionId, []);
+          rows.resolutions.seed("submission_id", mintedSubmissionId, []);
+          rows.childReservations.seed("parent_submission_id", mintedSubmissionId, []);
+          rows.childSettlements.seed("parent_submission_id", mintedSubmissionId, []);
+
           return yield* decodeAdmissionResult({
             submissionId: mintedSubmissionId,
             receiptId: mintedReceiptId,
@@ -1454,14 +1483,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
         return Option.some(yield* decodeSubmissionSnapshot(operation, row.value));
       }
 
-      const foundRows = yield* cached(
-        rows.submissions.byFields([
-          ["thread_id", validated.threadId],
-          ["principal", validated.principal],
-          ["idempotency_key", validated.idempotencyKey],
-        ]),
-        operation,
-      );
+      const foundRows = yield* byKey(validated, operation);
 
       const decoded = yield* decodeSubmissionRows(
         operation,
@@ -1496,14 +1518,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       request,
     ).pipe(Effect.mapError(internalFailure(operation)));
 
-    const foundRows = yield* cached(
-      rows.submissions.byFields([
-        ["thread_id", validated.threadId],
-        ["principal", validated.principal],
-        ["idempotency_key", validated.idempotencyKey],
-      ]),
-      operation,
-    );
+    const foundRows = yield* byKey(validated, operation);
 
     const decoded = yield* decodeSubmissionRows(
       operation,

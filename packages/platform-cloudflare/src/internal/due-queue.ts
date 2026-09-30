@@ -24,6 +24,7 @@ export const Projection = "effect-agent:projection";
 export const Messages = "effect-agent:messages";
 export const RecoveryEvents = "effect-agent:recovery-events";
 export const Lifecycle = "effect-agent:lifecycle";
+export const LifecycleStart = "effect-agent:lifecycle-start";
 
 const decode = Schema.decodeUnknownSync(Schema.Array(DueLane));
 

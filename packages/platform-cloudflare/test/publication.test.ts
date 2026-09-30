@@ -5,7 +5,7 @@ import { ThreadId } from "effect-agent/identifiers";
 import { ApprovalDecisionCommand, SubmissionLedger } from "effect-agent/submission-ledger";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { ThreadMaintenance } from "../src/Alarm.ts";
 import { CloudflareThreadClient } from "../src/CloudflareThreadClient.ts";
@@ -153,6 +153,57 @@ const latch = () => {
 };
 
 describe("durable host publication", () => {
+  // Regression: #713 deferred the entire start prefix until native execution settled.
+  // Final-state publication checks cannot observe this gap while a provider is still running.
+  it("publishes ordered start progress during a long native run, then its settlement", () =>
+    withThread(async (thread, _now, advance) => {
+      const entered = latch();
+      const release = latch();
+
+      modelRequestHolds.set(
+        thread,
+        Effect.sync(entered.resolve).pipe(Effect.andThen(Effect.promise(() => release.promise))),
+      );
+      await submit(thread);
+      const running = alarm(thread);
+
+      try {
+        await entered.promise;
+        await vi.waitFor(
+          () => {
+            expect((lifecycleBatches.get(thread) ?? []).flat().map((p) => p.fact._tag)).toEqual([
+              "SubmissionReady",
+              "UserInputRecorded",
+              "RunStarted",
+            ]);
+          },
+          { timeout: 500 },
+        );
+        await vi.waitFor(async () => {
+          expect((await lifecycleRows(thread)).every((row) => row.payload_json === null)).toBe(
+            true,
+          );
+        });
+        await advance(15_000);
+        expect(await allSettled(thread, namespace)()).toBe(false);
+        expect((lifecycleBatches.get(thread) ?? []).flat()).toHaveLength(3);
+      } finally {
+        release.resolve();
+        await running;
+      }
+      await quiesce(thread);
+      const batches = lifecycleBatches.get(thread) ?? [];
+
+      expect(batches.flat().map((p) => p.fact._tag)).toEqual([
+        "SubmissionReady",
+        "UserInputRecorded",
+        "RunStarted",
+        "SubmissionSettled",
+      ]);
+      expect(batches.at(-1)?.map((p) => p.fact._tag)).toEqual(["SubmissionSettled"]);
+      expect((await lifecycleRows(thread)).every((row) => row.payload_json === null)).toBe(true);
+    }, true));
+
   // Regression: c68edc7a made host publication an execution prerequisite.
   it("runs routed and alarm attempts with publication debt, then publishes bounded ordered batches", () =>
     withThread(async (thread, _now, advance) => {

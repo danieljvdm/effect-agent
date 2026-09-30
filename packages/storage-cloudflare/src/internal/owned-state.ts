@@ -169,6 +169,11 @@ export const ownedRows = <A, I>(
         sql`SELECT * FROM ${sql(table)} WHERE ${sql(field)} = ${value}`,
       );
 
+    // Only a source mutation proving the complete result may seed a view. This must run
+    // under the owner transaction; rollback invalidates it with every other retained view.
+    const seed = (field: keyof A & string, value: string, rows: ReadonlyArray<A>) =>
+      retain(JSON.stringify([field, value]), (row) => row[field] === value, rows, Infinity);
+
     const byFields = (fields: ReadonlyArray<readonly [keyof A & string, string]>) =>
       matching(
         JSON.stringify(fields),
@@ -218,6 +223,6 @@ export const ownedRows = <A, I>(
           return rows;
         });
 
-    return { by, byFields, matching, write: apply(false), remove: apply(true) };
+    return { by, byFields, matching, seed, write: apply(false), remove: apply(true) };
   };
 };

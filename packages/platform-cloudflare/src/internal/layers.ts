@@ -725,6 +725,13 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                             )
                               ? []
                               : [DueQueue.Lifecycle]),
+                            ...(options.lifecyclePublication !== undefined &&
+                            request.batch.records.some(
+                              ({ payload }) =>
+                                payload._tag === "RunStarted" || payload._tag === "SubagentStarted",
+                            )
+                              ? [DueQueue.LifecycleStart]
+                              : []),
                           ],
                         },
                       )
@@ -934,6 +941,20 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                   return {
                     lanes: [
                       ...previous.lanes,
+                      {
+                        id: DueQueue.LifecycleStart,
+                        dispatchTimeoutMillis: 60_000,
+                        run:
+                          storage === undefined
+                            ? Effect.fail(failure("Native lifecycle storage unavailable"))
+                            : drainLifecyclePublications(storage, 10_000, 4, {
+                                retainedOnly: true,
+                              }).pipe(
+                                Effect.provide(context),
+                                Effect.mapError(failure),
+                                Effect.as(Option.none<number>()),
+                              ),
+                      },
                       {
                         id: DueQueue.Lifecycle,
                         phase: "after-native",

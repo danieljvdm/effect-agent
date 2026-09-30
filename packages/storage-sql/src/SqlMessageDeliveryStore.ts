@@ -131,6 +131,23 @@ const Scan = Schema.Struct({
 const codec = Schema.fromJsonString(MessageDeliveryRecord);
 const bytes = (text: string): number => new TextEncoder().encode(text).byteLength;
 
+// Disposable complete pending sets shared by adapters on the same physical owner.
+const pendingViews = new WeakMap<
+  SqlStorageOwner,
+  Map<string, Map<string, ReadonlyArray<MessageDeliveryRecord>>>
+>();
+
+const compareMessageIds = (left: string, right: string): number => {
+  const a = new TextEncoder().encode(left);
+  const b = new TextEncoder().encode(right);
+
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    if (a[i] !== b[i]) return a[i]! - b[i]!;
+  }
+
+  return a.length - b.length;
+};
+
 const storage = (operation: string, cause?: unknown) =>
   MessageDeliveryError.make({
     reason: "storage",
@@ -171,6 +188,59 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
     execute(statement).pipe(Effect.mapError((cause) => storage(operation, cause)));
 
   const owner = yield* SqlStorageOwner;
+  let pending: Map<string, ReadonlyArray<MessageDeliveryRecord>> | undefined;
+
+  if (owner !== undefined) {
+    let namespaces = pendingViews.get(owner);
+
+    if (namespaces === undefined) {
+      namespaces = new Map();
+      pendingViews.set(owner, namespaces);
+    }
+    const namespace = options.namespace ?? "";
+
+    pending = namespaces.get(namespace);
+    if (pending === undefined) {
+      const view = new Map<string, ReadonlyArray<MessageDeliveryRecord>>();
+
+      pending = view;
+      namespaces.set(namespace, view);
+      owner.invalidators.add(() => view.clear());
+    }
+  }
+
+  const isPending = (record: MessageDeliveryRecord) =>
+    record.status !== "processed" && record.status !== "refused";
+
+  const retainPending = (threadId: string, records: ReadonlyArray<MessageDeliveryRecord>) => {
+    if (pending === undefined) return;
+    pending.delete(threadId);
+    if (records.length > 128 || bytes(JSON.stringify(records)) > 4 * 1024 * 1024) return;
+    pending.set(threadId, records);
+    let total = 0;
+
+    for (const rows of pending.values()) total += bytes(JSON.stringify(rows));
+    while (pending.size > 128 || total > 4 * 1024 * 1024) {
+      const oldest = pending.entries().next().value;
+
+      if (oldest === undefined) break;
+      total -= bytes(JSON.stringify(oldest[1]));
+      pending.delete(oldest[0]);
+    }
+  };
+
+  const updatePending = (record: MessageDeliveryRecord) => {
+    const prior = pending?.get(record.key.ownerThreadId);
+
+    if (prior === undefined) return;
+    const next = prior.filter((value) => value.key.messageId !== record.key.messageId);
+
+    if (isPending(record)) next.push(record);
+    retainPending(record.key.ownerThreadId, next);
+  };
+
+  const read = <A, E, R>(body: Effect.Effect<A, E, R>) =>
+    owner === undefined ? body : owner.read(body);
 
   const transaction = <A>(body: Effect.Effect<A, MessageDeliveryFailure>) =>
     (options.transaction === undefined
@@ -298,6 +368,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
           "insert",
           sql`INSERT INTO ${relation("effect_agent_message_deliveries")} (owner_thread_id, message_id, version, state, deadline_at_millis, record_json ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, read_metadata` })}) VALUES (${input.key.ownerThreadId}, ${input.key.messageId}, ${input.version}, ${input.status}, ${messageDeliveryDeadline(input)}, ${text} ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, ${deliveryMetadata(input)}::jsonb` })})`,
         );
+        updatePending(input);
 
         if (lifecycle !== undefined)
           yield* lifecycle
@@ -355,6 +426,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
 
         if (rows.length !== 1 || rows[0] === undefined)
           return yield* MessageDeliveryError.make({ reason: "conflict", operation: "change" });
+        updatePending(rows[0]);
 
         if (
           lifecycle !== undefined &&
@@ -403,6 +475,56 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
     list: Effect.fn("SqlMessageDeliveryStore.list")(function* (request) {
       const input = yield* validateMessageDelivery(MessageDeliveryPageRequest, request, "list");
 
+      if (pending !== undefined && input.pendingOnly) {
+        let complete = pending.get(input.ownerThreadId);
+
+        if (complete === undefined) {
+          const rows = yield* query(
+            "pending-view",
+            sql`SELECT owner_thread_id, message_id, version, state, deadline_at_millis, record_json FROM ${relation("effect_agent_message_deliveries")} WHERE owner_thread_id = ${input.ownerThreadId} AND state NOT IN ('processed', 'refused') ORDER BY message_id LIMIT 129`,
+          );
+
+          const records = yield* decodeRows(rows);
+
+          retainPending(input.ownerThreadId, records);
+          complete = pending.get(input.ownerThreadId);
+        }
+        if (complete !== undefined) {
+          const selected = complete
+            .filter((record) => {
+              if (
+                input.after !== undefined &&
+                compareMessageIds(record.key.messageId, input.after) <= 0
+              )
+                return false;
+              const origin = record.envelope.workerAdmission?.origin;
+
+              if (
+                input.workerStarts !== undefined &&
+                (origin?.worker.delegationId !== input.workerStarts.delegationId ||
+                  origin.worker.targetAgentId !== input.workerStarts.targetAgentId ||
+                  origin.firstMessageId !== record.key.messageId)
+              )
+                return false;
+
+              return (
+                input.pendingWorker === undefined ||
+                (origin?.worker.threadId === input.pendingWorker &&
+                  record.receipt === null &&
+                  (record.status === "pending" || record.status === "parked"))
+              );
+            })
+            .sort((a, b) => compareMessageIds(a.key.messageId, b.key.messageId));
+
+          const items = selected.slice(0, input.limit);
+
+          return {
+            items,
+            next: selected.length > input.limit ? (items.at(-1)?.key.messageId ?? null) : null,
+          };
+        }
+      }
+
       const rows = yield* query(
         "list",
         sql`SELECT owner_thread_id, message_id, version, state, deadline_at_millis, record_json FROM ${relation("effect_agent_message_deliveries")} WHERE owner_thread_id = ${input.ownerThreadId} ${input.after === undefined ? sql`` : sql`AND message_id > ${input.after}`} ${input.pendingOnly ? sql`AND state NOT IN ('processed', 'refused')` : sql``}
@@ -429,7 +551,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
         items,
         next: records.length > input.limit ? (items.at(-1)?.key.messageId ?? null) : null,
       };
-    }),
+    }, read),
     due: Effect.fn("SqlMessageDeliveryStore.due")(function* (nowMillis, limit, ownerThreadId) {
       const input = yield* validateMessageDelivery(
         Scan,

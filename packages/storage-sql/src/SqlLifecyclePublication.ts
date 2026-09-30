@@ -418,7 +418,7 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
   });
 
   const storage: LifecyclePublicationStorage = {
-    pending: (nowMillis, limit) =>
+    pending: (nowMillis, limit, options) =>
       Effect.gen(function* () {
         yield* Schema.decodeEffect(
           Schema.Struct({
@@ -426,7 +426,7 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
             limit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })),
           }),
         )({ nowMillis, limit }).pipe(Effect.mapError(failure));
-        yield* (source?.beforePending ?? Effect.void).pipe(
+        yield* (options?.retainedOnly ? Effect.void : (source?.beforePending ?? Effect.void)).pipe(
           Effect.provideService(SqlLifecycleRetainer, { retainMany }),
         );
 

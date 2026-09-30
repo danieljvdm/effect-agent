@@ -1226,6 +1226,7 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
         const worker = yield* runtime.processThreadHead(receipt.threadId).pipe(Effect.forkChild);
 
         yield* Deferred.await(started);
+        yield* TestClock.adjust("5 seconds");
         yield* Deferred.await(renewalReturned);
         const waiter = yield* runtime.awaitSettlement(receipt).pipe(Effect.forkChild);
 

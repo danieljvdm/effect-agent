@@ -10,6 +10,7 @@ import {
   createNativeReadIndexes,
   seedNativeReadIndexes,
   indexCanonicalRecord,
+  canonicalRecordOutstanding,
 } from "@effect-agent/storage-sql/sql-thread-native-reads";
 import { SqliteMigrator } from "@effect/sql-sqlite-do";
 import { Clock, Effect, Option, Schema, Stream } from "effect";
@@ -1436,55 +1437,56 @@ const makeJournal = (
         `.pipe(Effect.mapError(storageError("insert canonical batch")));
           yield* failpoint("append:after-batch-insert");
 
-          yield* Effect.forEach(
-            request.records,
-            (record, index) =>
-              Effect.gen(function* () {
-                yield* sql`
-                  INSERT INTO effect_agent_canonical_records (
-                    thread_id,
-                    sequence,
-                    record_id,
-                    batch_id,
-                    record_json
-                  ) VALUES (
-                    ${request.threadId},
-                    ${firstSequence + index},
-                    ${record.recordId},
-                    ${request.batchId},
-                    ${record.recordJson}
-                  )
-                `.pipe(Effect.mapError(storageError("insert canonical record")));
-
-                const canonical = yield* Schema.decodeEffect(
-                  Schema.fromJsonString(CanonicalRecord),
-                )(record.recordJson).pipe(
-                  Effect.mapError((error) =>
-                    DoStorageCorruptionError.make({
-                      table: "effect_agent_canonical_records",
-                      rowKey: record.recordId,
-                      message: error.message,
-                    }),
-                  ),
-                );
-
-                yield* indexCanonicalRecord(request.threadId, canonical).pipe(
-                  Effect.provideService(SqlClient.SqlClient, sql),
-                  Effect.mapError(storageError("index canonical record")),
-                );
-                recordCache.put(
-                  RecordRow.make({
-                    thread_id: request.threadId,
-                    sequence: Schema.decodeSync(CanonicalSequence)(firstSequence + index),
-                    batch_id: request.batchId,
-                    record_id: record.recordId,
-                    record_json: record.recordJson,
+          const records = yield* Effect.forEach(request.records, (record, index) =>
+            Effect.gen(function* () {
+              const canonical = yield* Schema.decodeEffect(Schema.fromJsonString(CanonicalRecord))(
+                record.recordJson,
+              ).pipe(
+                Effect.mapError((error) =>
+                  DoStorageCorruptionError.make({
+                    table: "effect_agent_canonical_records",
+                    rowKey: record.recordId,
+                    message: error.message,
                   }),
-                );
-                yield* failpoint("append:after-record-insert");
-              }),
-            { discard: true },
+                ),
+              );
+
+              return {
+                record,
+                canonical,
+                row: {
+                  thread_id: request.threadId,
+                  sequence: firstSequence + index,
+                  record_id: record.recordId,
+                  batch_id: request.batchId,
+                  record_json: record.recordJson,
+                  outstanding: canonicalRecordOutstanding(canonical),
+                },
+              };
+            }),
           );
+
+          // Six bound columns per row; preserve the logical batch and every append barrier.
+          for (const group of chunked(records, Math.floor(MAX_BOUND_PARAMETERS / 6))) {
+            yield* sql`INSERT INTO effect_agent_canonical_records ${sql.insert(group.map(({ row }) => row))}`.pipe(
+              Effect.mapError(storageError("insert canonical records")),
+            );
+            for (const { canonical, row } of group) {
+              yield* indexCanonicalRecord(request.threadId, canonical, undefined, {
+                sequence: row.sequence,
+              }).pipe(
+                Effect.provideService(SqlClient.SqlClient, sql),
+                Effect.mapError(storageError("index canonical record")),
+              );
+              recordCache.put(
+                RecordRow.make({
+                  ...row,
+                  sequence: Schema.decodeSync(CanonicalSequence)(row.sequence),
+                }),
+              );
+              yield* failpoint("append:after-record-insert");
+            }
+          }
 
           yield* sql`
           UPDATE effect_agent_threads
@@ -1500,6 +1502,26 @@ const makeJournal = (
             ),
           );
           yield* failpoint("append:after-tail-update");
+
+          // Retain one start prefix atomically with its canonical proof, before model/tool
+          // execution. Later facts stay journal-backed until the settlement publication wave.
+          if (
+            lifecycle !== undefined &&
+            records.some(
+              ({ canonical: { payload } }) =>
+                payload._tag === "RunStarted" || payload._tag === "SubagentStarted",
+            )
+          )
+            yield* flushCanonical(request.threadId).pipe(
+              Effect.provideService(SqlLifecycleRetainer, { retainMany: lifecycle.retainMany }),
+              Effect.mapError((cause) =>
+                DoStorageError.make({
+                  operation: "retain lifecycle start prefix",
+                  message: "Lifecycle start intent could not be retained",
+                  cause,
+                }),
+              ),
+            );
 
           return RawAppendResult.make({
             firstSequence,

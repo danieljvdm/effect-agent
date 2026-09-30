@@ -7809,7 +7809,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             yield* Ref.set(tokenRef, renewal.ownershipToken);
           }).pipe(Effect.uninterruptible),
           { schedule: Schedule.spaced(config.leaseRenewalInterval) },
-        ).pipe(Effect.andThen(Effect.never)),
+        ).pipe(Effect.delay(config.leaseRenewalInterval), Effect.andThen(Effect.never)),
       );
 
       const execution = Effect.raceFirst(consume, Effect.raceFirst(abortWatcher, renewal));
