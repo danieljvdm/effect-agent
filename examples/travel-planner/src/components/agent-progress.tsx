@@ -35,7 +35,7 @@ export function AgentProgress({
           <MessageText text={progress.text} streaming={active} />
         </article>
       )}
-      {busy && !hasText && !hasSteps && (
+      {busy && !hasText && !progress?.tools.some((tool) => tool.state === "running") && (
         <p className="working" role="status">
           <span /> Thinking through your trip…
         </p>

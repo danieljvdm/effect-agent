@@ -47,63 +47,69 @@ const notFound = () => new PlannerError({ code: "not-found", message: "Worker no
  * overview. Canonical sequences are immutable; a guessed locator or worker ID grants no access.
  * The same host read authorizer used by Subagent.inspect/observe remains in force.
  */
+const workerRequest = Effect.fn("workerRequest")(function* (input: typeof WorkerLocator.Type) {
+  const identity = yield* ThreadObjectIdentity;
+  const sourceThreadId = yield* Schema.decodeEffect(ThreadId)(identity.threadId);
+  const principal = yield* Schema.decodeEffect(Principal)(ownerOfThread(sourceThreadId));
+  const authorizer = yield* WorkerHostAuthorizer;
+
+  yield* authorizer.authorize({
+    sourceThreadId,
+    principal,
+    operation: "inspect",
+    access: "read",
+  });
+  const store = yield* ThreadStore;
+  const afterSequence = yield* Schema.decodeEffect(CanonicalSequence)(input.sourceSequence - 1);
+
+  const records = yield* store
+    .read(ThreadRead.make({ threadId: sourceThreadId, afterSequence, limit: 1 }))
+    .pipe(Stream.runCollect);
+
+  const entry = records[0];
+  const payload = entry?.record.payload;
+
+  if (
+    records.length !== 1 ||
+    entry?.threadId !== sourceThreadId ||
+    entry.sequence !== input.sourceSequence ||
+    payload?._tag !== "WorkerInputRequested" ||
+    payload.admission.origin.source.threadId !== sourceThreadId ||
+    payload.admission.origin.worker.threadId !== input.workerId
+  )
+    return yield* notFound();
+  const admission = payload.admission;
+  const worker = admission.origin.worker;
+
+  for (const operation of ["inspect", "observe"] as const)
+    yield* authorizer.authorize({ sourceThreadId, principal, worker, operation, access: "read" });
+
+  const deliveries = yield* MessageDeliveryStore;
+
+  const delivery = yield* deliveries.get({
+    ownerThreadId: sourceThreadId,
+    messageId: admission.messageId,
+  });
+
+  return WorkerStatusRequest.make({
+    sourceThreadId,
+    worker,
+    messageId: admission.messageId,
+    principal: admission.deliveryPrincipal ?? delivery?.envelope.deliveryPrincipal ?? null,
+    refused: delivery?.status === "refused",
+  });
+}, Effect.mapError(unavailable));
+
 export const plannerWorker = Effect.fn("plannerWorker")(
   function* (input: typeof WorkerLocator.Type) {
-    const identity = yield* ThreadObjectIdentity;
-    const sourceThreadId = yield* Schema.decodeEffect(ThreadId)(identity.threadId);
-    const principal = yield* Schema.decodeEffect(Principal)(ownerOfThread(sourceThreadId));
-    const authorizer = yield* WorkerHostAuthorizer;
-
-    yield* authorizer.authorize({
-      sourceThreadId,
-      principal,
-      operation: "inspect",
-      access: "read",
-    });
-    const store = yield* ThreadStore;
-    const afterSequence = yield* Schema.decodeEffect(CanonicalSequence)(input.sourceSequence - 1);
-
-    const records = yield* store
-      .read(ThreadRead.make({ threadId: sourceThreadId, afterSequence, limit: 1 }))
-      .pipe(Stream.runCollect);
-
-    const entry = records[0];
-    const payload = entry?.record.payload;
-
-    if (
-      records.length !== 1 ||
-      entry?.threadId !== sourceThreadId ||
-      entry.sequence !== input.sourceSequence ||
-      payload?._tag !== "WorkerInputRequested" ||
-      payload.admission.origin.source.threadId !== sourceThreadId ||
-      payload.admission.origin.worker.threadId !== input.workerId
-    )
-      return yield* notFound();
-    const admission = payload.admission;
-    const worker = admission.origin.worker;
-
-    for (const operation of ["inspect", "observe"] as const)
-      yield* authorizer.authorize({ sourceThreadId, principal, worker, operation, access: "read" });
-
-    const deliveries = yield* MessageDeliveryStore;
-
-    const delivery = yield* deliveries.get({
-      ownerThreadId: sourceThreadId,
-      messageId: admission.messageId,
-    });
-
-    const request = yield* Schema.encodeEffect(Schema.fromJsonString(WorkerStatusRequest))({
-      sourceThreadId,
-      worker,
-      messageId: admission.messageId,
-      principal: admission.deliveryPrincipal ?? delivery?.envelope.deliveryPrincipal ?? null,
-      refused: delivery?.status === "refused",
-    });
+    const request = yield* Schema.encodeEffect(Schema.fromJsonString(WorkerStatusRequest))(
+      yield* workerRequest(input),
+    );
 
     const env = yield* WorkerEnvironment;
 
     const reply = yield* Effect.tryPromise({
-      try: () => env.ACCOUNT_THREADS.getByName(worker.threadId).plannerWorkerStatus(request),
+      try: () => env.ACCOUNT_THREADS.getByName(input.workerId).plannerWorkerStatus(request),
       catch: unavailable,
     });
 
@@ -114,7 +120,7 @@ export const plannerWorker = Effect.fn("plannerWorker")(
 );
 
 /**
- * Runs on the worker's owning object: one local key lookup, a nonterminal scan, and at most
+ * Runs on the worker's owning object: a local key lookup, a nonterminal scan, and at most
  * 100 canonical records. No foreign ledger fan-out, full exports, history wire round trips,
  * or recovery/admission. The status describes the selected request plus any active work.
  */

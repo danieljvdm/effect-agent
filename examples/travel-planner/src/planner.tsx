@@ -492,7 +492,7 @@ function PlannerContent({ signOut }: { readonly signOut: () => void }) {
                 }
               }}
             >
-              {!!snapshot?.scouts?.length && (
+              {selection.conversationId !== null && !!snapshot?.scouts?.length && (
                 <ResearchScoutCard
                   key={`research:${selection.conversationId}`}
                   scouts={snapshot.scouts}

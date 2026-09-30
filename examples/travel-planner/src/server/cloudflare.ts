@@ -65,15 +65,7 @@ import {
   RecordedDiagnostics,
 } from "./diagnostics.ts";
 import { liveModel } from "./models.ts";
-import {
-  planner,
-  previousContinuingPlanner,
-  previousAppPlanner,
-  previousResponsePlanner,
-  previousCardPlanner,
-  previousPlanner,
-  legacyPlanner,
-} from "./planner.ts";
+import { planner } from "./planner.ts";
 import { PlannerAttempt, ProgressStore } from "./progress.ts";
 import { PlannerSettingsStore, PlannerSettingsStoreLive } from "./settings.ts";
 import { ownerOfThread, privateConversation, publicSnapshot } from "./tenancy.ts";
@@ -293,8 +285,6 @@ export const plannerApplication = <E, R>(
   modelVersion: string,
   modelLabel: string,
   browser: Layer.Layer<Tool.Handler<"read_travel_page">, E, R>,
-  selectedModel?: Layer.Layer<Agent.ModelServices, never, PlannerAttempt>,
-  sourceLayer = AppSourceLive,
 ) => {
   const attemptLayer = (context: {
     readonly threadId: string;
@@ -358,20 +348,20 @@ export const plannerApplication = <E, R>(
   const registered = DurableAgentRuntime.layerRegistered([
     {
       agent: planner,
-      model: selectedModel ?? model,
+      model,
       definitions: DefinitionDigestInput.make({
-        agent: { id: planner.id, version: "travel-planner-v16" },
-        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
+        agent: { id: planner.id, version: "travel-planner-v17" },
+        model: modelVersion,
         tools: Object.keys(planner.toolkit.tools),
       }),
       attemptLayer,
     },
     {
       agent: updatingResearchScout,
-      model: selectedModel ?? model,
+      model,
       definitions: DefinitionDigestInput.make({
-        agent: { id: updatingResearchScout.id, version: "travel-research-scout-v4" },
-        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
+        agent: { id: updatingResearchScout.id, version: "travel-research-scout-v5" },
+        model: modelVersion,
         tools: Object.keys(updatingResearchScout.toolkit.tools),
       }),
       attemptLayer: (context) =>
@@ -386,10 +376,10 @@ export const plannerApplication = <E, R>(
     },
     {
       agent: appEditor,
-      model: selectedModel ?? model,
+      model,
       definitions: DefinitionDigestInput.make({
         agent: { id: appEditor.id, version: "trip-app-editor-v1" },
-        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
+        model: modelVersion,
         tools: Object.keys(appEditor.toolkit.tools),
       }),
       attemptLayer: (context) =>
@@ -401,66 +391,6 @@ export const plannerApplication = <E, R>(
             }),
           ),
         ),
-    },
-    {
-      agent: previousContinuingPlanner,
-      model: selectedModel ?? model,
-      definitions: DefinitionDigestInput.make({
-        agent: { id: previousContinuingPlanner.id, version: "travel-planner-v7" },
-        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
-        tools: Object.keys(previousContinuingPlanner.toolkit.tools),
-      }),
-      attemptLayer,
-    },
-    {
-      agent: previousAppPlanner,
-      model: selectedModel ?? model,
-      definitions: DefinitionDigestInput.make({
-        agent: { id: previousAppPlanner.id, version: "travel-planner-v6" },
-        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
-        tools: Object.keys(previousAppPlanner.toolkit.tools),
-      }),
-      attemptLayer,
-    },
-    {
-      agent: previousResponsePlanner,
-      model: selectedModel ?? model,
-      definitions: DefinitionDigestInput.make({
-        agent: { id: previousResponsePlanner.id, version: "travel-planner-v5" },
-        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
-        tools: Object.keys(previousResponsePlanner.toolkit.tools),
-      }),
-      attemptLayer,
-    },
-    {
-      agent: previousCardPlanner,
-      model: selectedModel ?? model,
-      definitions: DefinitionDigestInput.make({
-        agent: { id: previousCardPlanner.id, version: "travel-planner-v4" },
-        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
-        tools: Object.keys(previousCardPlanner.toolkit.tools),
-      }),
-      attemptLayer,
-    },
-    {
-      agent: previousPlanner,
-      model: selectedModel ?? model,
-      definitions: DefinitionDigestInput.make({
-        agent: { id: previousPlanner.id, version: "travel-planner-v3" },
-        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
-        tools: Object.keys(previousPlanner.toolkit.tools),
-      }),
-      attemptLayer,
-    },
-    {
-      agent: legacyPlanner,
-      model,
-      definitions: DefinitionDigestInput.make({
-        agent: { id: legacyPlanner.id, version: "travel-planner-v2" },
-        model: modelVersion,
-        tools: Object.keys(legacyPlanner.toolkit.tools),
-      }),
-      attemptLayer,
     },
   ]).pipe(
     // Reports have no parent attempt. Keep their projection services in the registration context.
@@ -489,7 +419,7 @@ export const plannerApplication = <E, R>(
     ),
     CredentialSourceLive,
     FailureDiagnosticsLive,
-    sourceLayer,
+    AppSourceLive,
   ).pipe(Layer.provideMerge(ThreadObject.layer([])));
 
   return Layer.fresh(ThreadMaintenance.layer).pipe(
@@ -512,15 +442,13 @@ const PlannerLive = Layer.unwrap(
         message: "The planner requires a Browser Run binding.",
       });
 
-    const model: Effect.Success<typeof liveModel> = yield* liveModel;
     const credentials: Layer.Layer<CredentialSource> = credentialSourceLayer(env);
 
     return plannerApplication(
-      model.model.pipe(Layer.provide(credentials)),
-      model.identity,
-      model.label,
+      liveModel.pipe(Layer.provide(credentials)),
+      "openai-selectable-v1",
+      defaultPlannerSettings.model,
       CloudflareBrowser.layer({ handlers: ReadTravelPageLive }, { browser: env.BROWSER }),
-      model.selectable.pipe(Layer.provide(credentials)),
     );
   }),
 );
@@ -537,7 +465,6 @@ export const makeTravelPlannerThread = <E>(
     namespaceBinding: "ACCOUNT_THREADS",
     deploymentId: "travel-planner-v1",
     producerPrefix: "travel-planner",
-    wakeScanInterval: 250,
     settlementPollInterval: 100,
     maxQueueDepthPerLane: 8,
     maxInputBytes: 16 * 1024,

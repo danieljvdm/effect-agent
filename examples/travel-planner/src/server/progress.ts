@@ -18,6 +18,7 @@ export const emptyProgress: PlannerProgress = {
 export interface ProgressWriter {
   readonly text: (delta: string) => Effect.Effect<void>;
   readonly newResponse: Effect.Effect<void>;
+  readonly interruptResponse: Effect.Effect<void>;
   readonly tool: (
     id: string,
     label: string,
@@ -75,6 +76,17 @@ export class ProgressStore extends Context.Service<
           text: (delta) =>
             update((previous) => ({ ...previous, text: (previous.text + delta).slice(0, 4000) })),
           newResponse: update((previous) => ({ ...previous, text: "" })),
+          interruptResponse: Effect.flatMap(Clock.currentTimeMillis, (now) =>
+            update((previous) => ({
+              ...previous,
+              text: "",
+              tools: previous.tools.map((tool) =>
+                tool.state === "running"
+                  ? { ...tool, state: "incomplete", completedAt: now }
+                  : tool,
+              ),
+            })),
+          ),
           tool: (id, label, status) =>
             Effect.flatMap(Clock.currentTimeMillis, (now) =>
               update((previous) => {

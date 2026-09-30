@@ -30,11 +30,19 @@ Listing photos come from inspected page galleries. When a gallery yields no usab
 the reader also checks Open Graph and Twitter image metadata within the same inspection deadline.
 These source images do not verify amenities or availability; unavailable photos leave the cards usable.
 
-The current planner and scout exchange standard `WorkerUpdate` and `WorkerCompletion` messages.
-Retired planner v8–v15 and scout v1–v3 registrations and their custom report inputs are removed.
+The main planner uses native hosted web search in its own model call for focused questions.
+It delegates longer or independent research to scouts and receives standard `WorkerUpdate`
+and `WorkerCompletion` messages. New input can restart its disposable model response;
+the preview clears cancelled text and marks interrupted search activity incomplete.
+The early thinking indicator contains no private model reasoning.
+
+The current planner and scout keep stable agent IDs and select one current binding per ID.
+Retired planner v2–v15 and scout v1–v3 registrations and their custom report inputs are removed.
 Start fresh conversations for those demo revisions; no migration or storage reset is supplied.
 Keep their old stores and original executable release for inspection or reconciliation of unfinished
 external actions. Existing current-agent records, saved trips, accounts, and report evidence are retained.
+Scouts already waiting for research-plan approval remain paused. Cancel their active run and
+start fresh research; removing the checkpoint does not approve existing requests.
 
 Authentication uses matching versions of `@yielded/auth` and `@yielded/auth-persistence`.
 The persistence package supplies the Drizzle adapters for the app-owned SQLite tables.
