@@ -275,7 +275,15 @@ export class PublicationThreadObject extends ThreadObject.make(
     ),
     Layer.provideMerge(maintenanceClockLayer),
   ),
-  { ...baseOptions, namespaceBinding: "PUBLICATIONS" },
+  {
+    ...baseOptions,
+    namespaceBinding: "PUBLICATIONS",
+    // Twelve acknowledged renewals span the no-progress retry window without replaying
+    // thousands of heartbeat operations when the publication tests advance their clock.
+    ownershipLeaseDuration: 60_000,
+    leaseRenewalInterval: 15_000,
+    abortPollInterval: 10_000,
+  },
 ) {}
 
 export class ProjectionThreadObject extends ThreadObject.make(
