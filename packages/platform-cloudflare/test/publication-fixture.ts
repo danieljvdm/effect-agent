@@ -136,6 +136,7 @@ export const publicationLayer = Layer.effect(ThreadPublication)(
 /** Destination failure only; admission, routed execution and native retry storage remain real. */
 export const failedLifecycleThreads = new Set<string>();
 export const lifecycleBatches = new Map<string, Array<ReadonlyArray<LifecyclePublication>>>();
+export const lifecyclePublicationControls = new Map<string, PublicationControl>();
 
 export const lifecyclePublicationTestLayer = Layer.succeed(LifecyclePublicationHandler)({
   publish: (publications) =>
@@ -146,6 +147,11 @@ export const lifecyclePublicationTestLayer = Layer.succeed(LifecyclePublicationH
 
       batches.push(publications);
       lifecycleBatches.set(owner, batches);
+      const control = lifecyclePublicationControls.get(owner);
+      const release = control?.release;
+
+      control?.entered?.();
+      if (release !== undefined) yield* Effect.promise(() => release);
       if (failedLifecycleThreads.has(owner))
         return yield* LifecyclePublicationError.make({ reason: "unavailable" });
     }),

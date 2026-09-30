@@ -921,22 +921,27 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                       : error;
                   };
 
-                  const deadline = (
-                    storage === undefined
+                  const deadline = (retainedOnly = false) =>
+                    (storage === undefined
                       ? Effect.fail(failure("Native lifecycle storage unavailable"))
-                      : storage.pendingDeadline.pipe(Effect.mapError(failure))
-                  ).pipe(
-                    Effect.withErrorReporting,
-                    Effect.catchCauseIf(
-                      (cause) => !Cause.hasInterrupts(cause),
-                      (cause) =>
-                        Effect.logError("Lifecycle publication deadline unavailable", cause).pipe(
-                          Effect.andThen(
-                            Effect.map(Clock.currentTimeMillis, (now) => Option.some(now + 60_000)),
+                      : (retainedOnly
+                          ? (storage.retainedPendingDeadline ?? storage.pendingDeadline)
+                          : storage.pendingDeadline
+                        ).pipe(Effect.mapError(failure))
+                    ).pipe(
+                      Effect.withErrorReporting,
+                      Effect.catchCauseIf(
+                        (cause) => !Cause.hasInterrupts(cause),
+                        (cause) =>
+                          Effect.logError("Lifecycle publication deadline unavailable", cause).pipe(
+                            Effect.andThen(
+                              Effect.map(Clock.currentTimeMillis, (now) =>
+                                Option.some(now + 60_000),
+                              ),
+                            ),
                           ),
-                        ),
-                    ),
-                  );
+                      ),
+                    );
 
                   return {
                     lanes: [
@@ -952,7 +957,7 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                               }).pipe(
                                 Effect.provide(context),
                                 Effect.mapError(failure),
-                                Effect.andThen(deadline),
+                                Effect.andThen(deadline(true)),
                               ),
                       },
                       {
@@ -966,7 +971,7 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                             : drainLifecyclePublications(storage).pipe(
                                 Effect.provide(context),
                                 Effect.mapError(failure),
-                                Effect.andThen(deadline),
+                                Effect.andThen(deadline()),
                               ),
                       },
                     ],

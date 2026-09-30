@@ -12,6 +12,8 @@ import { CloudflareThreadClient } from "../src/CloudflareThreadClient.ts";
 import * as DueQueue from "../src/internal/due-queue.ts";
 import {
   approvalDefinition,
+  bookDefinition,
+  bookToolHolds,
   plannerDefinition,
   submitOptions,
   maintenanceClocks,
@@ -41,6 +43,7 @@ import {
   publicationResources,
   failedLifecycleThreads,
   lifecycleBatches,
+  lifecyclePublicationControls,
 } from "./publication-fixture.ts";
 
 const namespace = "PUBLICATIONS";
@@ -83,7 +86,10 @@ const generation = (thread: string) =>
 
 const submit = (
   thread: string,
-  definition: typeof plannerDefinition | typeof approvalDefinition = plannerDefinition,
+  definition:
+    | typeof plannerDefinition
+    | typeof approvalDefinition
+    | typeof bookDefinition = plannerDefinition,
 ) =>
   runClient(
     Effect.gen(function* () {
@@ -130,6 +136,8 @@ const withThread = (
           failedLifecycleThreads.delete(thread);
           lifecycleBatches.delete(thread);
           modelRequestHolds.delete(thread);
+          bookToolHolds.delete(thread);
+          lifecyclePublicationControls.delete(thread);
           publicationControls.delete(thread);
           publicationResources.delete(thread);
           maintenanceClocks.delete(thread);
@@ -200,21 +208,47 @@ describe("durable host publication", () => {
     }, true));
 
   // Regression: #713 deferred the entire start prefix until native execution settled.
-  // Final-state publication checks cannot observe this gap while a provider is still running.
-  it("publishes ordered start progress during a long native run, then its settlement", () =>
+  // a87f948f then rescheduled empty start waves for undrainable canonical Tool intent.
+  // Hold the Tool and delay acknowledgement to expose that suffix before the deadline check.
+  it("publishes start progress, then stays dormant during a held tool until settlement", () =>
     withThread(async (thread, _now, advance) => {
       const entered = latch();
       const release = latch();
+      const acknowledge = latch();
 
-      modelRequestHolds.set(
+      bookToolHolds.set(
         thread,
         Effect.sync(entered.resolve).pipe(Effect.andThen(Effect.promise(() => release.promise))),
       );
-      await submit(thread);
+      lifecyclePublicationControls.set(thread, { release: acknowledge.promise });
+      await submit(thread, bookDefinition);
       const running = alarm(thread);
+      const interrupted = running.catch(() => undefined);
+
+      const startLane = () =>
+        runInDurableObject(stub(thread), (_, state) =>
+          DueQueue.make(state.storage)
+            .read()
+            .find((row) => row.id === DueQueue.LifecycleStart),
+        );
+
+      let dormantObserved = false;
 
       try {
         await entered.promise;
+        acknowledge.resolve();
+
+        const prepared = await runInDurableObject(stub(thread), (_, state) =>
+          Schema.decodeUnknownSync(Schema.Struct({ prepared: Schema.Natural }))(
+            state.storage.sql
+              .exec(
+                "SELECT COUNT(*) AS prepared FROM effect_agent_canonical_records WHERE json_extract(record_json, '$.payload._tag') = 'ToolCallPrepared'",
+              )
+              .one(),
+          ),
+        );
+
+        expect(prepared.prepared).toBe(1);
         await vi.waitFor(
           () => {
             expect((lifecycleBatches.get(thread) ?? []).flat().map((p) => p.fact._tag)).toEqual([
@@ -230,12 +264,25 @@ describe("durable host publication", () => {
             true,
           );
         });
+        await vi.waitFor(async () => expect((await startLane())?.dueAt).toBeNull());
+        dormantObserved = true;
+        const dormant = await startLane();
+
         await advance(15_000);
+        expect(await startLane()).toEqual(dormant);
         expect(await allSettled(thread, namespace)()).toBe(false);
         expect((lifecycleBatches.get(thread) ?? []).flat()).toHaveLength(3);
       } finally {
+        acknowledge.resolve();
         release.resolve();
-        await running;
+        if (dormantObserved) await running;
+        else {
+          // A broken immediate continuation must not strand cleanup at the frozen event clock.
+          await runInDurableObject(stub(thread), (_, state) =>
+            state.abort("failed start-publication dormancy assertion"),
+          ).catch(() => undefined);
+          await interrupted;
+        }
       }
       await quiesce(thread);
       const batches = lifecycleBatches.get(thread) ?? [];

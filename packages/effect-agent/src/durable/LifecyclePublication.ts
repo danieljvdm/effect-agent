@@ -169,6 +169,15 @@ export interface LifecyclePublicationStorage {
     timeoutMillis: number,
   ) => Effect.Effect<boolean, LifecyclePublicationError>;
   readonly pendingDeadline: Effect.Effect<Option.Option<number>, LifecyclePublicationError>;
+  /**
+   * Deadline for `pending(..., { retainedOnly: true })`, excluding unmaterialized source facts.
+   * Source-backed stores provide this when `pendingDeadline` also includes source intent.
+   * Otherwise `pendingDeadline` already describes retained work.
+   */
+  readonly retainedPendingDeadline?: Effect.Effect<
+    Option.Option<number>,
+    LifecyclePublicationError
+  >;
   /** Explicit operator retry after repairing a parked owner's destination. */
   readonly retryParked: (
     ownerThreadId: ThreadId,

@@ -817,9 +817,12 @@ export const bookTools = Toolkit.make(BookTool);
 /** Lose the RPC reply after the external action, without claiming a safe-to-retry failure. */
 export const lostBookReplies = new Set<string>();
 
+export const bookToolHolds = new Map<string, Effect.Effect<void>>();
+
 export const bookToolLayer = bookTools.toLayer({
   book: ({ ref }) =>
     Effect.gen(function* () {
+      yield* bookToolHolds.get(ref) ?? Effect.void;
       const confirmation = `confirmed-${ref}`;
 
       recordSupplierCall("book", ref, confirmation);

@@ -2180,6 +2180,7 @@ const makeJournal = (
           ...lifecycle,
           storage: {
             ...lifecycle.storage,
+            retainedPendingDeadline: lifecycle.storage.pendingDeadline,
             pendingDeadline: state.read(
               Effect.gen(function* () {
                 const deadline = yield* lifecycle.storage.pendingDeadline;
