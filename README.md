@@ -123,6 +123,7 @@ Use this in place of the earlier `BunRuntime.runMain` call.
 - [Cloudflare travel planner](examples/travel-planner/) and the [PR reviewer](packages/pr-review/README.md).
 - [Browser speed lab](examples/browser-speed/) — chat-driven browser tasks with independent verification and a timing waterfall.
 
+Read [the runtime model](docs/concepts/runtime-model.md) for turn, ownership, and wake rules.
 Start with the [getting-started guide](docs/guide/getting-started.md), or explore the
 [package map](docs/reference/packages.md#capability-inventory) and
 [deployment guide](docs/guide/operations.md#authorization-and-isolation).
