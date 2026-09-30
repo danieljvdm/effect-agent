@@ -68,6 +68,8 @@ export class ModelCallUsage extends Schema.Class<ModelCallUsage>(
   pricingStatus: Schema.optionalKey(Schema.Literals(["estimated", "unknown"])),
   inputTokens: InputTokenUsage,
   outputTokens: OutputTokenUsage,
+  /** Observed hosted web searches; excludes OpenAI page/find actions. Absent in legacy records. */
+  webSearchCalls: Schema.optionalKey(Schema.Natural),
   costMicrousd: Schema.Natural,
 }) {}
 
@@ -80,6 +82,8 @@ export class RunTotals extends Schema.Class<RunTotals>("@effect-agent/core/RunTo
   modelCalls: Schema.Natural,
   inputTokens: Schema.Natural,
   outputTokens: Schema.Natural,
+  /** Observed hosted web searches; excludes OpenAI page/find actions. Absent in legacy records. */
+  webSearchCalls: Schema.optionalKey(Schema.Natural),
   costMicrousd: Schema.Natural,
   usageStatus: Schema.optionalKey(UsageCompleteness),
   pricingStatus: Schema.optionalKey(UsageCompleteness),
@@ -104,6 +108,7 @@ export class ChildRunUsage extends Schema.Class<ChildRunUsage>("@effect-agent/co
 export const emptyRunTotals = (): RunTotals =>
   RunTotals.make({
     modelCalls: 0,
+    webSearchCalls: 0,
     inputTokens: 0,
     outputTokens: 0,
     costMicrousd: 0,
@@ -133,6 +138,8 @@ export class ModelUsageGroup extends Schema.Class<ModelUsageGroup>(
   modelCalls: Schema.Natural.check(Schema.isGreaterThan(0)),
   inputTokens: InputTokenUsage,
   outputTokens: OutputTokenUsage,
+  /** Observed hosted web searches; excludes OpenAI page/find actions. Absent in legacy records. */
+  webSearchCalls: Schema.optionalKey(Schema.Natural),
   costMicrousd: Schema.Natural,
 }) {}
 
@@ -140,6 +147,8 @@ const RunUsageSummaryFields = Schema.Struct({
   modelCalls: Schema.Natural,
   inputTokens: InputTokenUsage,
   outputTokens: OutputTokenUsage,
+  /** Observed hosted web searches; excludes OpenAI page/find actions. Absent in legacy records. */
+  webSearchCalls: Schema.optionalKey(Schema.Natural),
   costMicrousd: Schema.Natural,
   byModel: Schema.Array(ModelUsageGroup),
   /** Coverage of recorded calls only; interruptions can make the Run less complete. */
@@ -162,6 +171,11 @@ const RunUsageSummaryFields = Schema.Struct({
 
       return (
         new Set(identities).size === identities.length &&
+        (summary.webSearchCalls === undefined ||
+          hasAdditiveTotal(
+            summary.webSearchCalls,
+            summary.byModel.map((group) => group.webSearchCalls ?? 0),
+          )) &&
         hasAdditiveTotal(
           summary.modelCalls,
           summary.byModel.map((group) => group.modelCalls),
@@ -219,6 +233,7 @@ interface MutableUsageGroup {
   readonly serviceTier?: string | undefined;
   readonly pricingVersion?: string | undefined;
   modelCalls: number;
+  webSearchCalls: number | undefined;
   inputTokens: {
     total: number;
     uncached: number;
@@ -267,6 +282,7 @@ export const sumRunTotals = Effect.fn("sumRunTotals")(function* (
   contributions: ReadonlyArray<RunTotals>,
 ): Effect.fn.Return<RunTotals, UsageAggregationError> {
   let modelCalls = 0;
+  let webSearchCalls: number | undefined = 0;
   let inputTokens = 0;
   let outputTokens = 0;
   let costMicrousd = 0;
@@ -282,6 +298,13 @@ export const sumRunTotals = Effect.fn("sumRunTotals")(function* (
     );
 
     modelCalls = yield* checkedAdd("modelCalls", modelCalls, value.modelCalls);
+    if (value.webSearchCalls === undefined && value.modelCalls > 0) webSearchCalls = undefined;
+    else if (webSearchCalls !== undefined)
+      webSearchCalls = yield* checkedAdd(
+        "webSearchCalls",
+        webSearchCalls,
+        value.webSearchCalls ?? 0,
+      );
     inputTokens = yield* checkedAdd("inputTokens", inputTokens, value.inputTokens);
     outputTokens = yield* checkedAdd("outputTokens", outputTokens, value.outputTokens);
     costMicrousd = yield* checkedAdd("costMicrousd", costMicrousd, value.costMicrousd);
@@ -316,6 +339,7 @@ export const sumRunTotals = Effect.fn("sumRunTotals")(function* (
 
   return RunTotals.make({
     modelCalls,
+    ...(webSearchCalls === undefined ? {} : { webSearchCalls }),
     inputTokens,
     outputTokens,
     costMicrousd,
@@ -329,6 +353,7 @@ export const sumRunTotals = Effect.fn("sumRunTotals")(function* (
 export const runTotalsFromSummary = (summary: RunUsageSummary): RunTotals =>
   RunTotals.make({
     modelCalls: summary.modelCalls,
+    ...(summary.webSearchCalls === undefined ? {} : { webSearchCalls: summary.webSearchCalls }),
     inputTokens: summary.inputTokens.total,
     outputTokens: summary.outputTokens.total,
     costMicrousd: summary.costMicrousd,
@@ -363,6 +388,10 @@ export const summarizeModelUsage = Effect.fn("summarizeModelUsage")(function* (
   const outputTokens = initial === undefined ? emptyOutputTokens() : { ...initial.outputTokens };
   const groups = new Map<string, MutableUsageGroup>();
   let modelCalls = initial?.modelCalls ?? 0;
+
+  let webSearchCalls =
+    initial === undefined || initial.modelCalls === 0 ? 0 : initial.webSearchCalls;
+
   let costMicrousd = initial?.costMicrousd ?? 0;
   const hasSeedCalls = modelCalls > 0;
 
@@ -387,6 +416,7 @@ export const summarizeModelUsage = Effect.fn("summarizeModelUsage")(function* (
 
     groups.set(key, {
       ...group,
+      webSearchCalls: group.webSearchCalls,
       inputTokens: { ...group.inputTokens },
       outputTokens: { ...group.outputTokens },
     });
@@ -398,6 +428,10 @@ export const summarizeModelUsage = Effect.fn("summarizeModelUsage")(function* (
     allPricingUnknown &&= call.pricingStatus !== "estimated";
     allPricingComplete &&= call.pricingStatus === "estimated";
     modelCalls = yield* checkedAdd("modelCalls", modelCalls, 1);
+    webSearchCalls =
+      webSearchCalls === undefined || call.webSearchCalls === undefined
+        ? undefined
+        : yield* checkedAdd("webSearchCalls", webSearchCalls, call.webSearchCalls);
     inputTokens.total = yield* checkedAdd(
       "inputTokens.total",
       inputTokens.total,
@@ -453,6 +487,7 @@ export const summarizeModelUsage = Effect.fn("summarizeModelUsage")(function* (
         ...(call.serviceTier === undefined ? {} : { serviceTier: call.serviceTier }),
         ...(call.pricingVersion === undefined ? {} : { pricingVersion: call.pricingVersion }),
         modelCalls: 0,
+        webSearchCalls: 0,
         inputTokens: emptyInputTokens(),
         outputTokens: emptyOutputTokens(),
         costMicrousd: 0,
@@ -460,6 +495,10 @@ export const summarizeModelUsage = Effect.fn("summarizeModelUsage")(function* (
       groups.set(key, group);
     }
     group.modelCalls = yield* checkedAdd("byModel.modelCalls", group.modelCalls, 1);
+    group.webSearchCalls =
+      group.webSearchCalls === undefined || call.webSearchCalls === undefined
+        ? undefined
+        : yield* checkedAdd("byModel.webSearchCalls", group.webSearchCalls, call.webSearchCalls);
     group.inputTokens.total = yield* checkedAdd(
       "byModel.inputTokens.total",
       group.inputTokens.total,
@@ -504,6 +543,7 @@ export const summarizeModelUsage = Effect.fn("summarizeModelUsage")(function* (
 
   return RunUsageSummary.make({
     modelCalls,
+    ...(webSearchCalls === undefined ? {} : { webSearchCalls }),
     inputTokens: InputTokenUsage.make(inputTokens),
     outputTokens: OutputTokenUsage.make(outputTokens),
     costMicrousd,
@@ -520,6 +560,7 @@ export const summarizeModelUsage = Effect.fn("summarizeModelUsage")(function* (
         ...(group.serviceTier === undefined ? {} : { serviceTier: group.serviceTier }),
         ...(group.pricingVersion === undefined ? {} : { pricingVersion: group.pricingVersion }),
         modelCalls: group.modelCalls,
+        ...(group.webSearchCalls === undefined ? {} : { webSearchCalls: group.webSearchCalls }),
         inputTokens: InputTokenUsage.make(group.inputTokens),
         outputTokens: OutputTokenUsage.make(group.outputTokens),
         costMicrousd: group.costMicrousd,

@@ -111,6 +111,17 @@ export const toolReplayContracts = Effect.fn("AgentRegistration.toolReplayContra
           name: tool.name,
           contract: {
             version,
+            ...(Tool.isProviderDefined(tool)
+              ? {
+                  provider: {
+                    id: tool.id,
+                    providerName: tool.providerName,
+                    args: Schema.decodeUnknownSync(Schema.Json)(tool.args ?? null),
+                    requiresHandler: tool.requiresHandler,
+                  },
+                  readonly: Context.get(tool.annotations, Tool.Readonly),
+                }
+              : {}),
             parameters: jsonSchema(tool.parametersSchema),
             success: jsonSchema(tool.successSchema),
             failure: jsonSchema(tool.failureSchema),

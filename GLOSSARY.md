@@ -111,7 +111,8 @@ aggregate model-usage and estimated-cost summary; joined Submissions do not dupl
 
 **Tool**  
 An Effect AI model-visible operation defined by Effect Schemas for parameters, success, and typed
-failure. A Tool definition is pure. Its Handler is provided through an Effect AI Toolkit Layer.
+failure. A Tool definition is pure. Application Handlers are provided through an Effect AI Toolkit
+Layer; provider-executed Tools run remotely and their outcomes belong to the model response.
 
 **Toolkit**  
 An Effect AI collection of Tools plus the handler requirements needed to execute them.

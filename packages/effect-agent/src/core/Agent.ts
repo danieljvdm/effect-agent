@@ -6,7 +6,7 @@ import {
   type Model,
   type Prompt,
   Tool,
-  type Toolkit,
+  Toolkit,
 } from "effect/unstable/ai";
 
 import type { AgentInputError, AgentOutputError, AgentRunDispositionError } from "./AgentError.ts";
@@ -569,9 +569,23 @@ export function make(
     completionNames.add(declaration.tool);
   }
 
+  const tools = Object.values(options.toolkit.tools);
+
+  const readonlyTools = tools.map((tool) =>
+    Tool.isProviderDefined(tool) &&
+    !tool.requiresHandler &&
+    ["web_search", "web_search_preview", "file_search"].includes(tool.providerName)
+      ? tool.annotate(Tool.Readonly, true)
+      : tool,
+  );
+
+  const toolkit = readonlyTools.some((tool, index) => tool !== tools[index])
+    ? Toolkit.make(...readonlyTools)
+    : options.toolkit;
+
   return Object.freeze({
     ...options,
-    toolkit: withUpdateTool(options.toolkit, options.updates),
+    toolkit: withUpdateTool(toolkit, options.updates),
     policy: AgentPolicy.resolve(options.policy),
     policyOverrides: Object.freeze({ ...options.policy }),
     toolExposure:

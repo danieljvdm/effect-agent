@@ -40,6 +40,13 @@ export class Match extends Schema.Class<Match>("@effect-agent/capabilities/ToolD
   ...Descriptor.fields,
   parameters: Schema.Json,
   success: Schema.Json,
+  /** Hosted declaration; parameters/success are null when no application handler is required. */
+  provider: Schema.optionalKey(
+    Schema.Struct({
+      providerName: Schema.NonEmptyString,
+      requiresHandler: Schema.Boolean,
+    }),
+  ),
 }) {}
 
 /**
@@ -297,18 +304,25 @@ export const make = <Failure extends Schema.Top = typeof Schema.Never, Requireme
                 message: "Search returned an entry outside the visible catalogue",
               });
             }
-            if (Tool.isProviderDefined(entry.tool)) {
-              return yield* ToolDiscoveryError.make({
-                reason: "invalid-schema",
-                message: "Provider-defined Tools do not expose application handler documentation",
-              });
-            }
+            const tool = entry.tool;
 
             const schemas = yield* Effect.try({
-              try: () => ({
-                parameters: Tool.getJsonSchema(entry.tool),
-                success: Tool.getJsonSchemaFromSchema(entry.tool.successSchema),
-              }),
+              try: () =>
+                Tool.isProviderDefined(tool)
+                  ? {
+                      parameters: tool.requiresHandler ? Tool.getJsonSchema(tool) : null,
+                      success: tool.requiresHandler
+                        ? Tool.getJsonSchemaFromSchema(tool.successSchema)
+                        : null,
+                      provider: {
+                        providerName: tool.providerName,
+                        requiresHandler: tool.requiresHandler,
+                      },
+                    }
+                  : {
+                      parameters: Tool.getJsonSchema(tool),
+                      success: Tool.getJsonSchemaFromSchema(tool.successSchema),
+                    },
               catch: () =>
                 ToolDiscoveryError.make({
                   reason: "invalid-schema",

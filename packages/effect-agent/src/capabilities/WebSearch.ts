@@ -80,6 +80,21 @@ export interface Options<T extends Tool.AnyProviderDefined = Tool.AnyProviderDef
   readonly maxOutputBytes?: number;
 }
 
+/** Place hosted search in the agent's own model call; no handler or search model Layer is needed.
+ * Citations stay in native text annotations and sources. Configure the provider tool at the host.
+ */
+export const native = <T extends Tool.AnyProviderDefined>(options: Pick<Options<T>, "tool">) => {
+  if (
+    !Tool.isProviderDefined(options.tool) ||
+    options.tool.requiresHandler ||
+    !["web_search", "web_search_preview"].includes(options.tool.providerName)
+  ) {
+    throw new Error("WebSearch.native requires a provider-executed web_search tool");
+  }
+
+  return Toolkit.make(options.tool);
+};
+
 const boundedInteger = (name: string, value: number, maximum: number): number => {
   if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
     throw new Error(`WebSearch ${name} must be an integer between 1 and ${maximum}`);

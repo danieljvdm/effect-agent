@@ -122,7 +122,11 @@ const finalParts = (text: string): ReadonlyArray<Response.StreamPartEncoded> => 
   { type: "finish", reason: "stop", usage },
 ];
 
-const toolCall = (id: string, name: string, params: unknown): Response.StreamPartEncoded => ({
+const toolCall = (
+  id: string,
+  name: string,
+  params: unknown,
+): Extract<Response.StreamPartEncoded, { type: "tool-call" }> => ({
   type: "tool-call",
   id,
   name,

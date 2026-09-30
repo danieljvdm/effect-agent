@@ -5258,6 +5258,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           );
 
           return RunUsageSummary.make({
+            ...(legacyCalls === 0 && detailed.webSearchCalls !== undefined
+              ? { webSearchCalls: detailed.webSearchCalls }
+              : {}),
             modelCalls,
             inputTokens: InputTokenUsage.make({
               total: inputTokens,

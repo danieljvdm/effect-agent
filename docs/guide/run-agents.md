@@ -290,9 +290,10 @@ Set `policy: { restartOnJoinedInput: true }` on an agent to let eligible joined 
 replace a running model call. The first call starts immediately. The runtime cancels
 only the disposable model stream, before any response commits or application tool
 starts, and restarts with the combined input. It permits two replacements per run,
-including across durable recovery; later joins use the ordinary seams. Calls exposing
-provider-defined tools keep seam steering because remote execution may precede streamed
-evidence. Joining authority, receipts, and settlement are unchanged.
+including across durable recovery; later joins use the ordinary seams. Calls exposing hosted
+tools without `Tool.Readonly` keep seam steering because remote execution may precede streamed
+evidence. Hosted web search and file search are read-only; they retain restart. Joining authority,
+receipts, and settlement are unchanged.
 
 Streaming clients must clear text and reasoning drafts for the `turnId` in a
 `ModelRestarted` event. Its reason is `joined-input`; the replacement has a new turn ID.
@@ -413,6 +414,9 @@ settlements retain their richer per-model `usageSummary` for the Run's own calls
 
 A cost estimator receives the configured binding name in `request.model` and the actual
 provider-reported identity in `request.response`. Use the latter for response-sensitive pricing.
+`request.webSearchCalls` counts observed hosted web-search calls for adding the provider search fee;
+Run totals and durable per-model summaries retain `webSearchCalls`. It excludes OpenAI page/find
+actions and unobserved work, and legacy records may omit it.
 `request.finishMetadata` carries native Effect AI finish metadata only during estimation; the
 engine never persists provider HTTP details or raw metadata in accounting records. A summarizer
 uses the same estimator with `purpose: "summary"`.

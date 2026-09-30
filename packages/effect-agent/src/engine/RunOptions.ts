@@ -348,6 +348,8 @@ export type RunCostEstimateValue = number | RunCostEstimate;
 
 /** Model identity presented beside the legacy raw-usage estimator argument. */
 export interface RunCostEstimateRequest {
+  /** Observed hosted web search calls, separately billed from tokens. */
+  readonly webSearchCalls?: number | undefined;
   readonly provider: string;
   /** Configured binding identity; only response.model identifies the returned model. */
   readonly model: string;
@@ -816,6 +818,7 @@ export type RunTurnResumeSettledCall = typeof RunTurnResumeSettledCallSchema.Typ
 export const RunResumeUsageSchema = Schema.Struct({
   ...RunPolicyUsage.fields,
   modelCalls: Schema.Natural,
+  webSearchCalls: Schema.optionalKey(Schema.Natural),
   inputTokens: Schema.Natural,
   outputTokens: Schema.Natural,
   lastInputTokens: Schema.Natural,

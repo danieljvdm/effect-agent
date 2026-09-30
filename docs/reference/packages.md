@@ -164,7 +164,7 @@ implementations.
 | Run generated JavaScript                   | [Code Mode](../guide/code-mode)                                   | Authorized tools and an isolated executor                                |
 | Run trusted local commands                 | [Sandbox execution](../guide/sandbox)                             | Executable, environment, output and time limits                          |
 | Capture, crawl, or interact with pages     | [Browser tools](../guide/browser)                                 | Browser binding or credentials, target policy                            |
-| Search the web                             | [Web search](../guide/tools#web-search)                           | Native search tool and search-model Layer                                |
+| Search the web                             | [Web search](../guide/tools#web-search)                           | Hosted search toolkit or nested search-model Layer                       |
 | Use Cloudflare AI Gateway                  | [AI Gateway](../platforms/cloudflare#ai-gateway)                  | Account, gateway, credentials, upstream Effect client                    |
 | Call tools on an MCP server                | [MCP servers](../guide/tools#mcp)                                 | Transport, `HttpClient` or process spawner, bounds                       |
 

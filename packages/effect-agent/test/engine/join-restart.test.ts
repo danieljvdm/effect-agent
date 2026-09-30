@@ -7,7 +7,7 @@ import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
 import type { RunEvent } from "effect-agent/run-event";
 import type { RunInputCommand } from "effect-agent/run-options";
 import { ThreadHistory } from "effect-agent/thread-history";
-import { LanguageModel, Model, type Response, Toolkit } from "effect/unstable/ai";
+import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
 // Requested engine seam: an in-flight joined input must replace disposable drafts,
 // retain reported usage and stop restarting after two cancellations in the same Run.
@@ -75,7 +75,13 @@ it.live("restarts disposable calls twice, discards their drafts and then drains 
           input: Schema.String,
           output: Schema.String,
           instructions: "Answer all input.",
-          toolkit: Toolkit.empty,
+          toolkit: Toolkit.make(
+            Tool.providerDefined({
+              id: "test.web_search",
+              customName: "HostedSearch",
+              providerName: "web_search",
+            })(undefined),
+          ),
           policy: { maxTurns: 3, restartOnJoinedInput: true },
         }),
         model,
@@ -230,6 +236,98 @@ it.live("charges aborted usage before admitting a replacement against the cost b
 
       expect(Exit.isFailure(result)).toBe(true);
       expect(calls).toBe(1);
+    }),
+  ),
+);
+
+it.live("keeps side-effecting hosted calls non-cancellable on joined input", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const joined = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let calls = 0;
+      let cancelled = 0;
+
+      const tools = Toolkit.make(
+        Tool.providerDefined({
+          id: "test.code_interpreter",
+          customName: "HostedCode",
+          providerName: "code_interpreter",
+        })(undefined),
+      );
+
+      const model = Model.make(
+        "scripted",
+        "hosted-side-effect",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: () => {
+              calls++;
+
+              return Stream.fromEffect(
+                Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+              ).pipe(
+                Stream.drain,
+                Stream.concat(
+                  Stream.fromIterable<Response.StreamPartEncoded>([
+                    { type: "text-start", id: "answer" },
+                    { type: "text-delta", id: "answer", delta: '"done"' },
+                    { type: "text-end", id: "answer" },
+                    {
+                      type: "finish",
+                      reason: "stop",
+                      usage: { inputTokens: {}, outputTokens: {} },
+                    },
+                  ]),
+                ),
+                Stream.onExit((exit) =>
+                  Effect.sync(() => {
+                    if (Exit.isFailure(exit)) cancelled++;
+                  }),
+                ),
+              );
+            },
+          }),
+        ),
+      );
+
+      const agent = Agent.withModel(
+        Agent.make("hosted-side-effect", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Answer.",
+          toolkit: tools,
+          policy: { restartOnJoinedInput: true },
+        }),
+        model,
+      );
+
+      const running = yield* AgentRuntime.run(agent, "first", {
+        input: { awaitJoin: Deferred.await(joined), drain: () => Effect.succeed([]) },
+      }).pipe(
+        Effect.provide([
+          ThreadHistory.layer,
+          Layer.succeed(IdGenerator, {
+            nextThreadId: Effect.succeed(ThreadId.make("hosted-side-thread")),
+            nextRunId: Effect.succeed(RunId.make("hosted-side-run")),
+            nextTurnId: Effect.succeed(TurnId.make("hosted-side-turn")),
+          }),
+        ]),
+        Effect.forkScoped,
+      );
+
+      yield* Deferred.await(entered);
+      yield* Deferred.succeed(joined, undefined);
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(release, undefined);
+      const result = yield* Fiber.join(running);
+
+      expect(result.output).toBe("done");
+      expect(calls).toBe(1);
+      expect(cancelled).toBe(0);
     }),
   ),
 );

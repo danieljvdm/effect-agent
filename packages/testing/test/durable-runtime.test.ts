@@ -1,5 +1,6 @@
 import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
+import { OpenAiTool } from "@effect/ai-openai";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import {
@@ -606,6 +607,125 @@ layer(progressWaitTestLayer)("#94 DurableAgentRuntime progress waits", (it) => {
 });
 
 layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
+  // Requested hosted-search recovery seam: interruption before the response commit, and
+  // a crash after it, must neither replay provider results nor duplicate a local effect.
+  it.effect("recovers native hosted search before and after response commit", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const entered = yield* Deferred.make<void>();
+      const hosted = OpenAiTool.WebSearch({ search_context_size: "low" });
+      const tools = Toolkit.make(hosted, Tool.make("deliver", { success: Schema.String }));
+
+      const definition = Agent.make("native-hosted-recovery", {
+        input: Schema.String,
+        output: Schema.String,
+        instructions: "Search, then deliver.",
+        toolkit: tools,
+        policy: { maxTurns: 3, maxToolCalls: 3 },
+      });
+
+      let requests = 0;
+      let deliveries = 0;
+      const prompts: Array<Prompt.Prompt> = [];
+      const action = { type: "search", queries: ["weather today"] };
+
+      const parts: ReadonlyArray<Response.StreamPartEncoded> = [
+        {
+          type: "tool-call",
+          id: "ws_1",
+          name: hosted.name,
+          params: { action },
+          providerExecuted: true,
+        },
+        {
+          type: "tool-result",
+          id: "ws_1",
+          name: hosted.name,
+          result: { action, status: "completed" },
+          isFailure: false,
+          providerExecuted: true,
+        },
+        {
+          type: "tool-call",
+          id: "deliver_1",
+          name: "deliver",
+          params: {},
+          providerExecuted: false,
+        },
+        { type: "finish", reason: "tool-calls", usage },
+      ];
+
+      const model = Model.make(
+        "scripted",
+        "hosted-recovery",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: (request) => {
+              prompts.push(request.prompt);
+              requests++;
+              if (requests === 1)
+                return Stream.fromIterable(parts.slice(0, 2)).pipe(
+                  Stream.concat(
+                    Stream.fromEffect(
+                      Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+                    ),
+                  ),
+                );
+
+              return Stream.fromIterable(requests === 2 ? parts : finalParts('"delivered"'));
+            },
+          }),
+        ),
+      );
+
+      const agent = Agent.withModel(definition, model);
+
+      const handlers = tools.toLayer({
+        deliver: () =>
+          Effect.sync(() => {
+            deliveries++;
+
+            return "sent";
+          }),
+      });
+
+      const receipt = yield* runtime.submit(
+        agent,
+        "weather",
+        submitOptions("native-hosted-recovery", "first"),
+      );
+
+      const process = runtime.processThread(agent, receipt.threadId).pipe(Effect.provide(handlers));
+      const worker = yield* process.pipe(Effect.forkChild);
+
+      yield* Deferred.await(entered);
+      yield* Fiber.interrupt(worker);
+      yield* runtime.runRecovery();
+      yield* armFailpoint("turn:after-response-append");
+      const crashed = yield* process.pipe(Effect.exit, Effect.ensuring(clearFailpoint));
+
+      expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
+      expect(deliveries).toBe(0);
+      const settled = yield* process;
+
+      expect(settled[0]).toMatchObject({
+        outcome: "completed",
+        usageSummary: { webSearchCalls: 1, modelCalls: 2 },
+      });
+      expect(requests).toBe(3);
+      expect(deliveries).toBe(1);
+      expect(JSON.stringify(prompts[2])).toContain("ws_1");
+      const payloads = (yield* readLog(receipt.threadId)).map(({ record }) => record.payload);
+
+      expect(payloads.filter((payload) => payload._tag === "ModelResponseRecorded")).toHaveLength(
+        2,
+      );
+      expect(payloads.filter((payload) => payload._tag === "ToolCallSettled")).toHaveLength(1);
+    }),
+  );
+
   it.effect("does not grant suspension authority to structurally forged pending errors", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;

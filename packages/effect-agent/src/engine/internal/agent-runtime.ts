@@ -392,6 +392,7 @@ export const AgentResultSchema = <Output extends Schema.Top>(output: Output) =>
 const runTotalsOf = (context: RunContext): RunTotals =>
   RunTotals.make({
     modelCalls: context.modelCalls,
+    ...(context.webSearchCalls === undefined ? {} : { webSearchCalls: context.webSearchCalls }),
     inputTokens: context.inputTokens,
     outputTokens: context.outputTokens,
     costMicrousd: context.costMicrousd,
@@ -560,6 +561,7 @@ interface RunContext {
   usageStatus: typeof UsageCompleteness.Type;
   pricingStatus: typeof UsageCompleteness.Type;
   unobservedModelCalls: number;
+  webSearchCalls: number | undefined;
   readonly childUsage: Map<RunId, Effect.Effect<RunUsageReport>>;
   readonly liveChildren: Set<RunId>;
   consecutiveToolFailures: number;
@@ -1439,6 +1441,7 @@ const decodeResumeUsage = Effect.fn("AgentRuntime.decodeResumeUsage")((input: un
               "unobservedModelCalls",
               "children",
               "modelRestarts",
+              "webSearchCalls",
             ] as const
           )
             .map((key) => [key, read(key, true)])
@@ -3310,6 +3313,12 @@ interface ConsumedUsage {
   readonly modelUsage: ModelCallUsage;
 }
 
+const isWebSearchAction = Schema.is(
+  Schema.Struct({
+    action: Schema.Struct({ type: Schema.Literal("search") }),
+  }),
+);
+
 const ProviderUsage = Schema.Struct({
   inputTokens: Schema.Struct({
     uncached: Schema.optional(Schema.Natural),
@@ -3339,7 +3348,10 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
   toolCallCount: number,
   turn: number,
   options: RunOptions<HookError, HookRequirements>,
-  response: Pick<RunCostEstimateRequest, "response" | "finishMetadata" | "purpose"> = {},
+  response: Pick<
+    RunCostEstimateRequest,
+    "response" | "finishMetadata" | "purpose" | "webSearchCalls"
+  > = {},
 ): Effect.Effect<
   ConsumedUsage,
   AgentPolicyError | ModelProtocolError | HookError,
@@ -3352,6 +3364,8 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
         message: "A completed model response did not report usage",
       });
     }
+
+    const webSearchCalls = yield* decodeProviderUsageTotal(response.webSearchCalls ?? 0);
 
     const providerUsage = yield* Schema.decodeEffect(ProviderUsage)(usage).pipe(
       Effect.mapError(() => invalidProviderUsage()),
@@ -3457,7 +3471,13 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
     const estimate =
       options.estimateCostMicrousd === undefined
         ? 0
-        : yield* options.estimateCostMicrousd(usage, { provider, model, usage, ...response });
+        : yield* options.estimateCostMicrousd(usage, {
+            provider,
+            model,
+            usage,
+            ...response,
+            webSearchCalls,
+          });
 
     const costMicrousd = typeof estimate === "number" ? estimate : estimate.costMicrousd;
 
@@ -3488,6 +3508,7 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
     }
 
     const modelUsage = ModelCallUsage.make({
+      webSearchCalls,
       provider,
       model,
       ...(response.response === undefined
@@ -3526,6 +3547,11 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
 
     const modelCalls = yield* decodeProviderUsageTotal(context.modelCalls + 1);
 
+    const cumulativeWebSearchCalls =
+      context.webSearchCalls === undefined
+        ? undefined
+        : yield* decodeProviderUsageTotal(context.webSearchCalls + webSearchCalls);
+
     const cumulativeInputTokens = yield* decodeProviderUsageTotal(
       context.inputTokens + inputTokens,
     );
@@ -3555,6 +3581,7 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
       pricingStatus === "estimated" ? "complete" : "unknown",
     );
     context.modelCalls = modelCalls;
+    context.webSearchCalls = cumulativeWebSearchCalls;
     context.inputTokens = cumulativeInputTokens;
     context.outputTokens = cumulativeOutputTokens;
     context.lastInputTokens = inputTokens;
@@ -4861,6 +4888,12 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
       }
       const toolCallId = yield* decodeToolCallId(part.id);
       const tool = tools[part.name] as ToolUnion<Tools>;
+
+      if (Tool.isProviderDefined(tool) && !tool.requiresHandler && !part.providerExecuted) {
+        return yield* ModelProtocolError.make({
+          message: `Tool ${part.name} must execute at the provider`,
+        });
+      }
 
       const decoded = yield* Effect.result(
         decodeToolCallParameters<Tools>(tool, part.name, part.params, "model"),
@@ -6216,6 +6249,30 @@ const makeTurn = <
           return consumeUsage(agent, context, trace.usage, toolCallCount, turn, options, {
             response: trace.response,
             finishMetadata: trace.finishMetadata,
+            webSearchCalls: new Set(
+              trace.parts.flatMap((part) => {
+                if (
+                  (part.type !== "tool-call" && part.type !== "tool-result") ||
+                  !part.providerExecuted
+                )
+                  return [];
+                const tool = agent.definition.toolkit.tools[part.name];
+
+                if (
+                  tool === undefined ||
+                  !Tool.isProviderDefined(tool) ||
+                  !["web_search", "web_search_preview"].includes(tool.providerName)
+                )
+                  return [];
+
+                // OpenAI bills search actions, not opening/finding within returned pages.
+                // Preview tools carry the action on results rather than call parameters.
+                return !tool.id.startsWith("openai.") ||
+                  isWebSearchAction(part.type === "tool-call" ? part.params : part.result)
+                  ? [part.id]
+                  : [];
+              }),
+            ).size,
             purpose: "turn",
           }).pipe(
             withCallModel,
@@ -7092,13 +7149,15 @@ const makeTurn = <
 
       // Only the model stream is cancellable. It resolves no application Tools and
       // closes its waiter before continuation can commit a response or start a Handler.
-      // Provider-defined Tools may execute remotely before reporting a part: fail closed
-      // for the whole call when any are exposed.
+      // Hosted effects may happen before reporting a part. Only Tools explicitly
+      // annotated Readonly are safe to discard and repeat.
       const restartSignal =
         policy.restartOnJoinedInput === true &&
         context.modelRestarts < 2 &&
         (options.durability === undefined || options.durability.commitModelRestart !== undefined) &&
-        !Object.values(modelToolkit.tools).some(Tool.isProviderDefined)
+        !Object.values(modelToolkit.tools).some(
+          (tool) => Tool.isProviderDefined(tool) && !Context.get(tool.annotations, Tool.Readonly),
+        )
           ? options.input?.awaitJoin
           : undefined;
 
@@ -8248,6 +8307,10 @@ function streamWithCompletion<
             // canonical response records so token budgets and the compaction
             // trigger keep accounting across ownership changes.
             modelCalls: resumeUsage?.modelCalls ?? 0,
+            webSearchCalls:
+              resumeUsage === undefined || resumeUsage.modelCalls === 0
+                ? 0
+                : resumeUsage.webSearchCalls,
             modelRestarts: resumeUsage?.modelRestarts ?? 0,
             usageStatus:
               resumeUsage?.usageStatus ?? (resumeUsage === undefined ? "complete" : "unknown"),

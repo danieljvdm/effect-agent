@@ -168,8 +168,9 @@ asking the host to increase `maxResultBytes`.
 
 Byte overflow no longer emits `ToolDiscoveryError` with reason `limit-exceeded`. Invalid
 catalogues, invalid selected schemas, and custom-search failures still propagate as errors.
-Provider-defined tools are not ordinary callable schemas and cannot be documented by this
-capability.
+Hosted matches include `providerName` and `requiresHandler`. Remote-only tools return `null`
+for application parameter/result schemas; discovery still selects their native declarations.
+Provider configuration stays with the host and is not returned in discovery documentation.
 
 ### Supply application search
 
@@ -539,10 +540,40 @@ handling, and durable child recovery.
 
 ## Search the web {#web-search}
 
-`WebSearch.tool` is an ordinary Effect AI tool with a stable `{ query }` input and a result
-containing `text`, `sources`, and search-model token `usage`. Its handler uses a separately
-supplied LanguageModel and a native hosted search tool. The calling agent can use a different
-model or provider. Include `WebSearch.tool` in its toolkit, then provide this handler Layer:
+Use `WebSearch.native` to let the agent's own model search and answer in the same call:
+
+```ts twoslash
+import { WebSearch } from "effect-agent";
+import { OpenAiTool } from "@effect/ai-openai";
+
+const SearchTools = WebSearch.native({
+  tool: OpenAiTool.WebSearch({ search_context_size: "medium" }),
+});
+```
+
+Use `SearchTools` as the agent's toolkit or merge it with application tools. Supply the agent's
+normal model Layer; native search needs no handler or separate search model. The host fixes
+provider options. Citations remain in native assistant text annotations and source events;
+ask the model to include source URLs when projecting an answer through an application tool.
+Search content and citation URLs remain untrusted.
+
+Hosted calls and results are journaled with the model response and replayed without local
+execution. Hosted configuration participates in replay contracts. `web_search`,
+`web_search_preview`, and `file_search` are annotated `Tool.Readonly`, allowing joined input
+to restart disposable calls; other hosted tools keep restart disabled unless the host explicitly
+annotates them read-only. A lost or cancelled read request may run again and incur another charge.
+
+`usage.webSearchCalls` counts observed hosted web searches alongside tokens, excluding OpenAI
+page-open and in-page-find actions. The cost estimator receives the same per-call count as
+`request.webSearchCalls`; add the provider's search fee there. Missing legacy counts or unobserved interrupted work do not establish zero cost.
+With the pinned OpenAI adapter and `store: false`, subsequent calls omit hosted call/results
+and retain URL citation annotations on assistant text. Full stateless reconstruction of hosted
+search items is an upstream Effect gap.
+
+For a separately selected search model, keep the existing nested mode. `WebSearch.tool` is an
+ordinary application tool with `{ query }` input and a `text`, `sources`, and token `usage`
+result. Its handler uses a separately supplied LanguageModel. Include `WebSearch.tool` in the
+agent's toolkit, then provide this handler Layer:
 
 ```ts twoslash
 import { WebSearch } from "effect-agent";
@@ -590,9 +621,7 @@ the wrapper adds the `WebSearch.search` span without logging queries or response
 
 Search is separately billed. Returned token counts use `null` when unavailable and are **not**
 added to the parent Run's model usage or spending limit. Configure provider output limits and
-host billing controls. For search within the primary model call and its normal Run accounting,
-include the native `OpenAiTool.WebSearch` or `AnthropicTool.WebSearch_20250305` directly in the
-agent's toolkit instead. Both work with [Gateway client configuration](../platforms/cloudflare#ai-gateway).
+host billing controls. Both modes work with [Gateway client configuration](../platforms/cloudflare#ai-gateway).
 The ordinary WebSearch tool remains uncertain for recovery: an unresolved call is not replayed
 automatically after ownership loss.
 
