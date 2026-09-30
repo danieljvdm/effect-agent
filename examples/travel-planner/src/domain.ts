@@ -1,5 +1,6 @@
 import type { Effect } from "effect";
 import { Context, Schema } from "effect";
+import { ApprovalDecisionCommand } from "effect-agent/submission-ledger";
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
 
 import { ConnectOpenAi, OpenAiConnection } from "./credential-domain.ts";
@@ -342,6 +343,21 @@ export const PlannerActivity = Schema.Struct({
 
 export type PlannerActivity = typeof PlannerActivity.Type;
 
+export const ResearchPlan = Schema.Struct({ plan: Text.check(Schema.isMinLength(1)) });
+
+export const WorkerApprovalDecision = Schema.Struct({
+  submissionId: ApprovalDecisionCommand.fields.submissionId,
+  toolCallId: ApprovalDecisionCommand.fields.toolCallId,
+  decision: ApprovalDecisionCommand.fields.decision,
+});
+
+export const WorkerApproval = Schema.Struct({
+  submissionId: WorkerApprovalDecision.fields.submissionId,
+  toolCallId: WorkerApprovalDecision.fields.toolCallId,
+  ...ResearchPlan.fields,
+  expiresAt: Schema.Natural,
+});
+
 export const EditorActivity = Schema.Struct({
   id: Schema.String,
   state: Schema.Literals(["loading", "starting", "active", "idle", "failed", "unavailable"]),
@@ -350,6 +366,7 @@ export const EditorActivity = Schema.Struct({
   task: Text,
   progress: PlannerProgress,
   activity: Schema.Array(PlannerActivity).check(Schema.isMaxLength(40)),
+  approval: Schema.optionalKey(WorkerApproval),
 });
 
 export type EditorActivity = typeof EditorActivity.Type;
@@ -375,9 +392,15 @@ export const PlannerWorkerDetail = Schema.Struct({
   progress: PlannerProgress,
   activity: EditorActivity.fields.activity,
   finding: ResearchScoutActivity.fields.finding,
+  approval: EditorActivity.fields.approval,
 });
 
 export type PlannerWorkerDetail = typeof PlannerWorkerDetail.Type;
+
+export const DecideWorkerApprovalRequest = Schema.Struct({
+  ...PlannerWorkerRequest.fields,
+  ...WorkerApprovalDecision.fields,
+});
 
 export const PlannerSnapshot = Schema.Struct({
   app: Schema.optionalKey(Schema.NullOr(TripApp)),
@@ -470,6 +493,11 @@ export const PlannerRpcs = RpcGroup.make(
   Rpc.make("GetPlannerWorker", {
     payload: PlannerWorkerRequest,
     success: PlannerWorkerDetail,
+    error: PlannerError,
+  }),
+  Rpc.make("DecideWorkerApproval", {
+    payload: DecideWorkerApprovalRequest,
+    success: Schema.Void,
     error: PlannerError,
   }),
   Rpc.make("SendMessage", {

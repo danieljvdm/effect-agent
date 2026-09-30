@@ -10,7 +10,7 @@ import { publicationAuthorization } from "../server/security.ts";
 import { ownerOfThread } from "../server/tenancy.ts";
 import { CheckedFinishResearchLive } from "./completion.ts";
 import { researchCoordinatorId, ScoutInput } from "./contracts.ts";
-import { UpdatingResearchScout, updatingResearchScout } from "./scout.ts";
+import { ReviewResearchPlanLive, UpdatingResearchScout, updatingResearchScout } from "./scout.ts";
 
 const unavailable = () =>
   new PlannerError({
@@ -78,6 +78,7 @@ export const scoutAttemptLayer = (context: {
 
       return Layer.mergeAll(
         CheckedFinishResearchLive,
+        ReviewResearchPlanLive,
         Layer.succeed(PlannerAttempt, {
           billingOwner: Effect.map(input, (input) => ownerOfThread(input.sourceThreadId)),
           settings: Effect.map(input, (input) => input.settings),

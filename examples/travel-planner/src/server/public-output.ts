@@ -1,4 +1,4 @@
-import { Effect, Layer, Stream } from "effect";
+import { Cause, Effect, Exit, Layer, Stream } from "effect";
 import { LanguageModel } from "effect/unstable/ai";
 
 import { PlannerAttempt } from "./progress.ts";
@@ -50,6 +50,13 @@ export const PublicOutputLive = Layer.effect(
 
                     return Effect.void;
                   }),
+                  // Joined input replaces this disposable stream within the same attempt.
+                  // Clear its draft before replacement and stop any hosted-search spinner.
+                  Stream.onExit((exit) =>
+                    Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)
+                      ? writer.interruptResponse
+                      : Effect.void,
+                  ),
                 ),
               ),
             );

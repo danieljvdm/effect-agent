@@ -436,7 +436,6 @@ it.effect(
         },
       });
 
-      const live = yield* liveModel;
       const requests: string[] = [];
 
       const fetch: typeof globalThis.fetch = async (_url, init) => {
@@ -459,7 +458,7 @@ it.effect(
         expect(failure.message).toContain("Connect your OpenAI API key");
       }).pipe(
         Effect.provide(
-          live.selectable.pipe(
+          liveModel.pipe(
             Layer.provide(credentials),
             Layer.provide(
               Layer.succeed(PlannerAttempt, {
@@ -474,7 +473,7 @@ it.effect(
       );
       yield* ask.pipe(
         Effect.provide(
-          live.selectable.pipe(
+          liveModel.pipe(
             Layer.provide(credentials),
             Layer.provide(
               Layer.succeed(PlannerAttempt, {

@@ -1,6 +1,5 @@
 import { OpenAiClient, OpenAiLanguageModel, OpenAiTool } from "@effect/ai-openai";
-import { Config, Effect, Layer, Result, Schema, Stream, Redacted } from "effect";
-import type { Agent } from "effect-agent";
+import { Effect, Layer, Result, Schema, Stream, Redacted } from "effect";
 import { AiError, LanguageModel, Model } from "effect/unstable/ai";
 import {
   FetchHttpClient,
@@ -10,7 +9,6 @@ import {
 } from "effect/unstable/http";
 
 import { type PlannerError, type AdmittedPlannerSettings } from "../domain.ts";
-import type { CredentialSource } from "./credentials.ts";
 import { credentialForOwner } from "./credentials.ts";
 import { recordDiagnostic } from "./diagnostics.ts";
 import { PlannerAttempt, type ProgressWriter } from "./progress.ts";
@@ -235,42 +233,10 @@ export const selectableModel = <R = never>(
   );
 
 /** Production resolves the personal key for the canonical account. */
-export const liveModel: Effect.Effect<
-  {
-    readonly model: Layer.Layer<Agent.ModelServices, never, PlannerAttempt | CredentialSource>;
-    readonly selectable: Layer.Layer<Agent.ModelServices, never, PlannerAttempt | CredentialSource>;
-    readonly identity: string;
-    readonly label: string;
-  },
-  Config.ConfigError
-> = Effect.gen(function* () {
-  const resolve = Effect.gen(function* () {
+export const liveModel = selectableModel(
+  Effect.gen(function* () {
     const attempt = yield* PlannerAttempt;
-    const owner = yield* attempt.billingOwner;
 
-    return yield* credentialForOwner(owner);
-  });
-
-  const name = yield* Config.NonEmptyString("OPENAI_MODEL").pipe(Config.withDefault("gpt-6-luna"));
-
-  const config = {
-    store: false,
-    max_output_tokens: 4096,
-    max_tool_calls: 1,
-    reasoning: { effort: "low" },
-  } as const;
-
-  return {
-    // Preserve the legacy definition identity while changing only secret resolution.
-    model: OpenAiLanguageModel.model(name, config).pipe(
-      Layer.provide(
-        Layer.effect(OpenAiClient.OpenAiClient, credentialClient(resolve)).pipe(
-          Layer.provide(FetchHttpClient.layer),
-        ),
-      ),
-    ),
-    identity: JSON.stringify({ provider: "openai", name, ...config }),
-    label: name,
-    selectable: selectableModel(resolve),
-  };
-});
+    return yield* credentialForOwner(yield* attempt.billingOwner);
+  }),
+);

@@ -22,6 +22,7 @@ import {
   type EditorActivity,
   type SendMessageRequest,
   type SpokenMessage,
+  type DecideWorkerApprovalRequest,
 } from "./domain";
 
 // Seeded once from auth.session in Auth's current account registry. Disposing that
@@ -499,7 +500,8 @@ const polledWorker = Atom.family((key: WorkerKey) => {
     const value = Option.getOrUndefined(AsyncResult.value(result));
 
     const settled =
-      AsyncResult.isSuccess(result) && (value?.state === "idle" || value?.state === "failed");
+      AsyncResult.isSuccess(result) &&
+      (value?.state === "idle" || value?.state === "failed" || value?.approval !== undefined);
 
     return result.waiting || settled ? result : get(refresh);
   }).pipe(Atom.setIdleTTL(0));
@@ -883,6 +885,16 @@ export const publishTripAtom = PlannerClient.runtime.fn<PublishTripRequest>()(
 
     return yield* Reactivity.mutation(client("PublishTrip", payload), ["planner"]);
   }),
+);
+
+export const decideWorkerApprovalAtom = Atom.family((_workerId: string) =>
+  PlannerClient.runtime.fn<typeof DecideWorkerApprovalRequest.Type>()(
+    Effect.fnUntraced(function* (request) {
+      const client = yield* PlannerClient;
+
+      return yield* Reactivity.mutation(client("DecideWorkerApproval", request), ["planner"]);
+    }),
+  ),
 );
 
 export const changeTripAppAtom = PlannerClient.runtime.fn<

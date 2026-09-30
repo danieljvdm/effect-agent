@@ -30,8 +30,25 @@ Listing photos come from inspected page galleries. When a gallery yields no usab
 the reader also checks Open Graph and Twitter image metadata within the same inspection deadline.
 These source images do not verify amenities or availability; unavailable photos leave the cards usable.
 
-The current planner and scout exchange standard `WorkerUpdate` and `WorkerCompletion` messages.
-Retired planner v8–v15 and scout v1–v3 registrations and their custom report inputs are removed.
+The main planner uses native hosted web search in its own model call for focused questions.
+It delegates longer or independent research to scouts and receives standard `WorkerUpdate`
+and `WorkerCompletion` messages. New input can restart its disposable model response;
+the preview clears cancelled text and marks interrupted search activity incomplete.
+The early thinking indicator contains no private model reasoning.
+
+In a fresh conversation, ask “Research a weekend in Lisbon, but let me approve the research
+plan before you search” to try the scout's approval checkpoint. Open Research scouts, review
+the plan, and choose
+**Approve plan** or **Decline**. The native durable approval parks the scout before its tool
+handler starts; approval resumes that retained call and completion notifies the planner.
+An approval-waiting card stops polling until a decision, a new task or a remount. Each scout
+attempt has a ten-minute execution allowance; paused time does not consume it. The card shows
+the retained worker expiry. After that deadline, decline and ask for a fresh research pass.
+Waiting currently retains native
+host maintenance; the card stopping its reads does not establish that the host has no alarms.
+
+The current planner and scout keep stable agent IDs and select one current binding per ID.
+Retired planner v2–v15 and scout v1–v3 registrations and their custom report inputs are removed.
 Start fresh conversations for those demo revisions; no migration or storage reset is supplied.
 Keep their old stores and original executable release for inspection or reconciliation of unfinished
 external actions. Existing current-agent records, saved trips, accounts, and report evidence are retained.
