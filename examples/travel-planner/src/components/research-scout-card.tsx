@@ -1,13 +1,9 @@
 import { Dialog } from "@base-ui/react/dialog";
-import { useAtom } from "@effect/atom-react";
-import { AsyncResult } from "effect/unstable/reactivity";
 import { Check, CircleAlert, Expand, LoaderCircle, Search, X } from "lucide-react";
 
 import type { ResearchScoutActivity } from "../domain.ts";
-import { decideWorkerApprovalAtom } from "../state.ts";
 import { ActivityEvents, ElapsedTime } from "./activity-panel.tsx";
 import { AgentProgress } from "./agent-progress.tsx";
-import { MessageText } from "./message-text.tsx";
 import { Button } from "./ui/button.tsx";
 
 const stateLabel = {
@@ -19,80 +15,17 @@ const stateLabel = {
   unavailable: "Updates unavailable",
 };
 
-export function ResearchScoutDetails({
-  scout,
-  conversationId,
-}: {
-  readonly scout: ResearchScoutActivity;
-  readonly conversationId: string;
-}) {
-  const [decision, decide] = useAtom(decideWorkerApprovalAtom(scout.id));
-  const active = !scout.approval && (scout.state === "active" || scout.state === "starting");
-  const approval = scout.approval;
-  const sourceSequence = scout.sourceSequence;
+export function ResearchScoutDetails({ scout }: { readonly scout: ResearchScoutActivity }) {
+  const active = scout.state === "active" || scout.state === "starting";
   const current = scout.progress.tools.findLast((tool) => tool.state === "running");
 
   return (
     <section className="trip-app-editor research-scout" aria-label={scout.title}>
       <div className="trip-app-section-heading">
         <h3>{scout.title}</h3>
-        <span data-state={scout.state}>
-          {scout.approval ? "Waiting for your approval" : stateLabel[scout.state]}
-        </span>
+        <span data-state={scout.state}>{stateLabel[scout.state]}</span>
       </div>
       <p className="research-scout-task">{scout.task}</p>
-      {approval && sourceSequence !== undefined && (
-        <section className="research-approval" aria-label="Research plan approval">
-          <h4>Review the research plan</h4>
-          <MessageText text={approval.plan} />
-          <p>
-            The scout is paused. Approve this plan to begin its research, or decline to stop this
-            pass.
-          </p>
-          <p>
-            This research worker expires at {new Date(approval.expiresAt).toLocaleString()}. After
-            that, decline and ask for a fresh research pass.
-          </p>
-          <div className="research-approval-actions">
-            <Button
-              type="button"
-              disabled={decision.waiting}
-              onClick={() =>
-                decide({
-                  conversationId,
-                  workerId: scout.id,
-                  sourceSequence,
-                  ...approval,
-                  decision: "approved",
-                })
-              }
-            >
-              Approve plan
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={decision.waiting}
-              onClick={() =>
-                decide({
-                  conversationId,
-                  workerId: scout.id,
-                  sourceSequence,
-                  ...approval,
-                  decision: "denied",
-                })
-              }
-            >
-              Decline
-            </Button>
-          </div>
-          {AsyncResult.isFailure(decision) && (
-            <p className="trip-app-action-error" role="alert">
-              The decision could not be recorded. Refresh before retrying.
-            </p>
-          )}
-        </section>
-      )}
       {(active || scout.progress.completedAt !== undefined) && (
         <ElapsedTime
           startedAt={scout.progress.startedAt}
@@ -142,13 +75,11 @@ export function ResearchScoutDetails({
 /** One dock for the bounded set of background scouts in this conversation. */
 export function ResearchScoutCard({
   scouts,
-  conversationId,
 }: {
   readonly scouts: readonly ResearchScoutActivity[];
-  readonly conversationId: string;
 }) {
   const working = scouts.filter(
-    (scout) => !scout.approval && (scout.state === "active" || scout.state === "starting"),
+    (scout) => scout.state === "active" || scout.state === "starting",
   ).length;
 
   const loading = scouts.filter((scout) => scout.state === "loading").length;
@@ -156,7 +87,7 @@ export function ResearchScoutCard({
   const finished = scouts.filter((scout) => scout.state === "idle").length;
 
   const attention = scouts.filter(
-    (scout) => scout.approval || scout.state === "failed" || scout.state === "unavailable",
+    (scout) => scout.state === "failed" || scout.state === "unavailable",
   ).length;
 
   const summary = `${finished} of ${scouts.length} finished${working ? ` · ${working} working` : ""}${loading ? ` · ${loading} loading` : ""}${attention ? ` · ${attention} ${attention === 1 ? "needs" : "need"} attention` : ""}`;
@@ -211,7 +142,7 @@ export function ResearchScoutCard({
           </header>
           <div className="trip-app-dialog-body">
             {scouts.map((scout) => (
-              <ResearchScoutDetails key={scout.id} scout={scout} conversationId={conversationId} />
+              <ResearchScoutDetails key={scout.id} scout={scout} />
             ))}
           </div>
           {working > 0 && (

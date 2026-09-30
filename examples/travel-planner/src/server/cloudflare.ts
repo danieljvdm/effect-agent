@@ -24,7 +24,6 @@ import {
   PlannerSnapshot,
   PlannerWorkerDetail,
   PlannerProgress,
-  DecideWorkerApprovalRequest,
   defaultPlannerSettings,
 } from "../domain.ts";
 import { ReadTravelPageLive } from "../research.ts";
@@ -72,15 +71,7 @@ import { PlannerSettingsStore, PlannerSettingsStoreLive } from "./settings.ts";
 import { ownerOfThread, privateConversation, publicSnapshot } from "./tenancy.ts";
 import { OwnerTripRepositoryLive, serveTripRepository } from "./trip-rpc.ts";
 import { publishTrip, TripRepository } from "./trips.ts";
-import {
-  decideWorkerApproval,
-  plannerWorker,
-  workerApproval,
-  workerStatus,
-  WorkerApprovalRequest,
-  WorkerLocator,
-  WorkerStatusRequest,
-} from "./worker-state.ts";
+import { plannerWorker, workerStatus, WorkerLocator, WorkerStatusRequest } from "./worker-state.ts";
 
 declare global {
   namespace Cloudflare {
@@ -200,34 +191,6 @@ export const plannerHandlers = PlannerRpcs.toLayer({
               }),
           ),
         );
-      }),
-    ),
-  DecideWorkerApproval: ({ conversationId, ...decision }) =>
-    safeRpc(
-      Effect.gen(function* () {
-        const identity = yield* ThreadObjectIdentity;
-        const privateId = yield* privateConversation(identity.threadId, conversationId);
-        const env = yield* WorkerEnvironment;
-
-        const request = yield* Schema.encodeEffect(
-          Schema.fromJsonString(DecideWorkerApprovalRequest),
-        )({
-          conversationId,
-          ...decision,
-        }).pipe(
-          Effect.mapError(
-            () => new PlannerError({ code: "invalid", message: "Invalid approval." }),
-          ),
-        );
-
-        yield* Effect.tryPromise({
-          try: () => env.ACCOUNT_THREADS.getByName(privateId).plannerDecideWorkerApproval(request),
-          catch: () =>
-            new PlannerError({
-              code: "unavailable",
-              message: "The approval could not be recorded. Refresh before retrying.",
-            }),
-        });
       }),
     ),
   GetPlanner: ({ conversationId }) =>
@@ -549,30 +512,6 @@ export const makeTravelPlannerThread = <E>(
           Effect.flatMap(plannerWorker),
           Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(PlannerWorkerDetail))),
         ),
-      );
-    }
-
-    /** Private source RPC: HTTP ingress selected this signed-in account's conversation. */
-    plannerDecideWorkerApproval(request: string): Promise<void> {
-      return this[DurableObject.RunSymbol](
-        Schema.decodeEffect(Schema.fromJsonString(DecideWorkerApprovalRequest))(request).pipe(
-          Effect.flatMap(decideWorkerApproval),
-        ),
-      );
-    }
-
-    /** Private child RPC: the source already verified its canonical worker link. */
-    plannerWorkerApproval(request: string): Promise<void> {
-      return this[DurableObject.RunSymbol](
-        Effect.gen(function* () {
-          const command = yield* Schema.decodeEffect(Schema.fromJsonString(WorkerApprovalRequest))(
-            request,
-          );
-
-          const maintenance = yield* ThreadMaintenance;
-
-          yield* maintenance.withMutation(workerApproval(command));
-        }),
       );
     }
 

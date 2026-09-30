@@ -36,22 +36,13 @@ and `WorkerCompletion` messages. New input can restart its disposable model resp
 the preview clears cancelled text and marks interrupted search activity incomplete.
 The early thinking indicator contains no private model reasoning.
 
-In a fresh conversation, ask “Research a weekend in Lisbon, but let me approve the research
-plan before you search” to try the scout's approval checkpoint. Open Research scouts, review
-the plan, and choose
-**Approve plan** or **Decline**. The native durable approval parks the scout before its tool
-handler starts; approval resumes that retained call and completion notifies the planner.
-An approval-waiting card stops polling until a decision, a new task or a remount. Each scout
-attempt has a ten-minute execution allowance; paused time does not consume it. The card shows
-the retained worker expiry. After that deadline, decline and ask for a fresh research pass.
-While the worker waits only for approval, the native host leaves its alarm unarmed;
-the approval decision wakes the retained work.
-
 The current planner and scout keep stable agent IDs and select one current binding per ID.
 Retired planner v2–v15 and scout v1–v3 registrations and their custom report inputs are removed.
 Start fresh conversations for those demo revisions; no migration or storage reset is supplied.
 Keep their old stores and original executable release for inspection or reconciliation of unfinished
 external actions. Existing current-agent records, saved trips, accounts, and report evidence are retained.
+Scouts already waiting for research-plan approval remain paused. Cancel their active run and
+start fresh research; removing the checkpoint does not approve existing requests.
 
 Authentication uses matching versions of `@yielded/auth` and `@yielded/auth-persistence`.
 The persistence package supplies the Drizzle adapters for the app-owned SQLite tables.
@@ -119,11 +110,9 @@ promise immediate cancellation of an already dispatched native RPC.
 
 The conversation object verifies the exact `WorkerInputRequested` record and the host's read
 authorization before addressing a child. The child computes the compact view locally with one
-lookup for that request, a nonterminal scan, and the final 100 canonical records for activity.
-Approval reads its exact canonical input and proposal separately, with indexed lookups bounded
-by the worker's retained turn policy. Limits apply before decoding and activity projection.
-Status describes that selected request plus any active work on the worker; an older pending
-delivery is not reconstructed as a new task.
+lookup for that request, a nonterminal scan, and the final 100 canonical records. Limits apply
+before decoding and activity projection. Status describes that selected request plus any
+active work on the worker; an older pending delivery is not reconstructed as a new task.
 Activity is a recent window, not a complete audit log. Reads never admit, recover, or replay
 work. Diagnostics retain the existing redaction boundary.
 

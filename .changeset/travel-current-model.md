@@ -1,4 +1,4 @@
 ---
 ---
 
-Use hosted search and responsive input steering in the travel planner, and let travelers approve a delegated research plan even after a long scout run. Remove superseded planner definitions while retaining saved conversation history.
+Use hosted search and responsive input steering while delegated scouts report progress and complete automatically. Remove superseded planner definitions and research-plan approval controls; cancel previously paused scouts before starting fresh research.

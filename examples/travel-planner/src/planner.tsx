@@ -496,7 +496,6 @@ function PlannerContent({ signOut }: { readonly signOut: () => void }) {
                 <ResearchScoutCard
                   key={`research:${selection.conversationId}`}
                   scouts={snapshot.scouts}
-                  conversationId={selection.conversationId}
                 />
               )}
               {(snapshot?.app || snapshot?.editor) && (

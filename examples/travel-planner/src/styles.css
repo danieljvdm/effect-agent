@@ -2204,17 +2204,6 @@
   font-size: 13px;
 }
 
-.research-approval {
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  padding: 16px;
-}
-
-.research-approval-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 12px;
-}
 .trip-app-dialog-footer {
   display: flex;
   align-items: center;
