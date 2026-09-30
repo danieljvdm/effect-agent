@@ -97,10 +97,9 @@ const makeStorageEffect = Effect.gen(function* () {
     Effect.flatMap(Effect.serviceOption(sql.transactionService), (current) => {
       const body = Effect.uninterruptible(execute);
 
-      // An enclosing source transaction can still roll back after a successful schedule.
-      // Never retain its speculative queue view beyond this nested storage operation.
+      // Source transactions own the queue view through flush and rollback.
       return current._tag === "Some"
-        ? body.pipe(Effect.ensuring(invalidate))
+        ? body
         : Effect.scoped(
             Effect.andThen(
               sql.reserve.pipe(Effect.mapError(alarmFailure(operation))),
@@ -738,6 +737,8 @@ export class ThreadMutationGate extends Context.Service<
       const { ctx } = yield* DurableObjectContext;
       const sql = yield* SqlClient;
       const dueQueue = DueQueue.make(ctx.storage);
+
+      dueQueue.install(sql);
       const config = yield* CloudflareDurableRuntimeConfig;
       const failpoint = yield* ThreadMaintenanceFailpoint;
       // A fresh incarnation has no live mutations; durable generations survive eviction.
@@ -801,7 +802,7 @@ export class ThreadMutationGate extends Context.Service<
         };
 
         yield* runTransaction("schedule maintenance lane", () =>
-          Option.isSome(current) ? enroll(ctx.storage) : ctx.storage.transaction(enroll),
+          Option.isSome(current) ? enroll(ctx.storage) : dueQueue.transaction(enroll),
         );
         yield* notify;
       });
@@ -816,7 +817,7 @@ export class ThreadMutationGate extends Context.Service<
 
         if (invalidatesRecovery || lanes.length > 0)
           yield* runTransaction("advance maintenance generation", () =>
-            ctx.storage.transaction(async (transaction) => {
+            dueQueue.transaction(async (transaction) => {
               const { state, initialized } = await readMaintenanceState(transaction);
 
               if (invalidatesRecovery) {
@@ -1074,7 +1075,7 @@ export class ThreadMaintenance extends Context.Service<
           return;
 
         const rows = yield* runTransaction("mark parked maintenance reports", () =>
-          ctx.storage.transaction(async () => dueQueue.takeParkedReports()),
+          dueQueue.transaction(async () => dueQueue.takeParkedReports()),
         );
 
         for (const row of rows) {
@@ -1124,7 +1125,7 @@ export class ThreadMaintenance extends Context.Service<
           const now = yield* Clock.currentTimeMillis;
 
           const claimed = yield* runTransaction("charge maintenance attempt", () =>
-            ctx.storage.transaction(async (transaction) => {
+            dueQueue.transaction(async (transaction) => {
               const claimed = dueQueue.claim(selected, now);
               const next = DueQueue.next(dueQueue.read());
 
@@ -1173,16 +1174,15 @@ export class ThreadMaintenance extends Context.Service<
                     : Option.getOrNull(exit.value);
 
                   const checkpointed = yield* runTransaction("checkpoint maintenance lane", () =>
-                    ctx.storage.transaction(async () => {
+                    dueQueue.transaction(async () => {
                       // A producer can be between enrollment and its source commit. Never acknowledge
                       // that observation; its completion will notify the event or retain the alarm.
                       if (active) return;
                       const current = dueQueue.read().find((lane) => lane.id === row.id);
 
                       if (current?.revision !== row.revision) return;
-                      dueQueue.complete(row, next);
 
-                      return row.revision + 1;
+                      return dueQueue.complete(row, next)?.revision;
                     }),
                   );
 
@@ -1236,7 +1236,7 @@ export class ThreadMaintenance extends Context.Service<
           if (!recoveryEventsPending) return Option.none<number>();
 
           const range = yield* runTransaction("select recovery events", () =>
-            ctx.storage.transaction(async (transaction) => {
+            dueQueue.transaction(async (transaction) => {
               const { state } = await readMaintenanceState(transaction);
 
               return {
@@ -1261,7 +1261,7 @@ export class ThreadMaintenance extends Context.Service<
             const acknowledgedAt = yield* Clock.currentTimeMillis;
 
             yield* runTransaction("acknowledge recovery event", () =>
-              ctx.storage.transaction(async (transaction) => {
+              dueQueue.transaction(async (transaction) => {
                 const { state } = await readMaintenanceState(transaction);
 
                 const next = ThreadMaintenanceState.make({
@@ -1305,7 +1305,7 @@ export class ThreadMaintenance extends Context.Service<
         yield* failpoint.hit("maintenance:recovery-status:before");
 
         const retained = yield* runTransaction("record Thread recovery faults", () =>
-          ctx.storage.transaction(async (transaction) => {
+          dueQueue.transaction(async (transaction) => {
             const events: Array<Omit<ThreadRecoveryFaultEvent, "sequence">> = [];
             const newlyBlocked: Array<ThreadRecoveryFault> = [];
             const faults = new Map<ThreadId, ThreadRecoveryFault>();
@@ -1437,7 +1437,7 @@ export class ThreadMaintenance extends Context.Service<
         const now = yield* Clock.currentTimeMillis;
 
         yield* runTransaction("ensure maintenance alarm", () =>
-          ctx.storage.transaction(async (transaction) => {
+          dueQueue.transaction(async (transaction) => {
             const { state, initialized } = await readCurrentMaintenanceState(transaction);
 
             recoveryEventsPending = hasRecoveryEvents(state);
@@ -1473,7 +1473,7 @@ export class ThreadMaintenance extends Context.Service<
         const now = yield* Clock.currentTimeMillis;
 
         const result = yield* runTransaction("begin maintenance pass", () =>
-          ctx.storage.transaction(async (transaction) => {
+          dueQueue.transaction(async (transaction) => {
             const { state, initialized } = await readCurrentMaintenanceState(transaction);
 
             recoveryEventsPending = hasRecoveryEvents(state);
@@ -1563,7 +1563,7 @@ export class ThreadMaintenance extends Context.Service<
             const jitter = yield* Random.next;
 
             yield* runTransaction("back off failed maintenance", () =>
-              ctx.storage.transaction(async (transaction) => {
+              dueQueue.transaction(async (transaction) => {
                 const { state } = await readMaintenanceState(transaction);
 
                 const previous =
@@ -1771,7 +1771,7 @@ export class ThreadMaintenance extends Context.Service<
               const now = yield* Clock.currentTimeMillis;
 
               const { state } = yield* runTransaction("read native maintenance deadline", () =>
-                ctx.storage.transaction((transaction) => readMaintenanceState(transaction)),
+                dueQueue.transaction((transaction) => readMaintenanceState(transaction)),
               );
 
               const native =
@@ -1865,7 +1865,7 @@ export class ThreadMaintenance extends Context.Service<
 
             // Admissions during backoff need visibility without accelerating recovery.
             // Preserve recipients even if recovery later settles them before clearing.
-            await ctx.storage.transaction(async (transaction) => {
+            await dueQueue.transaction(async (transaction) => {
               const encoded = await transaction.get(recoveryFaultKey(threadId));
 
               if (encoded === undefined) return;
@@ -1970,7 +1970,7 @@ export class ThreadMaintenance extends Context.Service<
         yield* failpoint.hit("maintenance:select:before");
 
         const selection = yield* runTransaction("select maintenance lane", () =>
-          ctx.storage.transaction(async (transaction) => {
+          dueQueue.transaction(async (transaction) => {
             const { state } = await readMaintenanceState(transaction);
 
             const waits = (state.bindingWaits ?? []).filter(
@@ -2123,7 +2123,7 @@ export class ThreadMaintenance extends Context.Service<
 
         const nextAttemptAt = yield* mutations.withSnapshot((active) =>
           runTransaction("checkpoint native maintenance", () =>
-            ctx.storage.transaction(async (transaction) => {
+            dueQueue.transaction(async (transaction) => {
               const { state } = await readMaintenanceState(transaction);
 
               const mutationOverlap =
@@ -2293,7 +2293,7 @@ export class ThreadMaintenance extends Context.Service<
             for (const threadId of yield* Deferred.await(recovery.queue)) {
               yield* failpoint.hit("maintenance:select:before");
               yield* runTransaction("select old recovery lane", () =>
-                ctx.storage.transaction(async (transaction) => {
+                dueQueue.transaction(async (transaction) => {
                   const { state } = await readMaintenanceState(transaction);
 
                   await transaction.put(
@@ -2690,7 +2690,7 @@ export class ThreadMaintenance extends Context.Service<
 
           const cursor = yield* mutations.withSnapshot(() =>
             runTransaction("read post-native dispatch cursor", () =>
-              ctx.storage.transaction(
+              dueQueue.transaction(
                 async (transaction) =>
                   (await readMaintenanceState(transaction)).state.lastAfterNativeLaneId,
               ),
@@ -2730,7 +2730,7 @@ export class ThreadMaintenance extends Context.Service<
                 // to the lane and its due-queue revision still fences acknowledgement.
                 const admit = mutations.withSnapshot(() =>
                   runTransaction("advance post-native dispatch cursor", () =>
-                    ctx.storage.transaction(async (transaction) => {
+                    dueQueue.transaction(async (transaction) => {
                       const { state } = await readMaintenanceState(transaction);
 
                       await transaction.put(
@@ -2794,7 +2794,7 @@ export class ThreadMaintenance extends Context.Service<
             const now = yield* Clock.currentTimeMillis;
 
             return yield* runTransaction("finish maintenance event", () =>
-              ctx.storage.transaction(async (transaction) => {
+              dueQueue.transaction(async (transaction) => {
                 const { state } = await readMaintenanceState(transaction);
 
                 const native =

@@ -1,4 +1,6 @@
-import { Schema } from "effect";
+import { Effect, Exit, Scheduler, Schema } from "effect";
+import type { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 
 export const LaneId = Schema.NonEmptyString.check(Schema.isMaxLength(256));
 
@@ -35,7 +37,23 @@ export const LifecycleStart = "effect-agent:lifecycle-start";
 
 const decode = Schema.decodeUnknownSync(Schema.Array(DueLane));
 
-const views = new WeakMap<DurableObjectStorage, { rows: ReadonlyArray<DueLane> | undefined }>();
+const equivalent = Schema.toEquivalence(DueLane);
+
+type Change = { readonly before: DueLane | undefined; readonly after: DueLane };
+type Frame = {
+  readonly parent: Frame | undefined;
+  readonly rows: ReadonlyArray<DueLane> | undefined;
+  readonly changes: Map<string, Change>;
+  readonly deadlines: Map<string, number>;
+};
+type View = {
+  rows: ReadonlyArray<DueLane> | undefined;
+  frame: Frame | undefined;
+  changes: Map<string, Change>;
+  deadlines: Map<string, number>;
+};
+const views = new WeakMap<DurableObjectStorage, View>();
+const installed = new WeakMap<SqlClient, WeakSet<DurableObjectStorage>>();
 
 export const invalidate = (storage: DurableObjectStorage): void => {
   const view = views.get(storage);
@@ -43,25 +61,166 @@ export const invalidate = (storage: DurableObjectStorage): void => {
   if (view !== undefined) view.rows = undefined;
 };
 
-/** Callers reserve the shared SQL connection through commit and invalidate on rollback.
- * Retain at most 128 lanes; SQLite and the alarm still reconstruct every cold owner. */
+/** Callers reserve the shared SQL connection through commit. Keep the complete view
+ * during a transaction, then retain at most 128 lanes between transactions. Intent
+ * flushes before source commit; claims and prearming commit before fallible work. */
 export const make = (storage: DurableObjectStorage) => {
   // Instrumentation may return a fresh SQL wrapper on every access.
   const sql = storage.sql;
   let view = views.get(storage);
 
   if (view === undefined) {
-    view = { rows: undefined };
+    view = { rows: undefined, frame: undefined, changes: new Map(), deadlines: new Map() };
     views.set(storage, view);
   }
   const current = view;
 
-  const retain = (changed: ReadonlyArray<DueLane>) => {
-    if (current.rows === undefined) return;
-    const ids = new Set(changed.map((row) => row.id));
-    const next = [...current.rows.filter((row) => !ids.has(row.id)), ...changed];
+  const trim = () => {
+    if (current.frame === undefined && (current.rows?.length ?? 0) > 128) current.rows = undefined;
+  };
 
-    current.rows = next.length <= 128 ? next : undefined;
+  const begin = (): Frame => {
+    const frame: Frame = {
+      parent: current.frame,
+      rows: current.rows,
+      changes: current.changes,
+      deadlines: current.deadlines,
+    };
+
+    current.frame = frame;
+    current.changes = new Map(current.changes);
+    current.deadlines = new Map(current.deadlines);
+
+    return frame;
+  };
+
+  const finish = (frame: Frame, success: boolean) => {
+    current.frame = frame.parent;
+    if (!success) {
+      // A child rollback must retain its parent's still-unflushed intent.
+      current.rows = frame.parent === undefined ? undefined : frame.rows;
+      current.changes = frame.changes;
+      current.deadlines = frame.deadlines;
+    }
+    if (frame.parent === undefined) {
+      current.changes.clear();
+      current.deadlines.clear();
+      trim();
+    }
+  };
+
+  const write = ({ before, after }: Change) => {
+    const rows = decode(
+      sql
+        .exec(
+          `INSERT INTO platform_cloudflare_due_queue
+          (id, revision, dueAt, stalls, progressKey, notBefore, state, reported)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, dueAt = excluded.dueAt,
+           stalls = excluded.stalls, progressKey = excluded.progressKey,
+           notBefore = excluded.notBefore, state = excluded.state, reported = excluded.reported
+         WHERE revision = ?
+         RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported`,
+          after.id,
+          after.revision,
+          after.dueAt,
+          after.stalls,
+          after.progressKey,
+          after.notBefore,
+          after.state,
+          after.reported,
+          before?.revision ?? -1,
+        )
+        .toArray(),
+    );
+
+    if (rows.length !== 1) throw new Error("Maintenance due revision changed during transaction");
+  };
+
+  const flush = (frame: Frame) => {
+    if (frame.parent !== undefined) return;
+    for (const change of current.changes.values())
+      if (change.before === undefined || !equivalent(change.before, change.after)) write(change);
+  };
+
+  /** Install once on the shared client, preserving its connection permit, scheduler and
+   * nested storage transactions. The flush is inside the source transaction, before commit.
+   * The finalizer runs after storage settles, including a commit rejection or interruption. */
+  const install = (client: SqlClient) => {
+    let storages = installed.get(client);
+
+    if (storages === undefined) {
+      storages = new WeakSet();
+      installed.set(client, storages);
+    }
+    if (storages.has(storage)) return;
+    storages.add(storage);
+    const original = client.withTransaction;
+
+    const withTransaction: SqlClient["withTransaction"] = (body) =>
+      Effect.uninterruptibleMask((restore) =>
+        Effect.suspend(() => {
+          let frame: Frame | undefined;
+
+          return original(
+            Effect.sync(() => {
+              frame = begin();
+            }).pipe(
+              Effect.andThen(restore(body)),
+              Effect.tap(() =>
+                Effect.try({
+                  try: () => {
+                    if (frame !== undefined) flush(frame);
+                  },
+                  catch: (cause) =>
+                    new SqlError({
+                      reason: new UnknownError({
+                        cause,
+                        operation: "flush maintenance due queue",
+                        message: "Maintenance intent could not commit",
+                      }),
+                    }),
+                }),
+              ),
+            ),
+          ).pipe(
+            Effect.onExit((exit) =>
+              Effect.sync(() => {
+                if (frame !== undefined) finish(frame, Exit.isSuccess(exit));
+              }),
+            ),
+            // A released permit can resume another transaction. Do not auto-yield
+            // between the driver's settlement and removing this transaction's frame.
+            Effect.provideService(Scheduler.PreventSchedulerYield, true),
+          );
+        }),
+      );
+
+    Object.assign(client, { withTransaction });
+  };
+
+  const transaction = async <A>(
+    body: (transaction: DurableObjectTransaction) => Promise<A>,
+  ): Promise<A> => {
+    let frame: Frame | undefined;
+
+    try {
+      const result = await storage.transaction(async (transaction) => {
+        frame = begin();
+        const result = await body(transaction);
+
+        flush(frame);
+
+        return result;
+      });
+
+      if (frame !== undefined) finish(frame, true);
+
+      return result;
+    } catch (cause) {
+      if (frame !== undefined) finish(frame, false);
+      throw cause;
+    }
   };
 
   const initialize = () => {
@@ -108,40 +267,52 @@ export const make = (storage: DurableObjectStorage) => {
         .toArray(),
     );
 
-    if (rows.length <= 128) current.rows = rows;
+    if (current.frame !== undefined || rows.length <= 128) current.rows = rows;
 
     return rows;
+  };
+
+  const set = (after: DueLane) => {
+    const rows = read();
+    const before = rows.find((row) => row.id === after.id);
+
+    if (before !== undefined && equivalent(before, after)) return before;
+    const previous = current.changes.get(after.id);
+    const change = { before: previous === undefined ? before : previous.before, after };
+
+    if (current.frame === undefined) write(change);
+    else current.changes.set(after.id, change);
+    current.rows = [...rows.filter((row) => row.id !== after.id), after];
+    trim();
+
+    return after;
   };
 
   const dirty = (id: string, dueAt: number, progress = false, progressKey?: string) => {
     Schema.decodeSync(LaneId)(id);
     Schema.decodeSync(Schema.Finite)(dueAt);
-    retain(
-      decode(
-        sql
-          .exec(
-            `INSERT INTO platform_cloudflare_due_queue (id, revision, dueAt, stalls, progressKey, notBefore) VALUES (?, 1, ?, 0, ?, 0)
-     ON CONFLICT(id) DO UPDATE SET revision = revision + ?,
-       dueAt = CASE WHEN ? = 1 THEN excluded.dueAt
-         WHEN dueAt IS NULL THEN max(excluded.dueAt, notBefore)
-         ELSE max(notBefore, min(dueAt, excluded.dueAt)) END,
-       state = CASE WHEN ? = 1 THEN 'pending' WHEN stalls >= ${MaximumNoProgressRearms} THEN state ELSE 'pending' END,
-       stalls = CASE WHEN ? = 1 THEN 0 ELSE stalls END,
-       notBefore = CASE WHEN ? = 1 THEN 0 ELSE notBefore END,
-       reported = CASE WHEN ? = 1 THEN 0 ELSE reported END,
-       progressKey = coalesce(excluded.progressKey, progressKey) RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported`,
-            id,
-            dueAt,
-            progressKey ?? null,
-            Number(progress),
-            Number(progress),
-            Number(progress),
-            Number(progress),
-            Number(progress),
-            Number(progress),
-          )
-          .toArray(),
-      ),
+    const row = read().find((row) => row.id === id);
+    const earliest = Math.min(current.deadlines.get(id) ?? dueAt, dueAt);
+
+    if (current.frame !== undefined) current.deadlines.set(id, earliest);
+
+    return set(
+      DueLane.make({
+        id,
+        revision: row === undefined ? 1 : row.revision + Number(progress),
+        dueAt:
+          row === undefined || progress
+            ? earliest
+            : Math.max(row.notBefore, Math.min(row.dueAt ?? Infinity, earliest)),
+        state:
+          progress || (row?.stalls ?? 0) < MaximumNoProgressRearms
+            ? "pending"
+            : (row?.state ?? "pending"),
+        stalls: progress ? 0 : (row?.stalls ?? 0),
+        notBefore: progress ? 0 : (row?.notBefore ?? 0),
+        reported: progress ? 0 : (row?.reported ?? 0),
+        progressKey: progressKey ?? row?.progressKey ?? null,
+      }),
     );
   };
 
@@ -158,121 +329,101 @@ export const make = (storage: DurableObjectStorage) => {
 
   /** One initial native discovery wave; host lanes always require explicit enrollment. */
   const register = (id: string) => {
-    retain(
-      decode(
-        sql
-          .exec(
-            "INSERT OR IGNORE INTO platform_cloudflare_due_queue (id, revision, dueAt, stalls, progressKey, notBefore) VALUES (?, 0, 0, 0, NULL, 0) RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported",
-            id,
-          )
-          .toArray(),
-      ),
+    if (read().some((row) => row.id === id)) return;
+    set(
+      DueLane.make({
+        id,
+        revision: 0,
+        dueAt: 0,
+        stalls: 0,
+        progressKey: null,
+        notBefore: 0,
+        state: "pending",
+        reported: 0,
+      }),
     );
   };
 
-  /** Charge before fallible work so a crash cannot replay an uncharged attempt. */
+  /** This transaction must commit before fallible work: never defer a debit across a wave. */
   const claim = (lane: DueLane, nowMillis: number, native = false) => {
+    const row = read().find((row) => row.id === lane.id);
+
+    if (
+      row === undefined ||
+      row.revision !== lane.revision ||
+      row.dueAt === null ||
+      !(row.dueAt <= nowMillis || (native && row.notBefore <= nowMillis))
+    )
+      return;
+    const stalls = Math.min(row.stalls + 1, MaximumNoProgressRearms);
+
     const notBefore =
       nowMillis +
-      (lane.stalls + 1 >= MaximumNoProgressRearms
+      (stalls >= MaximumNoProgressRearms
         ? ParkedRetryMillis
-        : Math.min(60_000, MinimumRetryMillis * 2 ** lane.stalls));
+        : Math.min(60_000, MinimumRetryMillis * 2 ** row.stalls));
 
-    const rows = decode(
-      sql
-        .exec(
-          `UPDATE platform_cloudflare_due_queue SET stalls = min(stalls + 1, ${MaximumNoProgressRearms}), notBefore = ?,
-       state = CASE WHEN stalls + 1 >= ${MaximumNoProgressRearms} THEN 'parked' ELSE 'pending' END,
-       dueAt = ?
-       WHERE id = ? AND revision = ?
-       AND dueAt IS NOT NULL AND (dueAt <= ? OR (? = 1 AND notBefore <= ?)) RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported`,
-          notBefore,
-          notBefore,
-          lane.id,
-          lane.revision,
-          nowMillis,
-          Number(native),
-          nowMillis,
-        )
-        .toArray(),
+    return set(
+      DueLane.make({
+        ...row,
+        stalls,
+        notBefore,
+        dueAt: notBefore,
+        state: stalls >= MaximumNoProgressRearms ? "parked" : "pending",
+      }),
     );
-
-    retain(rows);
-
-    return rows[0];
   };
 
   const complete = (lane: DueLane, dueAt: number | null) => {
     Schema.decodeSync(Deadline)(dueAt);
+    const row = read().find((row) => row.id === lane.id);
 
-    const guarded = dueAt === null ? null : Math.max(dueAt, lane.notBefore);
+    if (row === undefined || row.revision !== lane.revision) return;
 
-    retain(
-      decode(
-        sql
-          .exec(
-            "UPDATE platform_cloudflare_due_queue SET dueAt = ?, state = ?, stalls = CASE WHEN ? IS NULL THEN 0 ELSE stalls END, notBefore = CASE WHEN ? IS NULL THEN 0 ELSE notBefore END, reported = CASE WHEN ? IS NULL THEN 0 ELSE reported END, revision = revision + 1 WHERE id = ? AND revision = ? RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported",
-            guarded,
-            dueAt === null ? "idle" : lane.stalls >= MaximumNoProgressRearms ? "parked" : "pending",
-            dueAt,
-            dueAt,
-            dueAt,
-            lane.id,
-            lane.revision,
-          )
-          .toArray(),
-      ),
-    );
+    const after = DueLane.make({
+      ...row,
+      dueAt: dueAt === null ? null : Math.max(dueAt, row.notBefore),
+      state: dueAt === null ? "idle" : row.stalls >= MaximumNoProgressRearms ? "parked" : "pending",
+      stalls: dueAt === null ? 0 : row.stalls,
+      notBefore: dueAt === null ? 0 : row.notBefore,
+      reported: dueAt === null ? 0 : row.reported,
+    });
+
+    return set(DueLane.make({ ...after, revision: row.revision + 1 }));
   };
 
   /** Native checkpoints already fence their own dirty/processed generation. */
   const checkpointNative = (dueAt: number | null) => {
     Schema.decodeSync(Deadline)(dueAt);
-    const row = read().find((row) => row.id === Native);
-    const publication = read().find((row) => row.id === Publication);
+    const rows = read();
+    const row = rows.find((row) => row.id === Native);
 
-    const guarded =
-      dueAt === null || publication?.state === "parked"
-        ? null
-        : Math.max(dueAt, row?.notBefore ?? 0);
+    if (row === undefined) return;
+    const publication = rows.find((row) => row.id === Publication);
 
-    retain(
-      decode(
-        sql
-          .exec(
-            "UPDATE platform_cloudflare_due_queue SET dueAt = ?, state = ?, stalls = CASE WHEN ? IS NULL THEN 0 ELSE stalls END, notBefore = CASE WHEN ? IS NULL THEN 0 ELSE notBefore END, reported = CASE WHEN ? IS NULL THEN 0 ELSE reported END WHERE id = ? RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported",
-            guarded,
-            dueAt === null
-              ? "idle"
-              : (row?.stalls ?? 0) >= MaximumNoProgressRearms
-                ? "parked"
-                : "pending",
-            dueAt,
-            dueAt,
-            dueAt,
-            Native,
-          )
-          .toArray(),
-      ),
+    set(
+      DueLane.make({
+        ...row,
+        dueAt:
+          dueAt === null || publication?.state === "parked" ? null : Math.max(dueAt, row.notBefore),
+        state:
+          dueAt === null ? "idle" : row.stalls >= MaximumNoProgressRearms ? "parked" : "pending",
+        stalls: dueAt === null ? 0 : row.stalls,
+        notBefore: dueAt === null ? 0 : row.notBefore,
+        reported: dueAt === null ? 0 : row.reported,
+      }),
     );
   };
 
-  const takeParkedReports = () => {
-    const rows = decode(
-      sql
-        .exec(
-          "UPDATE platform_cloudflare_due_queue SET reported = 1 WHERE state = 'parked' AND reported = 0 RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported",
-        )
-        .toArray(),
-    );
-
-    retain(rows);
-
-    return rows;
-  };
+  const takeParkedReports = () =>
+    read()
+      .filter((row) => row.state === "parked" && row.reported === 0)
+      .map((row) => set(DueLane.make({ ...row, reported: 1 })));
 
   return {
     initialize,
+    install,
+    transaction,
     read,
     dirty,
     progress,
