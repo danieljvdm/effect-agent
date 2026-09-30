@@ -5,15 +5,21 @@ import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { ThreadId } from "effect-agent/identifiers";
 import { MessageDeliveryStore } from "effect-agent/message-delivery";
 import { IdempotencyKey, Principal } from "effect-agent/receipt";
-import { CanonicalSequence, type CanonicalRecordEnvelope } from "effect-agent/records";
+import { CanonicalSequence, type ToolApprovalRequested } from "effect-agent/records";
+import {
+  modelResponseRecordId,
+  runIdForSubmission,
+  toolApprovalRequestRecordId,
+} from "effect-agent/run-journal";
 import {
   ApprovalDecisionCommand,
   RecoverySnapshotRequest,
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
+  type SubmissionSnapshot,
 } from "effect-agent/submission-ledger";
-import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
+import { getRecord, getRunInput, ThreadRead, ThreadStore } from "effect-agent/thread-store";
 import { WorkerRef } from "effect-agent/worker";
 import { WorkerHostAuthorizer } from "effect-agent/worker-host";
 import { WorkerEnvironment } from "effect-cf";
@@ -166,59 +172,84 @@ export const decideWorkerApproval = Effect.fn("decideWorkerApproval")(
   Effect.mapError(unavailable),
 );
 
-/** Recover the exact public proposal from the canonical model response, never a live draft. */
-const researchApproval = (
-  history: ReadonlyArray<CanonicalRecordEnvelope>,
-  submissionId: (typeof WorkerApprovalDecision.Type)["submissionId"],
+/** Approval authority uses exact canonical records, independently of the activity window. */
+const researchApproval = Effect.fn("researchApproval")(function* (
+  submission: SubmissionSnapshot,
   toolCallId: (typeof WorkerApprovalDecision.Type)["toolCallId"],
-): typeof ResearchPlan.Type | undefined => {
-  const requested = history.findLast(
-    ({ record }) =>
-      record.payload._tag === "ToolApprovalRequested" &&
-      record.payload.toolCallId === toolCallId &&
-      record.payload.toolName === ReviewResearchPlan.name,
-  )?.record.payload;
+) {
+  const origin = submission.workerAdmission?.origin;
 
-  if (requested?._tag !== "ToolApprovalRequested") return undefined;
+  if (origin === undefined) return undefined;
+  const threadId = submission.threadId;
+  const runId = runIdForSubmission(submission.submissionId);
+  const input = yield* getRunInput({ threadId, runId });
+
   if (
-    !history.some(
-      ({ record }) =>
-        record.payload._tag === "UserInputRecorded" &&
-        record.payload.submissionId === submissionId &&
-        record.payload.runId === requested.runId,
-    )
+    Option.isNone(input) ||
+    input.value.record.payload._tag !== "UserInputRecorded" ||
+    input.value.record.payload.submissionId !== submission.submissionId
   )
     return undefined;
-  for (const { record } of history) {
-    const payload = record.payload;
+  let requested: ToolApprovalRequested | undefined;
+
+  // The retained policy bounds canonical turn numbers, including after steering or recovery.
+  for (let turn = 1; turn <= origin.policy.maxTurns; turn++) {
+    const record = yield* getRecord({
+      threadId,
+      recordId: toolApprovalRequestRecordId(runId, turn, toolCallId),
+    });
+
+    if (Option.isNone(record)) continue;
+    const payload = record.value.record.payload;
 
     if (
-      payload._tag !== "ModelResponseRecorded" ||
-      payload.runId !== requested.runId ||
-      payload.turnId !== requested.turnId
+      payload._tag !== "ToolApprovalRequested" ||
+      payload.runId !== runId ||
+      payload.turn !== turn ||
+      payload.toolCallId !== toolCallId ||
+      payload.toolName !== ReviewResearchPlan.name ||
+      requested !== undefined
     )
-      continue;
-    const prompt = Schema.decodeUnknownOption(Prompt.Prompt)(payload.messages);
+      return undefined;
+    requested = payload;
+  }
+  if (requested === undefined) return undefined;
 
-    if (Option.isNone(prompt)) continue;
-    for (const message of prompt.value.content) {
-      if (message.role !== "assistant") continue;
-      for (const part of message.content) {
-        if (
-          part.type !== "tool-call" ||
-          part.id !== toolCallId ||
-          part.name !== ReviewResearchPlan.name
-        )
-          continue;
-        const plan = Schema.decodeUnknownOption(ResearchPlan)(part.params);
+  const response = yield* getRecord({
+    threadId,
+    recordId: modelResponseRecordId(runId, requested.turn),
+  });
 
-        if (Option.isSome(plan)) return plan.value;
-      }
+  if (Option.isNone(response)) return undefined;
+  const payload = response.value.record.payload;
+
+  if (
+    payload._tag !== "ModelResponseRecorded" ||
+    payload.runId !== runId ||
+    payload.turn !== requested.turn ||
+    payload.turnId !== requested.turnId
+  )
+    return undefined;
+  const prompt = Schema.decodeUnknownOption(Prompt.Prompt)(payload.messages);
+
+  if (Option.isNone(prompt)) return undefined;
+  for (const message of prompt.value.content) {
+    if (message.role !== "assistant") continue;
+    for (const part of message.content) {
+      if (
+        part.type !== "tool-call" ||
+        part.id !== toolCallId ||
+        part.name !== ReviewResearchPlan.name
+      )
+        continue;
+      const plan = Schema.decodeUnknownOption(ResearchPlan)(part.params);
+
+      if (Option.isSome(plan)) return plan.value;
     }
   }
 
   return undefined;
-};
+});
 
 /** Private child RPC: validate lineage and the declared checkpoint before the native decision. */
 export const workerApproval = Effect.fn("workerApproval")(function* (
@@ -244,11 +275,7 @@ export const workerApproval = Effect.fn("workerApproval")(function* (
     origin.worker.targetAgentId !== updatingResearchScout.id ||
     request.worker.delegationId !== origin.worker.delegationId ||
     request.worker.targetAgentId !== origin.worker.targetAgentId ||
-    !researchApproval(
-      yield* workerHistory(request.worker.threadId),
-      submission.submissionId,
-      request.approval.toolCallId,
-    )
+    !(yield* researchApproval(submission, request.approval.toolCallId))
   )
     return yield* notFound();
   const runtime = yield* DurableAgentRuntime;
@@ -263,9 +290,10 @@ export const workerApproval = Effect.fn("workerApproval")(function* (
 }, Effect.mapError(unavailable));
 
 /**
- * Runs on the worker's owning object: one local key lookup, a nonterminal scan, and at most
- * 100 canonical records. No foreign ledger fan-out, full exports, history wire round trips,
- * or recovery/admission. The status describes the selected request plus any active work.
+ * Runs on the worker's owning object: a local key lookup, a nonterminal scan, and at most
+ * 100 activity records. Approval adds indexed reads bounded by the retained turn policy.
+ * No foreign ledger fan-out, full exports, history wire round trips, or recovery/admission.
+ * The status describes the selected request plus any active work.
  */
 export const workerStatus = Effect.fn("workerStatus")(
   function* (request: typeof WorkerStatusRequest.Type) {
@@ -319,7 +347,7 @@ export const workerStatus = Effect.fn("workerStatus")(
     if (snapshot?.suspension?.reason._tag === "ApprovalPending") {
       const submissionId = snapshot.submission.submissionId;
       const toolCallId = snapshot.suspension.reason.toolCallIds[0];
-      const plan = researchApproval(history, submissionId, toolCallId);
+      const plan = yield* researchApproval(snapshot.submission, toolCallId);
       const origin = snapshot.submission.workerAdmission?.origin;
 
       if (plan === undefined || origin === undefined) return yield* unavailable();

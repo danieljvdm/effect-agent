@@ -119,9 +119,11 @@ promise immediate cancellation of an already dispatched native RPC.
 
 The conversation object verifies the exact `WorkerInputRequested` record and the host's read
 authorization before addressing a child. The child computes the compact view locally with one
-lookup for that request, a nonterminal scan, and the final 100 canonical records. Limits apply
-before decoding and activity projection. Status describes that selected request plus any
-active work on the worker; an older pending delivery is not reconstructed as a new task.
+lookup for that request, a nonterminal scan, and the final 100 canonical records for activity.
+Approval reads its exact canonical input and proposal separately, with indexed lookups bounded
+by the worker's retained turn policy. Limits apply before decoding and activity projection.
+Status describes that selected request plus any active work on the worker; an older pending
+delivery is not reconstructed as a new task.
 Activity is a recent window, not a complete audit log. Reads never admit, recover, or replay
 work. Diagnostics retain the existing redaction boundary.
 
