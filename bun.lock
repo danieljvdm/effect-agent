@@ -131,7 +131,7 @@
     },
     "packages/ai-decision": {
       "name": "@effect-agent/ai-decision",
-      "version": "0.1.0-beta.156",
+      "version": "0.1.0-beta.157",
       "devDependencies": {
         "@effect/ai-typesafe": "catalog:",
         "@effect/vitest": "catalog:",
@@ -145,7 +145,7 @@
     },
     "packages/effect-agent": {
       "name": "effect-agent",
-      "version": "0.1.0-beta.156",
+      "version": "0.1.0-beta.157",
       "devDependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
@@ -159,7 +159,7 @@
     },
     "packages/platform-cloudflare": {
       "name": "@effect-agent/platform-cloudflare",
-      "version": "0.1.0-beta.156",
+      "version": "0.1.0-beta.157",
       "dependencies": {
         "@effect-agent/storage-cloudflare": "workspace:*",
         "@effect/platform-browser": "catalog:",
@@ -189,7 +189,7 @@
     },
     "packages/platform-node": {
       "name": "@effect-agent/platform-node",
-      "version": "0.1.0-beta.156",
+      "version": "0.1.0-beta.157",
       "dependencies": {
         "@effect-agent/storage-sqlite": "workspace:*",
         "@effect-agent/workflow": "workspace:*",
@@ -209,7 +209,7 @@
     },
     "packages/pr-review": {
       "name": "@effect-agent/pr-review",
-      "version": "0.1.0-beta.156",
+      "version": "0.1.0-beta.157",
       "dependencies": {
         "effect-agent": "workspace:*",
       },
@@ -242,7 +242,7 @@
     },
     "packages/sandbox-local": {
       "name": "@effect-agent/sandbox-local",
-      "version": "0.1.0-beta.156",
+      "version": "0.1.0-beta.157",
       "dependencies": {
         "@effect/platform-node": "catalog:",
         "effect-agent": "workspace:*",
@@ -260,7 +260,7 @@
     },
     "packages/storage-cloudflare": {
       "name": "@effect-agent/storage-cloudflare",
-      "version": "0.1.0-beta.156",
+      "version": "0.1.0-beta.157",
       "dependencies": {
         "@effect-agent/storage-sql": "workspace:*",
         "@effect/platform-browser": "catalog:",
@@ -283,7 +283,7 @@
     },
     "packages/storage-memory": {
       "name": "@effect-agent/storage-memory",
-      "version": "0.1.0-beta.156",
+      "version": "0.1.0-beta.157",
       "dependencies": {
         "effect-agent": "workspace:*",
       },
@@ -300,7 +300,7 @@
     },
     "packages/storage-postgres": {
       "name": "@effect-agent/storage-postgres",
-      "version": "0.1.0-beta.156",
+      "version": "0.1.0-beta.157",
       "dependencies": {
         "@effect-agent/storage-sql": "workspace:*",
         "effect-agent": "workspace:*",
@@ -319,7 +319,7 @@
     },
     "packages/storage-sql": {
       "name": "@effect-agent/storage-sql",
-      "version": "0.1.0-beta.156",
+      "version": "0.1.0-beta.157",
       "dependencies": {
         "effect-agent": "workspace:*",
       },
@@ -335,7 +335,7 @@
     },
     "packages/storage-sqlite": {
       "name": "@effect-agent/storage-sqlite",
-      "version": "0.1.0-beta.156",
+      "version": "0.1.0-beta.157",
       "dependencies": {
         "@effect-agent/storage-sql": "workspace:*",
         "@effect/platform-node": "catalog:",
@@ -354,7 +354,7 @@
     },
     "packages/testing": {
       "name": "@effect-agent/testing",
-      "version": "0.1.0-beta.156",
+      "version": "0.1.0-beta.157",
       "dependencies": {
         "effect-agent": "workspace:*",
       },
@@ -378,7 +378,7 @@
     },
     "packages/workflow": {
       "name": "@effect-agent/workflow",
-      "version": "0.1.0-beta.156",
+      "version": "0.1.0-beta.157",
       "dependencies": {
         "effect-agent": "workspace:*",
       },

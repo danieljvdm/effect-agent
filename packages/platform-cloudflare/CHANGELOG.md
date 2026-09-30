@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.157
+
+### Patch Changes
+
+- [#715](https://github.com/danieljvdm/effect-agent/pull/715) [`b6ec526`](https://github.com/danieljvdm/effect-agent/commit/b6ec526daf05a71d318fec0b31c5b31db54fed35) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Publish committed Run and Subagent start progress while native execution continues. Reduce SQLite statements for warm Durable Object turns while preserving recovery and ownership fencing.
+
+- Updated dependencies [[`b6ec526`](https://github.com/danieljvdm/effect-agent/commit/b6ec526daf05a71d318fec0b31c5b31db54fed35), [`ee41eb7`](https://github.com/danieljvdm/effect-agent/commit/ee41eb7ef96a9edfa7e8d2dd4b2a50b8944f7af3)]:
+  - effect-agent@0.1.0-beta.157
+  - @effect-agent/storage-cloudflare@0.1.0-beta.157
+
 ## 0.1.0-beta.156
 
 ### Patch Changes

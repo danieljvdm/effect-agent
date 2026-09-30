@@ -1,5 +1,15 @@
 # effect-agent
 
+## 0.1.0-beta.157
+
+### Minor Changes
+
+- [#716](https://github.com/danieljvdm/effect-agent/pull/716) [`ee41eb7`](https://github.com/danieljvdm/effect-agent/commit/ee41eb7ef96a9edfa7e8d2dd4b2a50b8944f7af3) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add `WebSearch.native({ tool })` to search inside the agent's own model call, with durable hosted-tool discovery and replay, read-only search restarts, and `webSearchCalls` usage for host pricing. Keep the existing nested `WebSearch.layer` available for separately selected search models.
+
+### Patch Changes
+
+- [#715](https://github.com/danieljvdm/effect-agent/pull/715) [`b6ec526`](https://github.com/danieljvdm/effect-agent/commit/b6ec526daf05a71d318fec0b31c5b31db54fed35) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Publish committed Run and Subagent start progress while native execution continues. Reduce SQLite statements for warm Durable Object turns while preserving recovery and ownership fencing.
+
 ## 0.1.0-beta.156
 
 ### Patch Changes
