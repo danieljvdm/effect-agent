@@ -93,6 +93,81 @@ const testLayer = Layer.mergeAll(
 );
 
 layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
+  it.effect("keeps one absolute deadline while the model emits text", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const firstDelta = yield* Deferred.make<void>();
+      const secondDelta = yield* Deferred.make<void>();
+      let deltas = 0;
+      let finalized = false;
+
+      const parts: ReadonlyArray<Response.StreamPartEncoded> = [
+        { type: "text-start", id: "answer" },
+        { type: "text-delta", id: "answer", delta: '{"answer":' },
+        { type: "text-delta", id: "answer", delta: '"ok"' },
+        { type: "text-delta", id: "answer", delta: "}" },
+        { type: "text-end", id: "answer" },
+        { type: "finish", reason: "stop", usage },
+      ];
+
+      const model = Model.make(
+        "scripted",
+        "streaming-deadline",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: () =>
+              Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
+                Stream.flatMap(() => Stream.fromIterable(parts)),
+                Stream.tap((part) =>
+                  part.type === "text-delta" ? Effect.sleep("2 seconds") : Effect.void,
+                ),
+                Stream.ensuring(
+                  Effect.sync(() => {
+                    finalized = true;
+                  }),
+                ),
+              ),
+          }),
+        ),
+      );
+
+      const definition = Agent.make("streaming-deadline", {
+        input: Schema.String,
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Answer.",
+        toolkit: Toolkit.empty,
+        policy: policy({ maxDuration: "5 seconds" }),
+      });
+
+      const fiber = yield* AgentRuntime.stream(Agent.withModel(definition, model), "begin").pipe(
+        Stream.tap((event) => {
+          if (event._tag !== "TextDelta") return Effect.void;
+          deltas++;
+
+          return Deferred.succeed(deltas === 1 ? firstDelta : secondDelta, undefined);
+        }),
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("2 seconds");
+      yield* Deferred.await(firstDelta);
+      yield* TestClock.adjust("2 seconds");
+      yield* Deferred.await(secondDelta);
+      yield* TestClock.adjust("1 second");
+
+      expect(failureFrom(yield* Fiber.await(fiber))).toMatchObject({
+        _tag: "AgentPolicyError",
+        limit: "duration",
+      });
+      expect(deltas).toBe(2);
+      expect(finalized).toBe(true);
+    }),
+  );
+
   it.effect("future expiry interrupts a forged resumed Tool and runs its finalizer", () =>
     Effect.gen(function* () {
       const handlerStarted = yield* Deferred.make<void>();
