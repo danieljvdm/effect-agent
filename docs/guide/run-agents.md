@@ -366,8 +366,11 @@ accept the same observer through their platform options.
 ## Scope run resources {#interruption-is-ownership}
 
 A run Scope owns its model stream, tool fibers, and run-local resources. Closing it interrupts
-children and runs finalizers. Services from an enclosing application layer remain available to
-other runs until the application Scope closes.
+children and runs finalizers. `run` completes cleanup before returning; `stream` closes its
+resources when consumption completes, fails, or is interrupted. Services from an enclosing
+application layer remain available to other runs until the application Scope closes.
+Retrying a whole run can repeat external effects; use durable recovery when work must survive
+interruption without automatically replaying uncertain ordinary tools.
 
 Wrap several runs with one `Effect.provide(AppLive)` to reuse shared services. Keep caller scoping
 for `start`, explicit resource acquisition, and any operation that requires `Scope`.

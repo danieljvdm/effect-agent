@@ -507,14 +507,10 @@ completion, and supported stores never require a reset.
 Each owning store upgrades in one native transaction and advances its version marker last.
 Reopening after interruption retries the entire uncommitted upgrade.
 Namespaces, canonical history and digests, receipts, pending work, ownership, deadlines, alarm
-generations and scan cursors are preserved. Keep the existing namespace/file and the old source
-versions, input bindings and agent registrations needed to finish retained work.
-
-Repeated settlement finalization reads an already settled submission and its reservation together
-without acquiring a write transaction. A first finalization adds one read probe before the existing
-write transaction, which rechecks the current state. SQLite settlement observation can therefore
-read committed state while another connection holds the write lock. Runtime status still loads the
-recovery snapshot to materialize its response; this change does not remove that work.
+generations and scan cursors are preserved. Keep the existing namespace/file and the source
+versions and input bindings needed to finish retained deliveries. Register the current binding
+for each stable Agent ID; unfinished operations retain their recorded replay contracts. See
+[deployment continuity](./agents#resume-across-deployments).
 
 Recovery checkpoints are disposable: missing or incompatible cache state rebuilds from canonical
 history. Upgrades preserve existing generic projection checkpoints. The optional `verifyOnOpen`
