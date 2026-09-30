@@ -4,6 +4,7 @@ import { Effect, Exit, Layer, Option, Schema, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
 import { DurableWorkerBinding } from "effect-agent/agent-registration";
 import { ContextCompactor } from "effect-agent/context-compactor";
+import { digestJson } from "effect-agent/digest";
 import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
 import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
 import { DurableStep, DurableStepError, ToolExecutionClass } from "effect-agent/durable-step";
@@ -76,7 +77,7 @@ const scenarios = [
 describe("disposable durable recovery checkpoint", () => {
   // https://github.com/danieljvdm/effect-agent/issues/692
   // Same-Run recovery tests do not detect replay of retired history by each new Run.
-  it.effect("keeps fresh Runs bounded after rollover, including checkpoint refresh", () =>
+  it.effect("keeps fresh Runs bounded and falls back from incompatible Thread context", () =>
     Effect.gen(function* () {
       const store = yield* ThreadStore;
       const threadId = ThreadId.make("fresh-checkpoint");
@@ -185,6 +186,44 @@ describe("disposable durable recovery checkpoint", () => {
         expect(retiredReads).toBe(0);
       }
       expect(JSON.stringify(requests.at(-1))).toContain("first fresh request");
+
+      // https://github.com/danieljvdm/effect-agent/commit/57411e0591424908211c2adc128d64b3563f1d37
+      // A valid checksum must not hide an incompatible Prompt from cache eligibility checks.
+      const checkpoints = store.recoveryCheckpoints!;
+      const saved = yield* checkpoints.load(LoadCheckpointRequest.make({ threadId }));
+
+      if (Option.isNone(saved)) return yield* Effect.die("missing Thread context checkpoint");
+      const jsonObject = Schema.Record(Schema.String, Schema.Json);
+
+      const contents = yield* Schema.decodeUnknownEffect(Schema.Struct({ state: jsonObject }))(
+        saved.value.state,
+      );
+
+      const context = yield* Schema.decodeUnknownEffect(jsonObject)(contents.state.context);
+      const invalidState = { ...contents.state, context: { ...context, prompt: null } };
+      const invalidContents = { state: invalidState, digest: yield* digestJson(invalidState) };
+
+      const invalidContext = ThreadStore.of({
+        ...store,
+        recoveryCheckpoints: {
+          ...checkpoints,
+          load: (request) =>
+            checkpoints
+              .load(request)
+              .pipe(
+                Effect.map(
+                  Option.map((checkpoint) =>
+                    ThreadCheckpoint.make({ ...checkpoint, state: invalidContents }),
+                  ),
+                ),
+              ),
+        },
+      });
+
+      yield* process("fresh request with invalid cache", false, invalidContext);
+      expect(JSON.stringify(requests.at(-1))).toContain("Retained handoff.");
+      expect(JSON.stringify(requests.at(-1))).toContain("second fresh request");
+      expect(JSON.stringify(requests.at(-1))).toContain("fresh request with invalid cache");
 
       // A new compaction still maps the actual canonical prefix, even after cached fresh Runs.
       yield* process("new window request", true);

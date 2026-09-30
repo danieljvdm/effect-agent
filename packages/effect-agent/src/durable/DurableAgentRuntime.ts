@@ -1626,6 +1626,14 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
     if (digest !== actualDigest) return Option.none();
 
+    if (state.context !== undefined) {
+      const prompt = yield* Schema.decodeUnknownEffect(Prompt.Prompt)(state.context.prompt).pipe(
+        Effect.option,
+      );
+
+      if (Option.isNone(prompt)) return Option.none();
+    }
+
     const owner = yield* ledger
       .lookup(SubmissionLookupById.make({ submissionId: state.submissionId }))
       .pipe(
