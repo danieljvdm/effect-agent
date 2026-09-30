@@ -24,6 +24,10 @@ import {
   routedSubmissionLedgerLayer,
   routedWorkerAdmissionLayer,
 } from "@effect-agent/storage-cloudflare/port-routing";
+import {
+  SqlStorageProgress,
+  SqlStorageProgressError,
+} from "@effect-agent/storage-sql/sql-storage-progress";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import {
@@ -35,6 +39,7 @@ import {
   Effect,
   ErrorReporter,
   Layer,
+  Match,
   Schema,
   Semaphore,
   Option,
@@ -619,17 +624,72 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
         Layer.effect(SqlClient)(SqlClient),
       );
 
+      const sourceProgress = Layer.effect(SqlStorageProgress)(
+        Effect.gen(function* () {
+          const mutations = yield* ThreadMutationGate;
+
+          return {
+            committed: (kind) => {
+              const lanes = Match.value(kind).pipe(
+                Match.when("canonical", () => [
+                  DueQueue.Native,
+                  DueQueue.Publication,
+                  ...(options.projection === undefined ? [] : [DueQueue.Projection]),
+                ]),
+                Match.whenOr("submission", "control", () => [
+                  DueQueue.Native,
+                  DueQueue.Publication,
+                ]),
+                Match.when("delivery", () => [
+                  DueQueue.Messages,
+                  ...(options.lifecyclePublication === undefined ? [] : [DueQueue.Lifecycle]),
+                ]),
+                Match.when("lifecycle", () =>
+                  options.lifecyclePublication === undefined
+                    ? []
+                    : [DueQueue.Lifecycle, DueQueue.LifecycleStart],
+                ),
+                Match.when("lifecycle-ack", () =>
+                  options.lifecyclePublication === undefined ? [] : [DueQueue.Lifecycle],
+                ),
+                Match.exhaustive,
+              );
+
+              return mutations.recordProgress(lanes).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.failCause(
+                    Cause.map(cause, (failure) =>
+                      SqlStorageProgressError.make({
+                        operation: "record maintenance progress",
+                        message: "Committed source work could not enroll maintenance",
+                        cause: failure,
+                      }),
+                    ),
+                  ),
+                ),
+              );
+            },
+          };
+        }),
+      );
+
       // The same local ports serve routed decorators and owner-side RPC execution.
       // The RPC executor must never receive routed ports and bounce requests between Objects.
       const rawLocalPorts = Layer.mergeAll(threadStoreLayer, submissionLedgerLayer).pipe(
         Layer.provide(infrastructure),
+        Layer.provide(sourceProgress),
       );
 
       const base = Layer.mergeAll(DurableAlarmService.layer, ProgressWaitRegistry.layer);
       const wakes = cloudflareWakeSchedulerLayer.pipe(Layer.provide(base));
 
       const messageStore = guardedMessageDeliveryStoreLayer.pipe(
-        Layer.provide(doMessageDeliveryStoreLayer().pipe(Layer.provide(infrastructure))),
+        Layer.provide(
+          doMessageDeliveryStoreLayer().pipe(
+            Layer.provide(infrastructure),
+            Layer.provide(sourceProgress),
+          ),
+        ),
         Layer.provide(wakes),
       );
 
@@ -995,6 +1055,7 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
         routedMessages,
         messageRecovery,
       ).pipe(
+        Layer.provideMerge(sourceProgress),
         Layer.provideMerge(publication),
         Layer.provideMerge(projection),
         Layer.provideMerge(ThreadMutationGate.layer),

@@ -217,8 +217,8 @@ it("admits workers in one RPC and reads completions concurrently only at capacit
       const replay = await invoke("1");
 
       expect(replay).toEqual(first.result);
-      expect(first.result.delivery.status).toBe("accepted");
-      expect(second.result.delivery.status).toBe("accepted");
+      expect(first.result.delivery.status).toBe("parked");
+      expect(second.result.delivery.status).toBe("parked");
       expect(pressure.result.delivery.status).toBe("refused");
       samples.push({
         first: { ms: first.elapsedMs, calls: first.calls },
@@ -389,6 +389,10 @@ it("delivers an accepted worker update before completion after eviction with onl
 
     expect(completions).toHaveLength(1);
     expect(completions[0]?.report.outcome).toBe("aborted");
+    // Regression: https://linear.app/reve-ai/issue/KOM-291
+    // Both the intermediate update and terminal report must receive a destination
+    // settlement acknowledgement without the reporting worker polling main.
+    expect((await deliveries()).items.map((row) => row.status)).toEqual(["processed", "processed"]);
     const child = await readCanonical(started.worker.threadId);
 
     expect(child.filter(({ record }) => record.payload._tag === "AgentUpdateEmitted")).toHaveLength(
@@ -492,7 +496,7 @@ it("retains captured worker policies and concurrency across native eviction and 
         .poll(() => inspect(started))
         .toMatchObject({
           message: started.delivery.message,
-          status: "accepted",
+          status: "parked",
           receipt: expect.objectContaining({ threadId: started.worker.threadId }),
         });
     }

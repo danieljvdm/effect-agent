@@ -288,8 +288,14 @@ describe("direct message delivery", () => {
       const record = yield* initial();
 
       yield* store.insert(record);
-      yield* driver.process(record.key);
-      yield* TestClock.adjust(10);
+      const accepted = yield* driver.process(record.key);
+
+      yield* store.change(record.key, {
+        _tag: "Recover",
+        expectedVersion: accepted.version,
+        nowMillis: 0,
+        deadlineAtMillis: 1_000,
+      });
       expect((yield* driver.process(record.key)).status).toBe("accepted");
       yield* TestClock.adjust(10);
 
@@ -372,7 +378,7 @@ describe("direct message delivery", () => {
     );
   }
 
-  it.effect("does not double-dispatch concurrent claims and bounds automatic deadlines", () =>
+  it.effect("does not double-dispatch concurrent claims or expire an accepted Receipt", () =>
     Effect.gen(function* () {
       let calls = 0;
 
@@ -387,7 +393,7 @@ describe("direct message delivery", () => {
         });
         expect(calls).toBe(1);
         yield* TestClock.adjust(1_000);
-        expect((yield* driver.process(record.key)).parkReason).toBe("deadline");
+        expect((yield* driver.process(record.key)).parkReason).toBe("awaiting-settlement");
       }).pipe(
         Effect.provide(
           layer({

@@ -7,7 +7,8 @@ import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { ThreadMaintenance } from "../src/Alarm.ts";
+import { ThreadMaintenance, ThreadMutationGate } from "../src/Alarm.ts";
+import { CloudflareDurableRuntimeConfig } from "../src/CloudflareConfig.ts";
 import { CloudflareThreadClient } from "../src/CloudflareThreadClient.ts";
 import * as DueQueue from "../src/internal/due-queue.ts";
 import {
@@ -108,15 +109,40 @@ const mutate = (thread: string, source: number) =>
   runInDurableObject(stub(thread), (instance, state) =>
     instance[DurableObject.RunSymbol](
       ThreadMaintenance.use((maintenance) =>
-        maintenance.withMutation(Effect.promise(() => state.storage.put(SOURCE_KEY, source))),
+        maintenance.withMutation(
+          Effect.gen(function* () {
+            yield* Effect.promise(() => state.storage.put(SOURCE_KEY, source));
+            const gate = yield* ThreadMutationGate;
+
+            yield* gate.schedule(
+              DueQueue.Publication,
+              yield* Clock.currentTimeMillis,
+              BigInt(source),
+            );
+          }),
+        ),
       ),
     ),
   );
 
-const quiesce = (thread: string) =>
-  drainAlarmsUntil(thread, async () => (await scheduledAlarm(thread, namespace)) === null, {
-    namespace,
-  });
+const quiesce = (thread: string, advance: (millis: number) => Promise<void>) =>
+  drainAlarmsUntil(
+    thread,
+    async () => {
+      const deadline = await scheduledAlarm(thread, namespace);
+
+      if (deadline === null) return true;
+      const clock = maintenanceClocks.get(thread);
+
+      if (clock === undefined) throw new Error("Expected the fixture maintenance clock");
+      const now = await Effect.runPromise(clock.currentTimeMillis);
+
+      await advance(Math.max(0, deadline - now));
+
+      return false;
+    },
+    { namespace },
+  );
 
 const withThread = (
   test: (thread: string, now: number, advance: (millis: number) => Promise<void>) => Promise<void>,
@@ -164,9 +190,9 @@ describe("durable host publication", () => {
   // Regression: 405916b0 cleared concurrent publication after the first eight-fact batch.
   // A single-admission Run cannot expose start progress hidden behind queued readiness facts.
   it("publishes start progress behind a queued backlog while the provider remains held", () =>
-    withThread(async (thread) => {
+    withThread(async (thread, _now, advance) => {
       await submit(thread);
-      await quiesce(thread);
+      await quiesce(thread, advance);
       lifecycleBatches.delete(thread);
       const entered = latch();
       const release = latch();
@@ -204,7 +230,7 @@ describe("durable host publication", () => {
         release.resolve();
         await running;
       }
-      await quiesce(thread);
+      await quiesce(thread, advance);
     }, true));
 
   // Regression: #713 deferred the entire start prefix until native execution settled.
@@ -267,8 +293,62 @@ describe("durable host publication", () => {
         await vi.waitFor(async () => expect((await startLane())?.dueAt).toBeNull());
         dormantObserved = true;
         const dormant = await startLane();
+        const heldCanonical = await readCanonical(thread, namespace);
 
-        await advance(15_000);
+        const ownership = () =>
+          runInDurableObject(stub(thread), (_, state) =>
+            state.storage.sql
+              .exec<{ attempt_id: string; lease_expires_at: string }>(
+                "SELECT attempt_id, lease_expires_at FROM effect_agent_submission_ownership",
+              )
+              .toArray(),
+          );
+
+        const heldOwnership = await ownership();
+
+        const renewalInterval = await runInDurableObject(stub(thread), (instance) =>
+          instance[DurableObject.RunSymbol](
+            Effect.map(CloudflareDurableRuntimeConfig, (config) => config.leaseRenewalInterval),
+          ),
+        );
+
+        expect(heldOwnership).toHaveLength(1);
+        const held = heldOwnership[0];
+
+        if (held === undefined) throw new Error("Expected a held native Attempt");
+        let leaseExpiresAt = held.lease_expires_at;
+
+        for (let renewal = 0; renewal < 12; renewal++) {
+          await advance(renewalInterval);
+          await vi.waitFor(async () => {
+            const renewed = await ownership();
+
+            expect(renewed.map((row) => row.attempt_id)).toEqual(
+              heldOwnership.map((row) => row.attempt_id),
+            );
+            const current = renewed[0];
+
+            if (current === undefined) throw new Error("Expected a renewed native Attempt");
+            expect(Date.parse(current.lease_expires_at)).toBeGreaterThan(
+              Date.parse(leaseExpiresAt),
+            );
+            leaseExpiresAt = current.lease_expires_at;
+          });
+        }
+        await advance(180_000);
+        expect((await ownership()).map((row) => row.attempt_id)).toEqual(
+          heldOwnership.map((row) => row.attempt_id),
+        );
+        expect(await readCanonical(thread, namespace)).toEqual(heldCanonical);
+        expect(
+          await runInDurableObject(
+            stub(thread),
+            (_, state) =>
+              DueQueue.make(state.storage)
+                .read()
+                .find((row) => row.id === DueQueue.Native)?.state,
+          ),
+        ).not.toBe("parked");
         expect(await startLane()).toEqual(dormant);
         expect(await allSettled(thread, namespace)()).toBe(false);
         expect((lifecycleBatches.get(thread) ?? []).flat()).toHaveLength(3);
@@ -284,7 +364,7 @@ describe("durable host publication", () => {
           await interrupted;
         }
       }
-      await quiesce(thread);
+      await quiesce(thread, advance);
       const batches = lifecycleBatches.get(thread) ?? [];
 
       expect(batches.flat().map((p) => p.fact._tag)).toEqual([
@@ -359,7 +439,7 @@ describe("durable host publication", () => {
       expect(before.every((row) => row.payload_json !== null)).toBe(true);
       failedLifecycleThreads.delete(thread);
       await advance(11_000);
-      await quiesce(thread);
+      await quiesce(thread, advance);
       const batches = lifecycleBatches.get(thread) ?? [];
 
       expect(batches.every((batch) => batch.length <= 8)).toBe(true);
@@ -380,11 +460,11 @@ describe("durable host publication", () => {
     }, true));
 
   it("rebuilt maintenance observes an in-flight native ledger producer through the exported gate", () =>
-    withThread(async (thread) => {
+    withThread(async (thread, _now, advance) => {
       const receipt = await submit(thread, approvalDefinition);
 
       await drainAlarmsUntil(thread, anyInState(thread, "suspended", namespace), { namespace });
-      await quiesce(thread);
+      await quiesce(thread, advance);
       const before = await cursor(thread);
 
       armMaintenancePause(thread, "maintenance:mutation:armed");
@@ -418,13 +498,13 @@ describe("durable host publication", () => {
         releaseMaintenancePause(thread);
         await producer;
       }
-      await quiesce(thread);
+      await quiesce(thread, advance);
       expect((await laneRows(thread, namespace))[0]?.state).toBe("settled");
       expect((await cursor(thread)).decisions).toEqual(["approved"]);
     }));
 
   it("keeps a producer racing an empty publication drain armed", () =>
-    withThread(async (thread) => {
+    withThread(async (thread, _now, advance) => {
       await alarm(thread);
       const entered = latch();
       const release = latch();
@@ -443,12 +523,12 @@ describe("durable host publication", () => {
       }
       expect((await cursor(thread)).source).toBe(1);
       expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
-      await quiesce(thread);
+      await quiesce(thread, advance);
       expect((await cursor(thread)).source).toBe(2);
     }));
 
   it("does not erase a new producer when finishing a publication-only pass", () =>
-    withThread(async (thread) => {
+    withThread(async (thread, _now, advance) => {
       await alarm(thread);
       armMaintenancePause(thread, "maintenance:finish:before");
       const running = alarm(thread);
@@ -461,7 +541,7 @@ describe("durable host publication", () => {
         await running;
       }
       expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
-      await quiesce(thread);
+      await quiesce(thread, advance);
       expect((await cursor(thread)).source).toBe(1);
     }));
 
@@ -471,23 +551,25 @@ describe("durable host publication", () => {
       armStorageEviction(thread, "append:after");
       await alarm(thread).catch(() => undefined);
       expect(armedEvictionsRemaining(thread)).toBe(0);
-      // A new incarnation must see a generation newer than the scan prepared before runtime work.
+      // The committed source revision must leave publication pending through eviction.
       const state = await generation(thread);
       const before = await cursor(thread);
 
-      expect(state.dirty).toBeGreaterThan(BigInt(before.generation));
+      expect((await readCanonical(thread, namespace)).at(-1)?.sequence).toBeGreaterThan(
+        before.tail,
+      );
       expect(state.dirty).toBeGreaterThan(state.processed);
       expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
       await advance(1_000);
       await drainAlarmsUntil(thread, allSettled(thread, namespace), { namespace });
-      await quiesce(thread);
+      await quiesce(thread, advance);
       expect((await cursor(thread)).tail).toBe(
         (await readCanonical(thread, namespace)).at(-1)?.sequence,
       );
     }));
 
   it("returns the committed submission when immediate publication fails and repairs it by alarm", () =>
-    withThread(async (thread) => {
+    withThread(async (thread, _now, advance) => {
       publicationControls.set(thread, { failure: "failure" });
       const receipt = await submit(thread);
 
@@ -496,7 +578,7 @@ describe("durable host publication", () => {
       expect((await laneRows(thread, namespace))[0]?.submission_id).toBe(receipt.submissionId);
       expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
       publicationControls.delete(thread);
-      await quiesce(thread);
+      await quiesce(thread, advance);
       expect((await laneRows(thread, namespace))[0]?.state).toBe("settled");
       expect((await cursor(thread)).tail).toBe(
         (await readCanonical(thread, namespace)).at(-1)?.sequence,
@@ -513,8 +595,8 @@ describe("durable host publication", () => {
 
         // Preserve the earned retry deadline across real Object retirement.
         for (const [minimum, maximum] of [
-          [5, 10],
-          [10, 20],
+          [1_000, 1_000],
+          [2_000, 2_000],
         ] as const) {
           await expect(alarm(thread)).rejects.toBeDefined();
           const resources = publicationResources.get(thread);

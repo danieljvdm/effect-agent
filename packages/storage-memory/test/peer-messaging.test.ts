@@ -441,7 +441,7 @@ describe("durable peer messaging boundaries", () => {
       const pump = yield* h.makeDriver(restarted);
       const accepted = yield* pump.process(pending.message);
 
-      expect(accepted.status).toBe("accepted");
+      expect(accepted.status).toBe("parked");
       expect(accepted.receipt).toMatchObject({
         submissionId: admitted.value.submissionId,
         receiptId: admitted.value.receiptId,
@@ -613,7 +613,7 @@ describe("durable peer messaging boundaries", () => {
         const pump = yield* h.makeDriver(restarted);
         const accepted = yield* pump.process(reply.message);
 
-        expect(accepted.status).toBe("accepted");
+        expect(accepted.status).toBe("parked");
         yield* restarted.processThreadResolved(sourceThread);
         const inbox = yield* h.host.inbox({ name: "answer", target: destination, limit: 10 });
 
@@ -760,7 +760,7 @@ describe("durable peer messaging boundaries", () => {
         expect(recovered.initialDeadlineAtMillis).toBe(frozen.initialDeadlineAtMillis);
         expect(recovered.deadlineAtMillis).toBeGreaterThan(frozen.deadlineAtMillis);
         expect(recovered.retry.generation).toBe(1);
-        expect((yield* h.driver.process(pending.message)).status).toBe("accepted");
+        expect((yield* h.driver.process(pending.message)).status).toBe("parked");
         expect(h.controls.routeCalls).toBe(1);
       }).pipe(Effect.scoped),
   );

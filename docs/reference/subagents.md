@@ -343,9 +343,11 @@ These Effects retain one intended input. Programmatic calls require an explicit,
 | `accepted`  | `receipt` identifies the destination's accepted input; completion is unconfirmed.        |
 | `processed` | `receipt` and `settlement` identify its canonical completed, failed, or aborted outcome. |
 | `refused`   | The destination rejected this input; `reason` identifies the refusal.                    |
-| `parked`    | Automatic retry stopped; the same identity and any accepted receipt remain available.    |
+| `parked`    | Automatic dispatch stopped; the exact identity and accepted receipt remain available.    |
 
 Inspect `delivery.message` to follow the same operation without resending or driving delivery.
+`parked` with reason `awaiting-settlement` means the destination accepted the input and will
+notify its owner when it settles; approvals and other external waits schedule no status polls.
 The host's existing bounded delivery driver owns retries and crash recovery. A recorded admission
 failure remains `pending` with a bounded `reason`, or becomes `parked` when its retry budget ends.
 Detailed diagnostics remain private in the delivery record. A real storage exception still fails

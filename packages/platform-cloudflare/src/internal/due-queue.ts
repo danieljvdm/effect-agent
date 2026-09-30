@@ -9,6 +9,9 @@ export const HostLaneId = LaneId.check(
 );
 
 export const Deadline = Schema.NullOr(Schema.Finite);
+export const MinimumRetryMillis = 1_000;
+export const MaximumNoProgressRearms = 8;
+export const ParkedRetryMillis = 60 * 60_000;
 
 /** Scheduling metadata only. Domain outboxes, claims and receipts remain authoritative. */
 export class DueLane extends Schema.Class<DueLane>("CloudflareDueLane")({
@@ -16,6 +19,10 @@ export class DueLane extends Schema.Class<DueLane>("CloudflareDueLane")({
   revision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   dueAt: Deadline,
   stalls: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 30 })),
+  progressKey: Schema.NullOr(Schema.NonEmptyString.check(Schema.isMaxLength(512))),
+  notBefore: Schema.Finite,
+  state: Schema.Literals(["idle", "pending", "parked"]),
+  reported: Schema.Literals([0, 1]),
 }) {}
 
 export const Native = "effect-agent:native";
@@ -59,8 +66,34 @@ export const make = (storage: DurableObjectStorage) => {
 
   const initialize = () => {
     sql.exec(`CREATE TABLE IF NOT EXISTS platform_cloudflare_due_queue (
-    id TEXT PRIMARY KEY, revision INTEGER NOT NULL, dueAt REAL, stalls INTEGER NOT NULL
+    id TEXT PRIMARY KEY, revision INTEGER NOT NULL, dueAt REAL, stalls INTEGER NOT NULL,
+    progressKey TEXT, notBefore REAL NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'pending',
+    reported INTEGER NOT NULL DEFAULT 0
   )`);
+
+    const columns = new Set(
+      sql
+        .exec("PRAGMA table_info(platform_cloudflare_due_queue)")
+        .toArray()
+        .map((row) => row.name),
+    );
+
+    if (!columns.has("reported"))
+      sql.exec(
+        "ALTER TABLE platform_cloudflare_due_queue ADD COLUMN reported INTEGER NOT NULL DEFAULT 0",
+      );
+    if (!columns.has("progressKey"))
+      sql.exec("ALTER TABLE platform_cloudflare_due_queue ADD COLUMN progressKey TEXT");
+    if (!columns.has("notBefore"))
+      sql.exec(
+        "ALTER TABLE platform_cloudflare_due_queue ADD COLUMN notBefore REAL NOT NULL DEFAULT 0",
+      );
+    if (!columns.has("state")) {
+      sql.exec(
+        "ALTER TABLE platform_cloudflare_due_queue ADD COLUMN state TEXT NOT NULL DEFAULT 'pending'",
+      );
+      sql.exec("UPDATE platform_cloudflare_due_queue SET state = 'idle' WHERE dueAt IS NULL");
+    }
   };
 
   /** Keep dormant rows so delete/reinsert cannot reuse a revision held by an older wave. */
@@ -68,7 +101,11 @@ export const make = (storage: DurableObjectStorage) => {
     if (current.rows !== undefined) return current.rows;
 
     const rows = decode(
-      sql.exec("SELECT id, revision, dueAt, stalls FROM platform_cloudflare_due_queue").toArray(),
+      sql
+        .exec(
+          "SELECT id, revision, dueAt, stalls, progressKey, notBefore, state, reported FROM platform_cloudflare_due_queue",
+        )
+        .toArray(),
     );
 
     if (rows.length <= 128) current.rows = rows;
@@ -76,23 +113,47 @@ export const make = (storage: DurableObjectStorage) => {
     return rows;
   };
 
-  const dirty = (id: string, dueAt: number) => {
+  const dirty = (id: string, dueAt: number, progress = false, progressKey?: string) => {
     Schema.decodeSync(LaneId)(id);
     Schema.decodeSync(Schema.Finite)(dueAt);
     retain(
       decode(
         sql
           .exec(
-            `INSERT INTO platform_cloudflare_due_queue VALUES (?, 1, ?, 0)
-     ON CONFLICT(id) DO UPDATE SET revision = revision + 1,
-       dueAt = CASE WHEN dueAt IS NULL THEN excluded.dueAt ELSE min(dueAt, excluded.dueAt) END,
-       stalls = 0 RETURNING id, revision, dueAt, stalls`,
+            `INSERT INTO platform_cloudflare_due_queue (id, revision, dueAt, stalls, progressKey, notBefore) VALUES (?, 1, ?, 0, ?, 0)
+     ON CONFLICT(id) DO UPDATE SET revision = revision + ?,
+       dueAt = CASE WHEN ? = 1 THEN excluded.dueAt
+         WHEN dueAt IS NULL THEN max(excluded.dueAt, notBefore)
+         ELSE max(notBefore, min(dueAt, excluded.dueAt)) END,
+       state = CASE WHEN ? = 1 THEN 'pending' WHEN stalls >= ${MaximumNoProgressRearms} THEN state ELSE 'pending' END,
+       stalls = CASE WHEN ? = 1 THEN 0 ELSE stalls END,
+       notBefore = CASE WHEN ? = 1 THEN 0 ELSE notBefore END,
+       reported = CASE WHEN ? = 1 THEN 0 ELSE reported END,
+       progressKey = coalesce(excluded.progressKey, progressKey) RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported`,
             id,
             dueAt,
+            progressKey ?? null,
+            Number(progress),
+            Number(progress),
+            Number(progress),
+            Number(progress),
+            Number(progress),
+            Number(progress),
           )
           .toArray(),
       ),
     );
+  };
+
+  /** A strictly increasing source cursor; old or repeated notices cannot renew a budget. */
+  const progress = (id: string, dueAt: number, cursor: bigint) => {
+    Schema.decodeSync(Schema.BigInt.check(Schema.isGreaterThanOrEqualToBigInt(0n)))(cursor);
+    const previous = read().find((row) => row.id === id)?.progressKey;
+
+    if (previous !== undefined && previous !== null && cursor <= BigInt(previous)) return false;
+    dirty(id, dueAt, true, String(cursor));
+
+    return true;
   };
 
   /** One initial native discovery wave; host lanes always require explicit enrollment. */
@@ -101,7 +162,7 @@ export const make = (storage: DurableObjectStorage) => {
       decode(
         sql
           .exec(
-            "INSERT OR IGNORE INTO platform_cloudflare_due_queue VALUES (?, 0, 0, 0) RETURNING id, revision, dueAt, stalls",
+            "INSERT OR IGNORE INTO platform_cloudflare_due_queue (id, revision, dueAt, stalls, progressKey, notBefore) VALUES (?, 0, 0, 0, NULL, 0) RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported",
             id,
           )
           .toArray(),
@@ -109,15 +170,53 @@ export const make = (storage: DurableObjectStorage) => {
     );
   };
 
-  const complete = (lane: DueLane, dueAt: number | null, failed = false) => {
+  /** Charge before fallible work so a crash cannot replay an uncharged attempt. */
+  const claim = (lane: DueLane, nowMillis: number, native = false) => {
+    const notBefore =
+      nowMillis +
+      (lane.stalls + 1 >= MaximumNoProgressRearms
+        ? ParkedRetryMillis
+        : Math.min(60_000, MinimumRetryMillis * 2 ** lane.stalls));
+
+    const rows = decode(
+      sql
+        .exec(
+          `UPDATE platform_cloudflare_due_queue SET stalls = min(stalls + 1, ${MaximumNoProgressRearms}), notBefore = ?,
+       state = CASE WHEN stalls + 1 >= ${MaximumNoProgressRearms} THEN 'parked' ELSE 'pending' END,
+       dueAt = ?
+       WHERE id = ? AND revision = ?
+       AND dueAt IS NOT NULL AND (dueAt <= ? OR (? = 1 AND notBefore <= ?)) RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported`,
+          notBefore,
+          notBefore,
+          lane.id,
+          lane.revision,
+          nowMillis,
+          Number(native),
+          nowMillis,
+        )
+        .toArray(),
+    );
+
+    retain(rows);
+
+    return rows[0];
+  };
+
+  const complete = (lane: DueLane, dueAt: number | null) => {
     Schema.decodeSync(Deadline)(dueAt);
+
+    const guarded = dueAt === null ? null : Math.max(dueAt, lane.notBefore);
+
     retain(
       decode(
         sql
           .exec(
-            "UPDATE platform_cloudflare_due_queue SET dueAt = ?, stalls = ?, revision = revision + 1 WHERE id = ? AND revision = ? RETURNING id, revision, dueAt, stalls",
+            "UPDATE platform_cloudflare_due_queue SET dueAt = ?, state = ?, stalls = CASE WHEN ? IS NULL THEN 0 ELSE stalls END, notBefore = CASE WHEN ? IS NULL THEN 0 ELSE notBefore END, reported = CASE WHEN ? IS NULL THEN 0 ELSE reported END, revision = revision + 1 WHERE id = ? AND revision = ? RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported",
+            guarded,
+            dueAt === null ? "idle" : lane.stalls >= MaximumNoProgressRearms ? "parked" : "pending",
             dueAt,
-            failed ? Math.min(30, lane.stalls + 1) : 0,
+            dueAt,
+            dueAt,
             lane.id,
             lane.revision,
           )
@@ -129,11 +228,27 @@ export const make = (storage: DurableObjectStorage) => {
   /** Native checkpoints already fence their own dirty/processed generation. */
   const checkpointNative = (dueAt: number | null) => {
     Schema.decodeSync(Deadline)(dueAt);
+    const row = read().find((row) => row.id === Native);
+    const publication = read().find((row) => row.id === Publication);
+
+    const guarded =
+      dueAt === null || publication?.state === "parked"
+        ? null
+        : Math.max(dueAt, row?.notBefore ?? 0);
+
     retain(
       decode(
         sql
           .exec(
-            "UPDATE platform_cloudflare_due_queue SET dueAt = ? WHERE id = ? RETURNING id, revision, dueAt, stalls",
+            "UPDATE platform_cloudflare_due_queue SET dueAt = ?, state = ?, stalls = CASE WHEN ? IS NULL THEN 0 ELSE stalls END, notBefore = CASE WHEN ? IS NULL THEN 0 ELSE notBefore END, reported = CASE WHEN ? IS NULL THEN 0 ELSE reported END WHERE id = ? RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported",
+            guarded,
+            dueAt === null
+              ? "idle"
+              : (row?.stalls ?? 0) >= MaximumNoProgressRearms
+                ? "parked"
+                : "pending",
+            dueAt,
+            dueAt,
             dueAt,
             Native,
           )
@@ -142,7 +257,31 @@ export const make = (storage: DurableObjectStorage) => {
     );
   };
 
-  return { initialize, read, dirty, register, complete, checkpointNative };
+  const takeParkedReports = () => {
+    const rows = decode(
+      sql
+        .exec(
+          "UPDATE platform_cloudflare_due_queue SET reported = 1 WHERE state = 'parked' AND reported = 0 RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported",
+        )
+        .toArray(),
+    );
+
+    retain(rows);
+
+    return rows;
+  };
+
+  return {
+    initialize,
+    read,
+    dirty,
+    progress,
+    register,
+    claim,
+    complete,
+    checkpointNative,
+    takeParkedReports,
+  };
 };
 
 export const next = (rows: ReadonlyArray<DueLane>) =>

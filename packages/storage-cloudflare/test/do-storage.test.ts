@@ -634,6 +634,9 @@ describe("DoThreadStore", () => {
 
         for (let index = 1; index <= 9; index++) yield* appendInput(String(index), input);
 
+        // Exercise paged storage reads rather than the bounded append cache.
+        yield* invalidate(storage);
+
         const records = yield* store.read(ThreadRead.make({ threadId, limit: 1_024 })).pipe(
           Stream.mapEffect(
             Effect.fn(function* (record) {
@@ -671,6 +674,8 @@ describe("DoThreadStore", () => {
           );
 
         expect(observed).toEqual([5, 6, 7, 8, 9, 10, 11]);
+
+        yield* invalidate(storage);
 
         const changed = yield* store.read(ThreadRead.make({ threadId, limit: 9 })).pipe(
           Stream.tap((record) =>

@@ -39,7 +39,8 @@ it.each(["reply", "tools", "eviction", "backlog", "rejected"] as const)(
     const releaseTool = Deferred.makeUnsafe<void>();
     let recovering = false;
     const liveClock = Effect.runSync(Clock.Clock);
-    const nowMillis = () => Date.now() + (recovering ? 31_000 : 0);
+    // This fixture owns a separate ad-hoc runtime; prevent the Object's registered alarm runtime from claiming its input concurrently.
+    const nowMillis = () => Date.now() + 86_400_000 + (recovering ? 31_000 : 0);
 
     const clock: Clock.Clock = {
       currentTimeMillisUnsafe: nowMillis,

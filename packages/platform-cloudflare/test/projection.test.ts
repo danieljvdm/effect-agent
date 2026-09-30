@@ -72,10 +72,24 @@ const watermark = (thread: string) =>
     instance[DurableObject.RunSymbol](Effect.flatMap(ProjectionIndex, (index) => index.watermark)),
   );
 
-const quiesce = (thread: string) =>
-  drainAlarmsUntil(thread, async () => (await scheduledAlarm(thread, namespace)) === null, {
-    namespace,
-  });
+const quiesce = (thread: string, advance: (millis: number) => Promise<void>) =>
+  drainAlarmsUntil(
+    thread,
+    async () => {
+      const deadline = await scheduledAlarm(thread, namespace);
+
+      if (deadline === null) return true;
+      const clock = maintenanceClocks.get(thread);
+
+      if (clock === undefined) throw new Error("Expected the fixture maintenance clock");
+      const now = await Effect.runPromise(clock.currentTimeMillis);
+
+      await advance(Math.max(0, deadline - now));
+
+      return false;
+    },
+    { namespace },
+  );
 
 const submit = (thread: string, definition: typeof plannerDefinition | typeof approvalDefinition) =>
   runClient(
@@ -182,7 +196,7 @@ describe("live Thread projection and alarm backfill", () => {
         );
 
       expect(await rows()).toEqual([
-        { id: "test:Admission", revision: 1, dueAt: expect.any(Number) },
+        { id: "test:Admission", revision: 2, dueAt: expect.any(Number) },
       ]);
       await runInDurableObject(stub(thread), (instance) =>
         instance[DurableObject.RunSymbol](
@@ -209,7 +223,7 @@ describe("live Thread projection and alarm backfill", () => {
       expect(await rows()).toEqual([
         { id: "test:Admission", revision: 2, dueAt: expect.any(Number) },
         { id: "test:Settlement", revision: 2, dueAt: expect.any(Number) },
-        { id: "test:WorkerStop", revision: 1, dueAt: expect.any(Number) },
+        { id: "test:WorkerStop", revision: 2, dueAt: expect.any(Number) },
       ]);
       expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
     }));
@@ -523,7 +537,7 @@ describe("live Thread projection and alarm backfill", () => {
       // Independent Threads can publish before the aborted model finishes releasing.
       for (
         let count = 0;
-        count < 5 && (controls.published.length === 0 || controls.oldActive !== 0);
+        count < 20 && (controls.published.length === 0 || controls.oldActive !== 0);
         count++
       )
         await advance(100);
@@ -585,7 +599,7 @@ describe("live Thread projection and alarm backfill", () => {
   it.each(["maintenance:checkpoint:after"] as const)(
     "recovers native progress and pending projection after eviction at %s",
     (location) =>
-      withThread(async (thread) => {
+      withThread(async (thread, _now, advance) => {
         projectionControls.set(thread, { skipLive: true });
         await submit(thread, plannerDefinition);
 
@@ -612,7 +626,7 @@ describe("live Thread projection and alarm backfill", () => {
 
         expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
         projectionControls.delete(thread);
-        await quiesce(thread);
+        await quiesce(thread, advance);
         expect(await readCanonical(thread, namespace)).toEqual(canonical);
         expect(await watermark(thread)).toBe(canonical.at(-1)!.sequence);
         expect(await allSettled(thread, namespace)()).toBe(true);
@@ -620,11 +634,11 @@ describe("live Thread projection and alarm backfill", () => {
   );
 
   it("does not let a future projection deadline gate approval publication or execution", () =>
-    withThread(async (thread, now) => {
+    withThread(async (thread, now, advance) => {
       const receipt = await submit(thread, approvalDefinition);
 
       await drainAlarmsUntil(thread, anyInState(thread, "suspended", namespace), { namespace });
-      await quiesce(thread);
+      await quiesce(thread, advance);
       projectionControls.set(thread, { skipLive: true, retryAt: now + 25 });
       await runClient(
         Effect.flatMap(CloudflareThreadClient, (client) =>
@@ -648,11 +662,11 @@ describe("live Thread projection and alarm backfill", () => {
       );
       expect(await scheduledAlarm(thread, namespace)).toBeLessThanOrEqual(now + 25);
       projectionControls.delete(thread);
-      await quiesce(thread);
+      await quiesce(thread, advance);
     }));
 
   it("waits for an in-flight predecessor before committing and serving the next lookup", () =>
-    withThread(async (thread) => {
+    withThread(async (thread, _now, advance) => {
       const firstRequest = await prepareAppend(thread, 1);
       let enter!: () => void;
       let release!: () => void;
@@ -697,6 +711,6 @@ describe("live Thread projection and alarm backfill", () => {
       const result = await next;
 
       expect(Exit.isSuccess(result) && result.value).toBe(2);
-      await quiesce(thread);
+      await quiesce(thread, advance);
     }));
 });

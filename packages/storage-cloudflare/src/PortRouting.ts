@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Option, Predicate, Schema, Stream } from "effect";
+import { Cause, Clock, Context, Effect, Layer, Option, Predicate, Schema, Stream } from "effect";
 import type { DurableRuntimeFailpoint } from "effect-agent/durable-failpoint";
 import { LifecyclePublicationError } from "effect-agent/lifecycle-publication";
 import { MessageDeliveryStore, MessageDeliveryError } from "effect-agent/message-delivery";
@@ -36,6 +36,8 @@ import {
   WorkerAdmitResult,
   MessageDeliveryListCall,
   MessageDeliveryListResult,
+  MessageDeliveryCompleteCall,
+  MessageDeliveryCompleteResult,
   boundPortDiagnostic,
   decodePortRequest,
   decodePortResponse,
@@ -1117,6 +1119,46 @@ export const routedMessageDeliveryStoreLayer = (options: RoutedPortOptions) =>
 
       return MessageDeliveryStore.of({
         ...local,
+        change: (key, change) =>
+          options.ownsThread(key.ownerThreadId) || change._tag !== "Complete"
+            ? local.change(key, change)
+            : call(
+                key.ownerThreadId,
+                MessageDeliveryCompleteCall.make({ key, completion: change }),
+              ).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.failCause(
+                    Cause.map(cause, (failure) =>
+                      MessageDeliveryError.make({
+                        reason: "storage",
+                        operation: "route delivery completion",
+                        cause: failure,
+                      }),
+                    ),
+                  ),
+                ),
+                Effect.flatMap((response) => {
+                  if (
+                    response._tag === "PortSucceeded" &&
+                    response.result._tag === "MessageDeliveryCompleteResult"
+                  )
+                    return Effect.succeed(response.result.record);
+                  if (
+                    response._tag === "PortFailed" &&
+                    (response.failure._tag === "MessageDeliveryError" ||
+                      response.failure._tag === "MessageDeliveryFailpointError")
+                  )
+                    return Effect.fail(response.failure);
+
+                  return Effect.fail(
+                    MessageDeliveryError.make({
+                      reason: "storage",
+                      operation: "route delivery completion",
+                      cause: response,
+                    }),
+                  );
+                }),
+              ),
         list: (request) =>
           options.ownsThread(request.ownerThreadId)
             ? local.list(request)
@@ -1178,6 +1220,19 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
   SubmissionLedger | ThreadStore | MessageDeliveryStore | WakeScheduler | DurableRuntimeFailpoint
 > {
   switch (request._tag) {
+    case "MessageDeliveryComplete": {
+      const store = yield* MessageDeliveryStore;
+
+      return yield* capture(
+        store
+          .change(request.key, {
+            _tag: "Complete",
+            ...request.completion,
+            nowMillis: yield* Clock.currentTimeMillis,
+          })
+          .pipe(Effect.map((record) => MessageDeliveryCompleteResult.make({ record }))),
+      );
+    }
     case "WorkerAdmit":
       return yield* capture(
         admitWorker(request.request).pipe(

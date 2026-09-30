@@ -366,6 +366,7 @@ Application outboxes enroll independent lanes in one durable due queue:
 ```ts
 import { ThreadHostMaintenance, ThreadMutationGate } from "@effect-agent/platform-cloudflare/alarm";
 import { Context, Effect } from "effect";
+import { SqlClient } from "effect/unstable/sql";
 
 const maintenance = Context.make(ThreadHostMaintenance, {
   lanes: [{ id: "replies", dispatchTimeoutMillis: 30_000, run: replies.deliverWave }],
@@ -373,10 +374,16 @@ const maintenance = Context.make(ThreadHostMaintenance, {
 
 const retainReply = Effect.gen(function* () {
   const gate = yield* ThreadMutationGate;
-  yield* gate.withMutation(replies.retain, {
-    invalidatesRecovery: false,
-    lanes: ["replies"],
-  });
+  const sql = yield* SqlClient.SqlClient;
+  yield* gate.withMutation(
+    sql.withTransaction(
+      Effect.gen(function* () {
+        const added = yield* replies.retain;
+        if (added) yield* gate.recordProgress(["replies"]);
+      }),
+    ),
+    { invalidatesRecovery: false, lanes: ["replies"] },
+  );
 });
 ```
 
@@ -385,6 +392,18 @@ framework lanes. `run` returns `Effect<Option<number>, DurableAlarmError, Scope>
 in epoch milliseconds, or `None` when idle. Calculate it as part of the wave that commits the
 receipts and retries. The scheduler never calls a separate host deadline reader. Compose hosts
 by concatenating their lanes.
+
+Every lane has a bounded no-progress budget for waves that return another deadline. Returning
+`None` drains the lane and resets its budget, so later ordinary enrollment can wake it again.
+Pending retries have a one-second floor and exponential backoff; after eight unchanged waves,
+the lane parks with an hourly recovery deadline and reports once through the installed Effect
+error reporter. An outage cannot silently strand its retained work. A committed source change
+can resume it immediately. Deadline renewal, claims and failed mutations cannot reset that budget.
+Local sources call `recordProgress(lanes)` only after an actual change, inside their source SQL
+transaction. Replayed facts must skip it. Remote sources retain their monotonically increasing
+commit cursor and deliver `schedule(id, dueAt, cursor)`; repeated or older cursors cannot renew the
+budget. Neither `withMutation` nor a wake hint records progress. Claims, deadlines, retry counters
+and clocks are not source facts. Retained source work remains owed when scheduling parks.
 
 When native input or settlement creates application work, select its lanes at the native owner:
 

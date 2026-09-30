@@ -118,6 +118,12 @@ const isDigest = Schema.is(Digest);
 const isDoFenceRejected = Schema.is(DoFenceRejected);
 const isDoAppendConflict = Schema.is(DoAppendConflict);
 const isDoCheckpointConflict = Schema.is(DoCheckpointConflict);
+// Reuse the same AST/parser across reads. Reconstructing a JSON codec per row
+// defeats Schema's parser cache and repeatedly walks the canonical union.
+const CanonicalRecordJson = Schema.fromJsonString(CanonicalRecord);
+const CanonicalBatchJson = Schema.fromJsonString(CanonicalBatch);
+const ThreadCheckpointJson = Schema.fromJsonString(ThreadCheckpoint);
+const decodeCanonicalRecord = Schema.decodeEffect(CanonicalRecordJson);
 
 const storeError = (
   operation: string,
@@ -197,7 +203,7 @@ const mapFence = (threadId: ThreadMaterialization["threadId"], error: DoFenceRej
 const encodeCanonicalRecord = Effect.fn(function* (
   record: CanonicalRecord,
 ): Effect.fn.Return<string, ThreadStoreError> {
-  return yield* Schema.encodeEffect(Schema.fromJsonString(CanonicalRecord))(record).pipe(
+  return yield* Schema.encodeEffect(CanonicalRecordJson)(record).pipe(
     Effect.mapError((error) => schemaStoreError("encode canonical record", error)),
   );
 });
@@ -205,7 +211,7 @@ const encodeCanonicalRecord = Effect.fn(function* (
 const encodeCanonicalBatch = Effect.fn(function* (
   batch: CanonicalBatch,
 ): Effect.fn.Return<string, ThreadStoreError> {
-  return yield* Schema.encodeEffect(Schema.fromJsonString(CanonicalBatch))(batch).pipe(
+  return yield* Schema.encodeEffect(CanonicalBatchJson)(batch).pipe(
     Effect.mapError((error) => schemaStoreError("encode canonical batch", error)),
   );
 });
@@ -213,7 +219,7 @@ const encodeCanonicalBatch = Effect.fn(function* (
 const encodeCheckpoint = Effect.fn(function* (
   checkpoint: ThreadCheckpoint,
 ): Effect.fn.Return<string, ThreadStoreError> {
-  return yield* Schema.encodeEffect(Schema.fromJsonString(ThreadCheckpoint))(checkpoint).pipe(
+  return yield* Schema.encodeEffect(ThreadCheckpointJson)(checkpoint).pipe(
     Effect.mapError((error) => schemaStoreError("encode checkpoint", error)),
   );
 });
@@ -230,9 +236,7 @@ const decodeEnvelope = Effect.fnUntraced(function* (row: {
 
   if (cached !== undefined) return cached;
 
-  const record = yield* Schema.decodeEffect(Schema.fromJsonString(CanonicalRecord))(
-    row.record_json,
-  ).pipe(
+  const record = yield* decodeCanonicalRecord(row.record_json).pipe(
     Effect.mapError((error) =>
       ThreadStoreError.make({
         operation: "decode canonical record",

@@ -43,6 +43,7 @@
   },
   "dependencies": {
     "@effect-agent/storage-cloudflare": "workspace:*",
+    "@effect-agent/storage-sql": "workspace:*",
     "@effect/platform-browser": "catalog:",
     "@effect/sql-sqlite-do": "catalog:",
     "effect-agent": "workspace:*",

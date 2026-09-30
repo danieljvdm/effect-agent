@@ -132,12 +132,11 @@ describe("Cross-Object child admission, wake, and abort ownership", () => {
     const ref = lane("child-awaits-lineage");
     const faultSuffix = `:${delegateCallIdFor(ref)}`;
 
-    // An after-admit eviction buffer covers the window between the admission committing and
-    // the transport fault arming (the pool auto-fires due alarms in the background, burning
-    // roughly one armed eviction per millisecond); once the fault is armed, every parent
+    // The retry floor leaves time to arm the transport fault after admission. A second
+    // eviction covers a concurrent delivery; once the fault is armed, every parent
     // recovery pass answers Indeterminate (SUB-031) and the parent provably CANNOT complete
     // establishment during the child-side probes.
-    armRuntimeEviction(ref, ...Array.from({ length: 64 }, () => location));
+    armRuntimeEviction(ref, location, location);
     const receipt = await submitCoordinator(ref, `${ref}-key`);
     const child = childThreadOf(receipt, ref);
 

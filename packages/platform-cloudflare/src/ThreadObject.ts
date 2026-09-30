@@ -192,6 +192,7 @@ const isMutatingPortRequest = (request: PortRequest): boolean => {
     case "LedgerRecordChildSettled":
     case "StoreMaterialize":
     case "StoreAppend":
+    case "MessageDeliveryComplete":
       return true;
     case "LedgerInspectWorker":
     case "LedgerLookup":
@@ -358,6 +359,8 @@ const requireReceiptThread = Effect.fn("ThreadObject.requireReceiptThread")(func
 
 const requirePortThread = (request: PortRequest) => {
   switch (request._tag) {
+    case "MessageDeliveryComplete":
+      return requireReceiptThread(request.key.ownerThreadId);
     case "MessageDeliveryList":
       return requireReceiptThread(request.request.ownerThreadId);
     case "LedgerLookup":

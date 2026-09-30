@@ -14,6 +14,8 @@ import { PreparedInput } from "./Subscription.ts";
 
 const Positive = Schema.Int.check(Schema.isGreaterThan(0));
 const BoundedName = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256));
+const receiptsEqual = Schema.toEquivalence(Receipt);
+const settlementsEqual = Schema.toEquivalence(Settlement);
 
 /** An owner is always a source Thread. Destination admission has its own frozen key. */
 export const MessageDeliveryKey = Schema.Struct({
@@ -66,7 +68,12 @@ export const defaultMessageDeliveryStoreLimits: MessageDeliveryStoreLimits = {
   maxRetainedUpdatesPerOwner: 256,
 };
 
-const ParkReason = Schema.Literals(["exhausted", "deadline", "status-unavailable"]);
+const ParkReason = Schema.Literals([
+  "exhausted",
+  "deadline",
+  "status-unavailable",
+  "awaiting-settlement",
+]);
 
 export const MessageDeliveryRecord = Schema.Struct({
   schemaVersion: Schema.Literal(1),
@@ -152,7 +159,20 @@ export const MessageDeliveryFailpoint = Context.Reference<{
 
 const fence = { expectedVersion: Positive, nowMillis: ScheduleInstant };
 
+/** Terminal destination evidence, independent of an expiring source transport claim. */
+export const MessageDeliveryCompletion = Schema.Struct({
+  receipt: Receipt,
+  settlement: Settlement,
+  admissionKey: IdempotencyKey,
+  inputDigest: Digest,
+});
+
 export const MessageDeliveryChange = Schema.Union([
+  Schema.Struct({
+    _tag: Schema.Literal("Complete"),
+    nowMillis: ScheduleInstant,
+    ...MessageDeliveryCompletion.fields,
+  }),
   Schema.Struct({ _tag: Schema.Literal("Claim"), ...fence }),
   Schema.Struct({ _tag: Schema.Literal("Accept"), ...fence, receipt: Receipt }),
   Schema.Struct({ _tag: Schema.Literal("Process"), ...fence, settlement: Settlement }),
@@ -424,6 +444,34 @@ export const applyMessageDeliveryChange = (
 ): Result.Result<MessageDeliveryRecord, MessageDeliveryError> => {
   const conflict = () => Result.fail(error("conflict", change._tag));
 
+  if (change._tag === "Complete") {
+    if (
+      change.admissionKey !== record.envelope.admissionKey ||
+      change.inputDigest !== record.envelope.inputDigest ||
+      change.receipt.threadId !== record.envelope.threadId ||
+      change.settlement.submissionId !== change.receipt.submissionId ||
+      change.settlement.receiptId !== change.receipt.receiptId ||
+      (record.receipt !== null && !receiptsEqual(record.receipt, change.receipt))
+    )
+      return Result.fail(error("corrupt", "completion-identity"));
+    if (record.status === "refused") return conflict();
+    if (record.status === "processed")
+      return record.settlement !== null && settlementsEqual(record.settlement, change.settlement)
+        ? Result.succeed(record)
+        : Result.fail(error("corrupt", "completion-identity"));
+
+    return Result.succeed({
+      ...record,
+      version: record.version + 1,
+      status: "processed",
+      receipt: change.receipt,
+      settlement: change.settlement,
+      leaseUntilMillis: null,
+      parkReason: null,
+      retry: { ...record.retry, parked: false },
+    });
+  }
+
   if (record.version !== change.expectedVersion) return conflict();
   if (record.status === "processed" || record.status === "refused") return conflict();
   const now = change.nowMillis;
@@ -540,21 +588,8 @@ export const applyMessageDeliveryChange = (
   }
   if (change._tag === "ObservePending") {
     if (record.status !== "accepted") return conflict();
-    if (now >= record.deadlineAtMillis) return Result.succeed(parked("deadline"));
 
-    return Result.succeed({
-      ...base,
-      leaseUntilMillis: null,
-      retry: {
-        ...record.retry,
-        automaticAttempts: 0,
-        lastFailure: null,
-        nextAttemptAtMillis: Math.min(
-          now + record.policy.settlementPollMillis,
-          record.deadlineAtMillis,
-        ),
-      },
-    });
+    return Result.succeed(parked("awaiting-settlement"));
   }
   if (change._tag === "Refuse") {
     if (record.status !== "pending") return conflict();
@@ -700,9 +735,10 @@ export class MessageDeliveryDriver extends Context.Service<
                 // Digest computation cannot extend this claim's admission authority.
                 if (timeout <= 0) return claimed;
 
-                type WithoutFence<T> = T extends MessageDeliveryChange
-                  ? Omit<T, "expectedVersion" | "nowMillis">
-                  : never;
+                type WithoutFence<T> =
+                  T extends Exclude<MessageDeliveryChange, { _tag: "Complete" }>
+                    ? Omit<T, "expectedVersion" | "nowMillis">
+                    : never;
 
                 const commit = (change: WithoutFence<MessageDeliveryChange>) =>
                   Clock.currentTimeMillis.pipe(
@@ -722,8 +758,16 @@ export class MessageDeliveryDriver extends Context.Service<
                   ).pipe(Effect.mapError((cause) => error("corrupt", "admission", cause)));
 
                   yield* failpoint.hit("message-delivery:admission:after");
-                  if (outcome._tag === "Receipt")
-                    return yield* commit({ _tag: "Accept", receipt: outcome.receipt });
+                  if (outcome._tag === "Receipt") {
+                    const accepted = yield* commit({ _tag: "Accept", receipt: outcome.receipt });
+
+                    return yield* store.change(key, {
+                      _tag: "Park",
+                      reason: "awaiting-settlement",
+                      expectedVersion: accepted.version,
+                      nowMillis: yield* Clock.currentTimeMillis,
+                    });
+                  }
                   if (outcome._tag === "Refused")
                     return yield* commit({
                       _tag: "Refuse",

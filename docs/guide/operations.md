@@ -576,8 +576,11 @@ The host exposes its `SqlClient`, `SqliteStorageConfig`, and `SqliteStorageFailp
 and runtime operations share one serialized connection, including during startup recovery.
 
 `MessageDeliveryStore` retains a host-prepared input independently of either Thread's current Run.
-`pending` means the obligation is saved; `accepted` means the destination returned a durable
-Receipt; `processed` means that exact Receipt has a terminal Settlement. A lost admission reply
+`pending` means the obligation is saved; an accepted Receipt parks the delivery as
+`awaiting-settlement`, with no status-poll deadline. `processed` means that exact Receipt has a
+terminal Settlement. Native workers and peer inputs acknowledge their source before finalizing
+the destination ledger. A lost acknowledgement is replayed from canonical settlement during
+recovery. A lost admission reply
 reuses the frozen envelope and admission key. It cannot create a replacement input.
 
 Node hosts run a scoped, bounded polling loop over the delivery deadline index. Cloudflare Thread
@@ -588,7 +591,9 @@ resources while retaining the obligation for recovery.
 
 Automatic retry has finite attempt and deadline bounds. `refused` and `parked` remain inspectable;
 an explicit driver `retry` renews a parked obligation's deadline without changing its envelope.
-Healthy destination processing does not consume the failure-attempt budget. Completed rows retain
+Generic host-prepared inputs without native source provenance remain dormant until the host
+supplies an exact `Complete` acknowledgement or explicitly retries the retained Receipt once.
+Completed rows retain
 deduplication evidence and count toward the retention limit; capacity exhaustion fails explicitly.
 
 These are trusted host ports. Authenticate the sender, authorize routing and encode the
