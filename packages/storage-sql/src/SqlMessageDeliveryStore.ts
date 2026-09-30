@@ -19,6 +19,7 @@ import {
   validateMessageDelivery,
 } from "effect-agent/message-delivery";
 import { ScheduleInstant } from "effect-agent/schedule";
+import { SqlStorageOwner } from "effect-agent/sql-memory-store";
 import { IdempotencyKey } from "effect-agent/submission-ledger";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
@@ -169,10 +170,15 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
   const query = <A extends object>(operation: string, statement: Statement<A>) =>
     execute(statement).pipe(Effect.mapError((cause) => storage(operation, cause)));
 
+  const owner = yield* SqlStorageOwner;
+
   const transaction = <A>(body: Effect.Effect<A, MessageDeliveryFailure>) =>
-    (options.transaction ?? sql.withTransaction)(body).pipe(
-      Effect.catchTag("SqlError", () => storage("transaction")),
-    );
+    (options.transaction === undefined
+      ? owner === undefined
+        ? sql.withTransaction(body)
+        : owner.transaction(body).pipe(Effect.provideService(SqlClient.SqlClient, sql))
+      : options.transaction(body)
+    ).pipe(Effect.catchTag("SqlError", () => storage("transaction")));
 
   const lifecycle = yield* makeSqlLifecyclePublication(options.namespace, maxStoredValueBytes).pipe(
     Effect.mapError((cause) => storage("lifecycle", cause)),

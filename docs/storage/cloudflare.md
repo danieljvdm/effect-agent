@@ -8,9 +8,10 @@ description: Store thread history and accepted work in Durable Object SQLite.
 Cloudflare stores thread history and accepted work in Durable Object SQLite.
 Each Object owns its database, separate from other Objects. Records survive Object
 eviction and reconstruction. While the Object is live, the adapters share bounded,
-write-through memory for thread headers, submissions, and recovery state. Warm
-`loadRecoverySnapshot` calls see committed local writes without rereading SQLite;
-cache misses reload validated rows. Failed transactions discard cached state.
+write-through memory for thread headers, submissions, recovery state, and the journal tail.
+Native reads reuse those committed views; cache misses reload validated rows. Memory stores
+over the same owner share its transaction gate and document, receipt, and usage views.
+Failed transactions discard cached state.
 
 ## Run durable agents
 
@@ -34,10 +35,10 @@ for application queries.
 database so ownership claims fence the same records. These adapters provide storage
 ports; acquiring them alone does not drive agent execution or recovery.
 
-Use the adapters for ordinary writes. If maintenance writes thread or submission tables directly,
+Use the adapters for ordinary writes. If maintenance writes private adapter tables directly,
 call `DoThreadStore.invalidate(ctx.storage)` afterward, before serving port reads. Keep
 port operations quiesced during both steps and enroll the write with the host's mutation gate.
-This invalidates both adapters' shared view;
+This invalidates the adapters' shared views;
 it does not change durable data. Canonical records remain append-only.
 
 Background worker starts validate authority and reserve capacity at the source, then admit and

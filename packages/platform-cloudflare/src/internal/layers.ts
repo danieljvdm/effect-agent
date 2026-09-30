@@ -8,6 +8,7 @@ import {
   threadStoreLayer,
   storageConfigLayer,
   storageFailpointLayer,
+  sqlOwnerLayer,
   type DoStorageInitializationError,
   type DoStorageOptions,
 } from "@effect-agent/storage-cloudflare/do-thread-store";
@@ -612,6 +613,7 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
       };
 
       const infrastructure = Layer.mergeAll(
+        sqlOwnerLayer,
         options.lifecyclePublication === undefined ? Layer.empty : lifecyclePublicationLayer,
         storageConfigLayer(storageOptions),
         Layer.effect(SqlClient)(SqlClient),
@@ -934,6 +936,7 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                       ...previous.lanes,
                       {
                         id: DueQueue.Lifecycle,
+                        phase: "after-native",
                         // Four owner batches, each with a 10s host timeout, plus local commits/cleanup.
                         dispatchTimeoutMillis: 60_000,
                         run:

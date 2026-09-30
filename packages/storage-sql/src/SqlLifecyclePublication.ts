@@ -1,5 +1,6 @@
-import { Array, Crypto, DateTime, Effect, Option, Schema } from "effect";
+import { Array, Context, Crypto, DateTime, Effect, Option, Schema } from "effect";
 import { digestJson } from "effect-agent/digest";
+import type { ThreadId } from "effect-agent/identifiers";
 import {
   LifecyclePublication,
   LifecyclePublicationBatch,
@@ -8,12 +9,42 @@ import {
   lifecyclePublicationBatchMaxFacts,
   type LifecyclePublicationStorage,
 } from "effect-agent/lifecycle-publication";
+import { SqlStorageOwner } from "effect-agent/sql-memory-store";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
 import { makeSqlQuery, SqlInteger } from "./SqlStorage.ts";
 
 const codec = Schema.fromJsonString(LifecyclePublication);
 const maxPendingPayloadBytes = 4 * 1024 * 1024;
+
+export type SqlLifecyclePublicationInput = Omit<LifecyclePublication, "ordinal" | "id"> & {
+  readonly id?: string;
+};
+
+export type SqlLifecycleRetainMany = (
+  publications: ReadonlyArray<SqlLifecyclePublicationInput>,
+) => Effect.Effect<void, LifecyclePublicationError>;
+
+/** Retain source facts in the source owner's current transaction, without invoking its hooks. */
+export class SqlLifecycleRetainer extends Context.Service<
+  SqlLifecycleRetainer,
+  { readonly retainMany: SqlLifecycleRetainMany }
+>()("@effect-agent/storage-sql/SqlLifecycleRetainer") {}
+
+/** Adapter-owned journal intent materialization, independent of publication dispatch. */
+export interface SqlLifecycleSource {
+  /** Retain the earlier canonical prefix before assigning a noncanonical fact's ordinal. */
+  readonly beforeRetain: (
+    ownerThreadId: ThreadId,
+  ) => Effect.Effect<void, LifecyclePublicationError, SqlLifecycleRetainer>;
+  /** Materialize a bounded canonical suffix before selecting the next owner batches. */
+  readonly beforePending: Effect.Effect<void, LifecyclePublicationError, SqlLifecycleRetainer>;
+}
+
+export const SqlLifecycleSource = Context.Reference<SqlLifecycleSource | undefined>(
+  "@effect-agent/storage-sql/SqlLifecycleSource",
+  { defaultValue: () => undefined },
+);
 
 const Row = Schema.Struct({
   id: Schema.String,
@@ -23,6 +54,30 @@ const Row = Schema.Struct({
   payload_json: Schema.NullOr(Schema.String),
   due_at_millis: Schema.NullOr(SqlInteger),
 });
+
+const Attempts = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 8 }));
+
+const PendingRow = Schema.Struct({
+  ...Row.fields,
+  attempts: SqlInteger.pipe(Schema.decodeTo(Attempts)),
+});
+
+type OwnerView = {
+  ordinal?: number;
+  readonly rows: Map<string, typeof Row.Type>;
+  readonly batches: Map<string, ReadonlyArray<string>>;
+  readonly attempts: Map<string, number>;
+  complete: boolean;
+  head?: number;
+  headKnown: boolean;
+};
+
+type OwnedView = {
+  readonly owners: Map<string, OwnerView>;
+  deadline?: Option.Option<number>;
+};
+
+const ownedViews = new WeakMap<object, Map<string, OwnedView>>();
 
 const failure = (cause: unknown) =>
   LifecyclePublicationError.make({ reason: "unavailable", cause });
@@ -48,6 +103,118 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
   const { table, execute } = yield* makeSqlQuery(namespace);
   const relation = table("effect_agent_lifecycle_publications");
   const retries = table("effect_agent_lifecycle_publication_retries");
+  const owner = yield* SqlStorageOwner;
+  const source = yield* SqlLifecycleSource;
+  let owned: OwnedView | undefined;
+
+  if (owner !== undefined) {
+    let namespaces = ownedViews.get(owner);
+
+    if (namespaces === undefined) {
+      namespaces = new Map();
+      ownedViews.set(owner, namespaces);
+    }
+    const key = namespace ?? "";
+
+    owned = namespaces.get(key);
+    if (owned === undefined) {
+      const view: OwnedView = { owners: new Map() };
+
+      owned = view;
+      namespaces.set(key, view);
+      owner.invalidators.add(() => {
+        view.owners.clear();
+        delete view.deadline;
+      });
+    }
+  }
+
+  const read = <A, E>(body: Effect.Effect<A, E>) => owner?.read(body) ?? body;
+
+  const transaction = <A, E>(body: Effect.Effect<A, E>) =>
+    (owner === undefined ? sql.withTransaction(body) : owner.transaction(body)).pipe(
+      Effect.provideService(SqlClient, sql),
+      Effect.catchTag("SqlError", failure),
+    );
+
+  const viewFor = (ownerThreadId: string) => {
+    if (owned === undefined) return undefined;
+    let view = owned.owners.get(ownerThreadId);
+
+    if (view === undefined) {
+      view = {
+        rows: new Map(),
+        batches: new Map(),
+        attempts: new Map(),
+        complete: false,
+        headKnown: false,
+      };
+      owned.owners.set(ownerThreadId, view);
+    }
+
+    return view;
+  };
+
+  const trim = () => {
+    if (owned === undefined) return;
+    let bytes = 0;
+
+    for (const view of owned.owners.values()) {
+      if (view.rows.size > 128) {
+        view.rows.clear();
+        view.batches.clear();
+        view.attempts.clear();
+        view.complete = false;
+        view.headKnown = false;
+      }
+      for (const row of view.rows.values())
+        bytes += new TextEncoder().encode(JSON.stringify(row)).byteLength;
+    }
+    while (owned.owners.size > 128 || bytes > maxPendingPayloadBytes) {
+      const oldest = owned.owners.entries().next().value;
+
+      if (oldest === undefined) break;
+      for (const row of oldest[1].rows.values())
+        bytes -= new TextEncoder().encode(JSON.stringify(row)).byteLength;
+      owned.owners.delete(oldest[0]);
+    }
+  };
+
+  const remember = (rows: ReadonlyArray<typeof Row.Type>) => {
+    for (const row of rows)
+      viewFor(row.owner_thread_id)?.rows.set(row.id, {
+        id: row.id,
+        owner_thread_id: row.owner_thread_id,
+        ordinal: row.ordinal,
+        fingerprint: row.fingerprint,
+        payload_json: row.payload_json,
+        due_at_millis: row.due_at_millis,
+      });
+    trim();
+  };
+
+  const batchKey = (batch: LifecyclePublicationBatch) =>
+    JSON.stringify(batch.map((fact) => fact.id));
+
+  const rememberBatch = (
+    batch: LifecyclePublicationBatch,
+    rows: ReadonlyArray<typeof Row.Type>,
+  ) => {
+    remember(rows);
+    const view = owned?.owners.get(batch[0].ownerThreadId);
+
+    if (view !== undefined && rows.every((row) => view.rows.has(row.id))) {
+      view.batches.clear();
+      view.batches.set(
+        batchKey(batch),
+        rows.map((row) => row.id),
+      );
+    }
+  };
+
+  const invalidateDeadline = () => {
+    if (owned !== undefined) delete owned.deadline;
+  };
 
   // Additive retry state leaves existing payloads and acknowledgement receipts unchanged.
   yield* sql`CREATE TABLE IF NOT EXISTS ${retries} (
@@ -77,53 +244,126 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
   const decodeRows = (rows: unknown) =>
     Schema.decodeUnknownEffect(Schema.Array(Row))(rows).pipe(Effect.mapError(failure));
 
-  const get = (id: string) =>
-    sql`SELECT id, owner_thread_id, ordinal, fingerprint, payload_json, due_at_millis FROM ${relation} WHERE id = ${id}`.pipe(
-      execute,
-      Effect.mapError(failure),
-      Effect.flatMap(decodeRows),
-    );
+  const retainMany: SqlLifecycleRetainMany = Effect.fn("SqlLifecyclePublication.retainMany")(
+    function* (inputs) {
+      const existing = new Map<string, typeof Row.Type>();
+      const missing: Array<string> = [];
+
+      for (const input of inputs) {
+        if (input.id === undefined) continue;
+        const row = owned?.owners.get(input.ownerThreadId)?.rows.get(input.id);
+
+        if (row === undefined) missing.push(input.id);
+        else existing.set(row.id, row);
+      }
+      // Six bound parameters per inserted row; identity reads leave the same 100-parameter
+      // ceiling intact. Existing fingerprints remain authoritative after acknowledgement.
+      for (let index = 0; index < missing.length; index += 100) {
+        const rows =
+          yield* sql`SELECT id, owner_thread_id, ordinal, fingerprint, payload_json, due_at_millis FROM ${relation} WHERE id IN ${sql.in(missing.slice(index, index + 100))}`.pipe(
+            execute,
+            Effect.mapError(failure),
+            Effect.flatMap(decodeRows),
+          );
+
+        for (const row of rows) existing.set(row.id, row);
+        remember(rows);
+      }
+
+      const counters = new Map<string, number>();
+      const insert: Array<typeof Row.Type> = [];
+
+      for (const input of inputs) {
+        const previous = input.id === undefined ? undefined : existing.get(input.id);
+
+        let current =
+          counters.get(input.ownerThreadId) ?? owned?.owners.get(input.ownerThreadId)?.ordinal;
+
+        if (previous === undefined && current === undefined) {
+          const rows =
+            yield* sql`SELECT COALESCE(MAX(ordinal), 0) AS ordinal FROM ${relation} WHERE owner_thread_id = ${input.ownerThreadId}`.pipe(
+              execute,
+              Effect.mapError(failure),
+              Effect.flatMap(
+                Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ ordinal: SqlInteger }))),
+              ),
+              Effect.mapError(failure),
+            );
+
+          current = rows[0]?.ordinal ?? 0;
+          const view = viewFor(input.ownerThreadId);
+
+          if (view !== undefined) {
+            view.ordinal = current;
+            if (current === 0) {
+              view.complete = true;
+              view.headKnown = true;
+            }
+          }
+        }
+        const ordinal = previous?.ordinal ?? (current ?? 0) + 1;
+
+        const publication = yield* LifecyclePublication.makeEffect({
+          ...input,
+          id: input.id ?? JSON.stringify([input.ownerThreadId, "lifecycle", ordinal]),
+          ordinal,
+        }).pipe(Effect.mapError(failure));
+
+        const text = yield* encode(publication);
+
+        if (new TextEncoder().encode(text).byteLength > maxStoredValueBytes || ordinal > 1_000_000)
+          return yield* LifecyclePublicationError.make({ reason: "capacity" });
+        const digest = yield* fingerprint(text);
+
+        if (previous !== undefined) {
+          if (previous.fingerprint !== digest)
+            return yield* LifecyclePublicationError.make({ reason: "conflict" });
+          continue;
+        }
+
+        const row: typeof Row.Type = {
+          id: publication.id,
+          owner_thread_id: input.ownerThreadId,
+          ordinal,
+          fingerprint: digest,
+          payload_json: text,
+          due_at_millis: DateTime.toEpochMillis(input.createdAt),
+        };
+
+        counters.set(input.ownerThreadId, ordinal);
+        existing.set(row.id, row);
+        insert.push(row);
+      }
+      for (let index = 0; index < insert.length; index += 16) {
+        const rows = insert.slice(index, index + 16);
+
+        yield* sql`INSERT INTO ${relation} ${sql.insert(rows)}`.pipe(
+          execute,
+          Effect.mapError(failure),
+        );
+        for (const row of rows) {
+          const view = viewFor(row.owner_thread_id);
+
+          if (view === undefined) continue;
+          view.ordinal = row.ordinal;
+          view.attempts.set(row.id, 0);
+          if (view.headKnown && view.head === undefined) view.head = row.ordinal;
+        }
+        remember(rows);
+      }
+      if (insert.length > 0) invalidateDeadline();
+    },
+    read,
+  );
 
   const retain = Effect.fn("SqlLifecyclePublication.retain")(function* (
-    input: Omit<LifecyclePublication, "ordinal" | "id"> & { readonly id?: string },
+    input: SqlLifecyclePublicationInput,
   ) {
-    const existing = input.id === undefined ? undefined : (yield* get(input.id))[0];
-
-    const counters =
-      yield* sql`SELECT COALESCE(MAX(ordinal), 0) AS ordinal FROM ${relation} WHERE owner_thread_id = ${input.ownerThreadId}`.pipe(
-        execute,
-        Effect.mapError(failure),
-        Effect.flatMap(
-          Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ ordinal: SqlInteger }))),
-        ),
-        Effect.mapError(failure),
-      );
-
-    const ordinal = existing?.ordinal ?? (counters[0]?.ordinal ?? 0) + 1;
-
-    const publication = LifecyclePublication.make({
-      ...input,
-      id: input.id ?? JSON.stringify([input.ownerThreadId, "lifecycle", ordinal]),
-      ordinal,
-    });
-
-    const text = yield* encode(publication);
-
-    if (new TextEncoder().encode(text).byteLength > maxStoredValueBytes || ordinal > 1_000_000)
-      return yield* LifecyclePublicationError.make({ reason: "capacity" });
-    const digest = yield* fingerprint(text);
-
-    if (existing !== undefined) {
-      if (existing.fingerprint !== digest)
-        return yield* LifecyclePublicationError.make({ reason: "conflict" });
-
-      return;
-    }
-    yield* sql`INSERT INTO ${relation}(id, owner_thread_id, ordinal, fingerprint, payload_json, due_at_millis) VALUES (${publication.id}, ${input.ownerThreadId}, ${ordinal}, ${digest}, ${text}, ${DateTime.toEpochMillis(input.createdAt)})`.pipe(
-      execute,
-      Effect.mapError(failure),
+    yield* (source?.beforeRetain(input.ownerThreadId) ?? Effect.void).pipe(
+      Effect.provideService(SqlLifecycleRetainer, { retainMany }),
     );
-  });
+    yield* retainMany([input]);
+  }, read);
 
   const verify = Effect.fnUntraced(function* (
     publication: LifecyclePublication,
@@ -146,6 +386,17 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
 
     const first = batch[0];
     const last = Array.lastNonEmpty(batch);
+    const view = owned?.owners.get(first.ownerThreadId);
+    const retained = view?.batches.get(batchKey(batch));
+
+    if (retained !== undefined && view !== undefined) {
+      const rows = retained.map((id) => view.rows.get(id));
+
+      if (rows.every((row) => row !== undefined)) {
+        yield* Effect.forEach(batch, (publication, index) => verify(publication, rows[index]));
+        if (rows[0] !== undefined) return rows[0];
+      }
+    }
 
     const identities = new Set(batch.map((publication) => publication.id));
 
@@ -161,12 +412,10 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
     if (head === undefined || rows.length !== batch.length)
       return yield* LifecyclePublicationError.make({ reason: "conflict" });
     yield* Effect.forEach(batch, (publication, index) => verify(publication, rows[index]));
+    rememberBatch(batch, rows);
 
     return head;
   });
-
-  const transaction = <A, E>(body: Effect.Effect<A, E>) =>
-    sql.withTransaction(body).pipe(Effect.catchTag("SqlError", failure));
 
   const storage: LifecyclePublicationStorage = {
     pending: (nowMillis, limit) =>
@@ -177,6 +426,9 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
             limit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })),
           }),
         )({ nowMillis, limit }).pipe(Effect.mapError(failure));
+        yield* (source?.beforePending ?? Effect.void).pipe(
+          Effect.provideService(SqlLifecycleRetainer, { retainMany }),
+        );
 
         // A deferred or parked prefix blocks its whole owner. Select metadata before payloads.
         const owners = yield* sql`SELECT p.owner_thread_id FROM ${relation} p
@@ -197,21 +449,39 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
         let selectedBytes = 0;
 
         for (const owner of owners) {
-          const sizes = yield* sql`SELECT ordinal, ${sql.onDialectOrElse({
-            pg: () => sql`octet_length(payload_json)`,
-            orElse: () => sql`length(CAST(payload_json AS BLOB))`,
-          })} AS payload_bytes FROM ${relation}
+          const view = owned?.owners.get(owner.owner_thread_id);
+
+          const cachedRows =
+            view?.complete === true
+              ? [...view.rows.values()]
+                  .filter((row) => row.payload_json !== null)
+                  .sort((left, right) => left.ordinal - right.ordinal)
+                  .slice(0, lifecyclePublicationBatchMaxFacts)
+              : undefined;
+
+          const sizes =
+            cachedRows === undefined
+              ? yield* sql`SELECT ordinal, ${sql.onDialectOrElse({
+                  pg: () => sql`octet_length(payload_json)`,
+                  orElse: () => sql`length(CAST(payload_json AS BLOB))`,
+                })} AS payload_bytes FROM ${relation}
             WHERE owner_thread_id = ${owner.owner_thread_id} AND payload_json IS NOT NULL
             ORDER BY ordinal LIMIT ${lifecyclePublicationBatchMaxFacts}`.pipe(
-            execute,
-            Effect.mapError(failure),
-            Effect.flatMap(
-              Schema.decodeUnknownEffect(
-                Schema.Array(Schema.Struct({ ordinal: SqlInteger, payload_bytes: SqlInteger })),
-              ),
-            ),
-            Effect.mapError(failure),
-          );
+                  execute,
+                  Effect.mapError(failure),
+                  Effect.flatMap(
+                    Schema.decodeUnknownEffect(
+                      Schema.Array(
+                        Schema.Struct({ ordinal: SqlInteger, payload_bytes: SqlInteger }),
+                      ),
+                    ),
+                  ),
+                  Effect.mapError(failure),
+                )
+              : cachedRows.map((row) => ({
+                  ordinal: row.ordinal,
+                  payload_bytes: new TextEncoder().encode(row.payload_json ?? "").byteLength,
+                }));
 
           let lastOrdinal: number | undefined;
 
@@ -227,14 +497,22 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
           }
           if (lastOrdinal === undefined) continue;
 
-          const rows =
-            yield* sql`SELECT id, owner_thread_id, ordinal, fingerprint, payload_json, due_at_millis
-            FROM ${relation} WHERE owner_thread_id = ${owner.owner_thread_id}
-            AND ordinal <= ${lastOrdinal} AND payload_json IS NOT NULL ORDER BY ordinal`.pipe(
-              execute,
-              Effect.mapError(failure),
-              Effect.flatMap(decodeRows),
-            );
+          const selected =
+            cachedRows === undefined
+              ? yield* sql`SELECT p.id, p.owner_thread_id, p.ordinal, p.fingerprint, p.payload_json, p.due_at_millis, COALESCE(r.attempts, 0) AS attempts
+            FROM ${relation} p LEFT JOIN ${retries} r ON r.id = p.id WHERE p.owner_thread_id = ${owner.owner_thread_id}
+            AND p.ordinal <= ${lastOrdinal} AND p.payload_json IS NOT NULL ORDER BY p.ordinal`.pipe(
+                  execute,
+                  Effect.mapError(failure),
+                  Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(PendingRow))),
+                  Effect.mapError(failure),
+                )
+              : cachedRows.filter((row) => row.ordinal <= lastOrdinal);
+
+          for (const row of selected) {
+            if ("attempts" in row) viewFor(row.owner_thread_id)?.attempts.set(row.id, row.attempts);
+          }
+          const rows = selected;
 
           const facts = yield* Effect.forEach(rows, (row) =>
             Effect.gen(function* () {
@@ -251,16 +529,29 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
             }),
           );
 
-          batches.push(
-            yield* Schema.decodeUnknownEffect(Schema.toType(LifecyclePublicationBatch))(facts).pipe(
-              Effect.mapError(failure),
-            ),
-          );
+          const batch = yield* Schema.decodeUnknownEffect(Schema.toType(LifecyclePublicationBatch))(
+            facts,
+          ).pipe(Effect.mapError(failure));
+
+          rememberBatch(batch, rows);
+          const retained = owned?.owners.get(owner.owner_thread_id);
+
+          if (retained !== undefined) {
+            retained.head = batch[0].ordinal;
+            retained.headKnown = true;
+            if (
+              sizes.length < lifecyclePublicationBatchMaxFacts &&
+              sizes.length === rows.length &&
+              rows.every((row) => retained.rows.has(row.id))
+            )
+              retained.complete = true;
+          }
+          batches.push(batch);
           if (selectedBytes >= maxPendingPayloadBytes) break;
         }
 
         return batches;
-      }),
+      }).pipe(source === undefined ? read : transaction),
     acknowledge: (batch) =>
       transaction(
         Effect.gen(function* () {
@@ -273,6 +564,24 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
             SELECT id FROM ${relation} WHERE owner_thread_id = ${batch[0].ownerThreadId}
             AND ordinal BETWEEN ${batch[0].ordinal} AND ${Array.lastNonEmpty(batch).ordinal}
           )`.pipe(execute, Effect.mapError(failure));
+          const view = owned?.owners.get(batch[0].ownerThreadId);
+
+          if (view !== undefined) {
+            for (const publication of batch) {
+              const row = view.rows.get(publication.id);
+
+              if (row !== undefined)
+                view.rows.set(row.id, { ...row, payload_json: null, due_at_millis: null });
+              view.attempts.delete(publication.id);
+            }
+            if (view.complete) {
+              view.head = [...view.rows.values()]
+                .filter((row) => row.payload_json !== null)
+                .sort((left, right) => left.ordinal - right.ordinal)[0]?.ordinal;
+              view.headKnown = true;
+            } else view.headKnown = false;
+          }
+          invalidateDeadline();
         }),
       ),
     claim: (batch, nowMillis, timeoutMillis) =>
@@ -289,26 +598,28 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
           );
           const first = batch[0];
 
-          // Serialize claim attempts for the retained head, including on PostgreSQL.
-          const attempts = yield* sql`INSERT INTO ${retries}(id, attempts) VALUES (${first.id}, 0)
+          const cachedAttempt = owned?.owners.get(first.ownerThreadId)?.attempts.get(first.id);
+
+          // Shared SQL still locks the retry row. A physical single-owner adapter already
+          // holds its transaction gate and can reuse the retry read with its pending prefix.
+          const attempts =
+            cachedAttempt === undefined
+              ? yield* sql`INSERT INTO ${retries}(id, attempts) VALUES (${first.id}, 0)
         ON CONFLICT(id) DO UPDATE SET attempts = ${retries}.attempts RETURNING attempts`.pipe(
-            execute,
-            Effect.mapError(failure),
-            Effect.flatMap(
-              Schema.decodeUnknownEffect(
-                Schema.NonEmptyArray(
-                  Schema.Struct({
-                    attempts: SqlInteger.pipe(
-                      Schema.decodeTo(
-                        Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 8 })),
+                  execute,
+                  Effect.mapError(failure),
+                  Effect.flatMap(
+                    Schema.decodeUnknownEffect(
+                      Schema.NonEmptyArray(
+                        Schema.Struct({
+                          attempts: SqlInteger.pipe(Schema.decodeTo(Attempts)),
+                        }),
                       ),
                     ),
-                  }),
-                ),
-              ),
-            ),
-            Effect.mapError(failure),
-          );
+                  ),
+                  Effect.mapError(failure),
+                )
+              : [{ attempts: cachedAttempt }];
 
           const head = yield* verifyBatch(batch);
 
@@ -319,13 +630,17 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
           )
             return false;
 
-          const earlier =
-            yield* sql`SELECT id FROM ${relation} WHERE owner_thread_id = ${first.ownerThreadId} AND ordinal < ${first.ordinal} AND payload_json IS NOT NULL LIMIT 1`.pipe(
-              execute,
-              Effect.mapError(failure),
-            );
+          const view = owned?.owners.get(first.ownerThreadId);
 
-          if (earlier.length > 0) return false;
+          const blocked =
+            view?.headKnown === true
+              ? view.head !== first.ordinal
+              : (yield* sql`SELECT id FROM ${relation} WHERE owner_thread_id = ${first.ownerThreadId} AND ordinal < ${first.ordinal} AND payload_json IS NOT NULL LIMIT 1`.pipe(
+                  execute,
+                  Effect.mapError(failure),
+                )).length > 0;
+
+          if (blocked) return false;
           const attempt = attempts[0].attempts + 1;
 
           if (attempt > 8) return false;
@@ -335,30 +650,53 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
               ? null
               : nowMillis + timeoutMillis + Math.min(60_000, 1_000 * 2 ** (attempt - 1));
 
-          yield* sql`UPDATE ${retries} SET attempts = ${attempt} WHERE id = ${first.id}`.pipe(
-            execute,
-            Effect.mapError(failure),
-          );
+          yield* (
+            cachedAttempt === undefined
+              ? sql`UPDATE ${retries} SET attempts = ${attempt} WHERE id = ${first.id}`
+              : sql`INSERT INTO ${retries}(id, attempts) VALUES (${first.id}, ${attempt}) ON CONFLICT(id) DO UPDATE SET attempts = excluded.attempts`
+          ).pipe(execute, Effect.mapError(failure));
           yield* sql`UPDATE ${relation} SET due_at_millis = ${deadline} WHERE owner_thread_id = ${first.ownerThreadId} AND ordinal BETWEEN ${first.ordinal} AND ${Array.lastNonEmpty(batch).ordinal} AND payload_json IS NOT NULL`.pipe(
             execute,
             Effect.mapError(failure),
           );
+          const retained = owned?.owners.get(first.ownerThreadId);
+
+          if (retained !== undefined) {
+            retained.attempts.set(first.id, attempt);
+            for (const publication of batch) {
+              const row = retained.rows.get(publication.id);
+
+              if (row !== undefined && row.payload_json !== null)
+                retained.rows.set(row.id, { ...row, due_at_millis: deadline });
+            }
+          }
+          invalidateDeadline();
 
           return true;
         }),
       ),
-    pendingDeadline:
-      sql`SELECT MIN(due_at_millis) AS deadline FROM ${relation} p WHERE p.due_at_millis IS NOT NULL AND p.payload_json IS NOT NULL AND NOT EXISTS (SELECT 1 FROM ${relation} before_p WHERE before_p.owner_thread_id = p.owner_thread_id AND before_p.ordinal < p.ordinal AND before_p.payload_json IS NOT NULL)`.pipe(
-        execute,
-        Effect.mapError(failure),
-        Effect.flatMap(
-          Schema.decodeUnknownEffect(
-            Schema.Array(Schema.Struct({ deadline: Schema.NullOr(SqlInteger) })),
-          ),
-        ),
-        Effect.mapError(failure),
-        Effect.map((rows) => Option.fromNullishOr(rows[0]?.deadline)),
+    pendingDeadline: read(
+      Effect.suspend(() =>
+        owned?.deadline !== undefined
+          ? Effect.succeed(owned.deadline)
+          : sql`SELECT MIN(due_at_millis) AS deadline FROM ${relation} p WHERE p.due_at_millis IS NOT NULL AND p.payload_json IS NOT NULL AND NOT EXISTS (SELECT 1 FROM ${relation} before_p WHERE before_p.owner_thread_id = p.owner_thread_id AND before_p.ordinal < p.ordinal AND before_p.payload_json IS NOT NULL)`.pipe(
+              execute,
+              Effect.mapError(failure),
+              Effect.flatMap(
+                Schema.decodeUnknownEffect(
+                  Schema.Array(Schema.Struct({ deadline: Schema.NullOr(SqlInteger) })),
+                ),
+              ),
+              Effect.mapError(failure),
+              Effect.map((rows) => Option.fromNullishOr(rows[0]?.deadline)),
+              Effect.tap((deadline) =>
+                Effect.sync(() => {
+                  if (owned !== undefined) owned.deadline = deadline;
+                }),
+              ),
+            ),
       ),
+    ),
     retryParked: (ownerThreadId, nowMillis) =>
       transaction(
         Effect.gen(function* () {
@@ -382,9 +720,19 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
             execute,
             Effect.mapError(failure),
           );
+          const view = owned?.owners.get(ownerThreadId);
+
+          if (view !== undefined) {
+            view.attempts.set(head.id, 0);
+            for (const row of view.rows.values()) {
+              if (row.payload_json !== null)
+                view.rows.set(row.id, { ...row, due_at_millis: nowMillis });
+            }
+          }
+          invalidateDeadline();
         }),
       ),
   };
 
-  return { retain, storage };
+  return { retain, retainMany, storage };
 });

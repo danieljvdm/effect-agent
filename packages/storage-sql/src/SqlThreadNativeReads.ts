@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Context, Effect, Schema } from "effect";
 import {
   CanonicalRecord,
   CanonicalRecordEnvelope,
@@ -22,6 +22,7 @@ import {
   ThreadStoreError,
 } from "effect-agent/thread-store";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import type { SqlError } from "effect/unstable/sql/SqlError";
 
 import { sqliteJsonText, nullSafeEquals, queryIdentifier } from "./internal/sql-json.ts";
 import { makeSqlQuery, SqlInteger, makeSqlTransaction } from "./SqlStorage.ts";
@@ -234,19 +235,71 @@ const Row = Schema.Struct({
   outstanding: Schema.optionalKey(SqlInteger),
 });
 
+/** Exclusive-owner views. Absence means the bounded journal view must fall back to SQL. */
+export interface SelectedReadOwner {
+  readonly snapshot: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  readonly tail: (threadId: SelectedThreadRead["threadId"]) => Effect.Effect<
+    | {
+        readonly tail_sequence: CanonicalSequence;
+        readonly tail_digest: Digest;
+        readonly producer_epoch: ProducerEpoch;
+      }
+    | undefined,
+    ThreadStoreError
+  >;
+  readonly records: (
+    threadId: SelectedThreadRead["threadId"],
+  ) => Effect.Effect<ReadonlyArray<unknown> | undefined, ThreadStoreError>;
+}
+
+export const SelectedReadOwner = Context.Reference<SelectedReadOwner | undefined>(
+  "@effect-agent/storage-sql/SelectedReadOwner",
+  { defaultValue: () => undefined },
+);
+
 export const makeSelectedReads = Effect.fnUntraced(function* (
   envelope: (row: typeof Row.Type) => Effect.Effect<CanonicalRecordEnvelope, ThreadStoreError>,
   namespace?: string,
 ) {
   const sql = yield* SqlClient.SqlClient;
+  const owner = yield* SelectedReadOwner;
   const { table: relation, execute } = yield* makeSqlQuery(namespace);
 
-  const snapshot = sql.onDialectOrElse({
+  const sqlSnapshot = sql.onDialectOrElse({
     orElse: () => sql.withTransaction,
     pg: () => makeSqlTransaction(sql, { begin: "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY" }),
   });
 
+  const snapshot = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E | SqlError, R> =>
+    owner === undefined ? sqlSnapshot(effect) : owner.snapshot(effect);
+
+  const cachedRecords = Effect.fnUntraced(function* (threadId: SelectedThreadRead["threadId"]) {
+    const rows = owner === undefined ? undefined : yield* owner.records(threadId);
+
+    if (rows === undefined) return undefined;
+    const decoded = yield* Schema.decodeUnknownEffect(Schema.Array(Row))(rows);
+    const records: Array<CanonicalRecordEnvelope> = [];
+
+    for (const row of decoded) {
+      const value = yield* envelope(row);
+
+      if (row.thread_id !== threadId || value.record.recordId !== row.record_id)
+        return yield* failure("selected record incomplete or corrupt");
+      records.push(value);
+    }
+
+    return records;
+  });
+
   const requireThread = Effect.fnUntraced(function* (threadId: SelectedThreadRead["threadId"]) {
+    if (owner !== undefined) {
+      const tail = yield* owner.tail(threadId);
+
+      if (tail === undefined) return yield* ThreadNotMaterialized.make({ threadId });
+
+      return tail;
+    }
+
     const rows =
       yield* sql`SELECT tail_sequence, tail_digest FROM ${relation("effect_agent_threads")} WHERE thread_id = ${threadId}`.pipe(
         execute,
@@ -269,6 +322,139 @@ export const makeSelectedReads = Effect.fnUntraced(function* (
     return decoded[0];
   });
 
+  const cachedSelection = Effect.fnUntraced(function* (
+    records: ReadonlyArray<CanonicalRecordEnvelope>,
+    request: SelectedThreadRead,
+  ) {
+    const selection = request.selection;
+    const after = request.page.afterSequence ?? 0;
+    let selected: ReadonlyArray<CanonicalRecordEnvelope>;
+
+    switch (selection._tag) {
+      case "RecordId":
+        selected = records.filter((value) => value.record.recordId === selection.recordId);
+        break;
+      case "RunInput":
+        selected = records.filter(
+          ({ record: { payload } }) =>
+            payload._tag === "UserInputRecorded" &&
+            payload.kind === "user" &&
+            payload.runId === selection.runId,
+        );
+        if (selected.length > 1) return yield* failure("ambiguous original Run input");
+        break;
+      case "WorkerExecution":
+        selected = ["UserInputRecorded", "RunStarted"]
+          .flatMap((tag) =>
+            records
+              .filter(({ record: { payload } }) => payload._tag === tag && "runId" in payload)
+              .slice(-1),
+          )
+          .sort((a, b) => a.sequence - b.sequence);
+        break;
+      case "WorkerState": {
+        const runId =
+          selection.sourceSubmissionId === undefined
+            ? undefined
+            : runIdForSubmission(selection.sourceSubmissionId);
+
+        selected = records.filter(({ record: { payload } }) => {
+          switch (payload._tag) {
+            case "ThreadCreated":
+            case "WorkerOriginRecorded":
+            case "SubagentLineageRecorded":
+            case "WorkerInputRequested":
+            case "WorkerInputCompleted":
+            case "WorkerStopRequested":
+              return true;
+            case "SubtreeBudgetReserved":
+              return payload.sourceSubmissionId === selection.sourceSubmissionId;
+            case "SubagentJoined":
+              return payload.runId === runId;
+            default:
+              return false;
+          }
+        });
+        break;
+      }
+      case "Outstanding": {
+        const outstanding = new Map<
+          RecordId,
+          { readonly value: CanonicalRecordEnvelope; readonly unresolved: boolean }
+        >();
+
+        for (const value of records) {
+          const payload = value.record.payload;
+
+          switch (payload._tag) {
+            case "ToolCallUnknown":
+              for (const [id, { value: prior }] of outstanding) {
+                const pending = prior.record.payload;
+
+                if (
+                  pending._tag === "ToolCallPrepared" &&
+                  pending.runId === payload.runId &&
+                  pending.toolCallId === payload.toolCallId
+                )
+                  outstanding.delete(id);
+              }
+              outstanding.set(value.record.recordId, { value, unresolved: false });
+              break;
+            case "ToolCallPrepared":
+              outstanding.set(value.record.recordId, {
+                value,
+                unresolved: false,
+              });
+              break;
+            case "ToolCallSettled":
+              for (const [id, { value: prior }] of outstanding) {
+                const pending = prior.record.payload;
+
+                if (
+                  (pending._tag === "ToolCallPrepared" || pending._tag === "ToolCallUnknown") &&
+                  pending.runId === payload.runId &&
+                  pending.toolCallId === payload.toolCallId
+                )
+                  outstanding.delete(id);
+              }
+              break;
+            case "WorkerInputRequested":
+              outstanding.set(value.record.recordId, {
+                value,
+                unresolved: false,
+              });
+              break;
+            case "WorkerInputCompleted":
+              for (const [id, prior] of outstanding) {
+                const pending = prior.value.record.payload;
+
+                if (
+                  pending._tag === "WorkerInputRequested" &&
+                  pending.admission.messageId === payload.messageId
+                ) {
+                  if (payload.effectsResolved) outstanding.delete(id);
+                  else outstanding.set(id, { ...prior, unresolved: true });
+                }
+              }
+              break;
+          }
+        }
+
+        const pending = [...outstanding.values()]
+          .filter(({ value }) => value.sequence > after)
+          .sort((a, b) => a.value.sequence - b.value.sequence)
+          .slice(0, request.page.limit);
+
+        if (pending.some((item) => item.unresolved))
+          return yield* failure("selected record incomplete or corrupt");
+        selected = pending.map((item) => item.value);
+        break;
+      }
+    }
+
+    return selected.filter((value) => value.sequence > after).slice(0, request.page.limit);
+  });
+
   const read = Effect.fnUntraced(
     function* (request: SelectedThreadRead) {
       return yield* snapshot(
@@ -283,6 +469,9 @@ export const makeSelectedReads = Effect.fnUntraced(function* (
           )
             return yield* failure("selected read tail changed");
           const after = request.page.afterSequence ?? 0;
+          const cached = yield* cachedRecords(request.threadId);
+
+          if (cached !== undefined) return yield* cachedSelection(cached, request);
           let rows: unknown;
 
           switch (selection._tag) {
@@ -378,6 +567,37 @@ export const makeSelectedReads = Effect.fnUntraced(function* (
 
       return yield* snapshot(
         Effect.gen(function* () {
+          if (owner !== undefined) {
+            const tail = yield* owner.tail(request.threadId);
+
+            if (tail === undefined)
+              return yield* ThreadNotMaterialized.make({ threadId: request.threadId });
+            const cached = yield* cachedRecords(request.threadId);
+
+            if (cached !== undefined) {
+              const origin = workerOriginRecordId(request.threadId);
+              const lineage = subagentLineageRecordId(request.threadId);
+
+              const records = [
+                ...cached.filter((value) => value.sequence === 1),
+                ...cached.filter(
+                  (value) => value.record.recordId === origin && value.sequence !== 1,
+                ),
+                ...cached.filter(
+                  (value) => value.record.recordId === lineage && value.sequence !== 1,
+                ),
+              ];
+
+              return yield* ThreadIdentity.makeEffect({
+                threadId: request.threadId,
+                tailSequence: tail.tail_sequence,
+                tailDigest: tail.tail_digest,
+                producerEpoch: tail.producer_epoch,
+                records,
+              });
+            }
+          }
+
           const tails = yield* sql`SELECT tail_sequence, tail_digest, producer_epoch
             FROM ${relation("effect_agent_threads")} WHERE thread_id = ${request.threadId}`.pipe(
             execute,
@@ -449,6 +669,15 @@ export const makeSelectedReads = Effect.fnUntraced(function* (
       function* (request) {
         yield* Schema.decodeEffect(ThreadPeerCountRequest)(request);
         yield* requireThread(request.threadId);
+
+        const cached = yield* cachedRecords(request.threadId);
+
+        if (cached !== undefined) {
+          return Math.min(
+            request.limit,
+            cached.filter((value) => value.record.payload._tag === "PeerMessagePrepared").length,
+          );
+        }
 
         const rows =
           yield* sql`SELECT 1 FROM ${relation("effect_agent_canonical_records")} WHERE thread_id = ${request.threadId} AND ${canonicalField(sql, "tag")} = 'PeerMessagePrepared' LIMIT ${request.limit}`.pipe(

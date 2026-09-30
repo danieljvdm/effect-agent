@@ -1,4 +1,9 @@
-import { makeSqlLifecyclePublication } from "@effect-agent/storage-sql/sql-lifecycle-publication";
+import {
+  makeSqlLifecyclePublication,
+  type SqlLifecycleRetainMany,
+  SqlLifecycleSource,
+  SqlLifecycleRetainer,
+} from "@effect-agent/storage-sql/sql-lifecycle-publication";
 import { createMessageDeliveryPendingIndex } from "@effect-agent/storage-sql/sql-message-delivery-store";
 import { checkV2ThreadLayout } from "@effect-agent/storage-sql/sql-storage-v2-upgrade";
 import {
@@ -7,11 +12,15 @@ import {
   indexCanonicalRecord,
 } from "@effect-agent/storage-sql/sql-thread-native-reads";
 import { SqliteMigrator } from "@effect/sql-sqlite-do";
-import { Effect, Schema, Stream } from "effect";
+import { Clock, Effect, Option, Schema, Stream } from "effect";
 import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
 import { ThreadId } from "effect-agent/identifiers";
-import { LifecyclePublicationFact } from "effect-agent/lifecycle-publication";
+import {
+  LifecyclePublicationFact,
+  LifecyclePublicationError,
+} from "effect-agent/lifecycle-publication";
 import { CanonicalRecord, CanonicalSequence, ProducerEpoch } from "effect-agent/records";
+import { SqlStorageOwner } from "effect-agent/sql-memory-store";
 import {
   MAX_THREAD_EXPORT_RECORDS,
   CheckpointRejected,
@@ -176,6 +185,27 @@ class CheckpointRow extends Schema.Class<CheckpointRow>("CheckpointRow")({
   tail_digest: BoundedStoredText,
   through_sequence: CanonicalSequence,
 }) {}
+
+const recoveryRows = ownedRows(
+  CheckpointRow,
+  "effect_agent_recovery_checkpoints",
+  (row) => row.thread_id,
+  "thread_id",
+);
+
+const LifecycleCursorRow = Schema.Struct({
+  thread_id: BoundedIdentifier,
+  through_sequence: CanonicalSequence,
+});
+
+const lifecycleCursorRows = ownedRows(
+  LifecycleCursorRow,
+  "effect_agent_lifecycle_cursors",
+  (row) => row.thread_id,
+  "thread_id",
+);
+
+const initializedLifecycleSources = new WeakSet<OwnedState>();
 
 export class RawRecord extends Schema.Class<RawRecord>(
   "@effect-agent/storage-cloudflare/RawRecord",
@@ -934,7 +964,24 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
 
   yield* verifyWorkerPredecessor(true);
 
+  const state = yield* ownedState(sql);
+  let journal: DoJournal | undefined;
+
   const lifecycle = yield* makeSqlLifecyclePublication(undefined, maxStoredValueBytes).pipe(
+    Effect.provideService(SqlStorageOwner, state),
+    Effect.provideService(SqlLifecycleSource, {
+      beforeRetain: (threadId) =>
+        Effect.suspend(() =>
+          journal === undefined
+            ? Effect.fail(LifecyclePublicationError.make({ reason: "unavailable" }))
+            : journal.flushCanonical(threadId),
+        ),
+      beforePending: Effect.suspend(() =>
+        journal === undefined
+          ? Effect.fail(LifecyclePublicationError.make({ reason: "unavailable" }))
+          : journal.flushPublications(),
+      ),
+    }),
     Effect.provideService(SqlClient.SqlClient, sql),
     Effect.mapError((cause) =>
       DoStorageError.make({
@@ -945,7 +992,10 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
     ),
   );
 
-  return makeJournal(sql, failpoint, maxStoredValueBytes, lifecycle, yield* ownedState(sql));
+  journal = makeJournal(sql, failpoint, maxStoredValueBytes, lifecycle, state);
+  if (lifecycle !== undefined) yield* journal.initializeLifecycleSource();
+
+  return journal;
 });
 
 const makeJournal = (
@@ -956,6 +1006,8 @@ const makeJournal = (
   state: OwnedState,
 ) => {
   const threads = threadRows(state, sql);
+  const recovery = recoveryRows(state, sql);
+  const cursors = lifecycleCursorRows(state, sql);
   let records = recordCaches.get(state);
 
   if (records === undefined) {
@@ -1080,6 +1132,17 @@ const makeJournal = (
                 error._tag === "SqlError" ? storageError("materialize thread")(error) : error,
               ),
             );
+
+            if (lifecycle !== undefined)
+              yield* sql`INSERT INTO effect_agent_lifecycle_cursors (thread_id, through_sequence)
+              VALUES (${threadId}, 0) RETURNING *`.pipe(
+                cursors.write,
+                Effect.mapError((error) =>
+                  error._tag === "SqlError"
+                    ? storageError("initialize lifecycle source")(error)
+                    : error,
+                ),
+              );
 
             return;
           }
@@ -1409,29 +1472,6 @@ const makeJournal = (
                   Effect.provideService(SqlClient.SqlClient, sql),
                   Effect.mapError(storageError("index canonical record")),
                 );
-                if (
-                  lifecycle !== undefined &&
-                  Schema.is(Schema.toType(LifecyclePublicationFact))(canonical.payload)
-                )
-                  yield* lifecycle
-                    .retain({
-                      id: JSON.stringify([request.threadId, "record", record.recordId]),
-                      ownerThreadId: Schema.decodeSync(ThreadId)(request.threadId),
-                      canonicalSequence: Schema.decodeSync(CanonicalSequence)(
-                        firstSequence + index,
-                      ),
-                      createdAt: canonical.createdAt,
-                      fact: canonical.payload,
-                    })
-                    .pipe(
-                      Effect.mapError((cause) =>
-                        DoStorageError.make({
-                          operation: "retain lifecycle publication",
-                          message: "Native publication storage unavailable",
-                          cause,
-                        }),
-                      ),
-                    );
                 recordCache.put(
                   RecordRow.make({
                     thread_id: request.threadId,
@@ -1794,7 +1834,13 @@ const makeJournal = (
             tail_digest = excluded.tail_digest,
             checkpoint_json = excluded.checkpoint_json
           WHERE excluded.through_sequence >= effect_agent_recovery_checkpoints.through_sequence
-        `.pipe(Effect.mapError(storageError("save recovery checkpoint")));
+          RETURNING *
+        `.pipe(
+          recovery.write,
+          Effect.mapError((error) =>
+            error._tag === "SqlError" ? storageError("save recovery checkpoint")(error) : error,
+          ),
+        );
       }),
     );
     yield* failpoint("save-recovery-checkpoint:after");
@@ -1803,18 +1849,13 @@ const makeJournal = (
   const loadRecoveryCheckpoint = Effect.fn("DoJournal.loadRecoveryCheckpoint")(function* (
     threadId: string,
   ) {
-    const rows = yield* sql<Record<string, unknown>>`
-      SELECT thread_id, through_sequence, tail_digest, checkpoint_json
-      FROM effect_agent_recovery_checkpoints
-      WHERE thread_id = ${threadId}
-    `.pipe(Effect.mapError(storageError("load recovery checkpoint")));
-
-    return yield* decodeRows(
-      Schema.Array(CheckpointRow),
-      "effect_agent_recovery_checkpoints",
-      threadId,
-      rows,
-    );
+    return yield* recovery
+      .by("thread_id", threadId)
+      .pipe(
+        Effect.mapError((error) =>
+          error._tag === "SqlError" ? storageError("load recovery checkpoint")(error) : error,
+        ),
+      );
   });
 
   const loadCheckpoint = Effect.fn("DoJournal.loadCheckpoint")(function* (
@@ -1846,6 +1887,9 @@ const makeJournal = (
     threadId: string,
     sequence: CanonicalSequence,
   ) {
+    const thread = (yield* getThread(threadId))[0];
+
+    if (thread !== undefined && sequence === thread.tail_sequence) return [thread.tail_digest];
     if (sequence === 0) {
       const threads = yield* getThread(threadId);
 
@@ -1965,10 +2009,185 @@ const makeJournal = (
       );
   });
 
+  const sourceFailure = (cause: unknown) =>
+    LifecyclePublicationError.make({ reason: "unavailable", cause });
+
+  const sourceThreads = Effect.fnUntraced(function* () {
+    const all = yield* threads.matching(
+      "lifecycle-owners",
+      () => true,
+      sql`SELECT * FROM effect_agent_threads LIMIT 129`,
+      128,
+    );
+
+    if (all.length <= 128) return all;
+
+    // Large custom hosts hydrate only owners whose journal has an unmaterialized suffix.
+    return yield* Schema.decodeUnknownEffect(Schema.Array(ThreadRow))(
+      yield* sql`SELECT t.* FROM effect_agent_threads t LEFT JOIN effect_agent_lifecycle_cursors c ON c.thread_id=t.thread_id
+        WHERE c.thread_id IS NULL OR t.tail_sequence > c.through_sequence ORDER BY t.thread_id LIMIT 128`,
+    );
+  });
+
+  const initializeLifecycleSource = Effect.fnUntraced(function* () {
+    if (initializedLifecycleSources.has(state)) return;
+    yield* state
+      .transaction(
+        Effect.gen(function* () {
+          const existing =
+            yield* sql`SELECT name FROM sqlite_master WHERE name='effect_agent_lifecycle_cursors'`;
+
+          if (existing.length === 0) {
+            yield* sql`CREATE TABLE effect_agent_lifecycle_cursors (
+        thread_id TEXT PRIMARY KEY, through_sequence INTEGER NOT NULL
+      )`;
+            // Existing inline writers already retained their facts. Enabling publication on an
+            // old store starts here too; it does not publish historical facts retroactively.
+          }
+          // New Threads created with publication disabled have no cursor. Never advance
+          // existing cursors: they can owe intent from an interrupted Attempt.
+          yield* sql`INSERT INTO effect_agent_lifecycle_cursors(thread_id, through_sequence)
+        SELECT thread_id, tail_sequence FROM effect_agent_threads WHERE true
+        ON CONFLICT(thread_id) DO NOTHING`;
+          yield* sourceThreads();
+        }),
+      )
+      .pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+        Effect.mapError((cause) =>
+          DoStorageError.make({
+            operation: "initialize lifecycle source",
+            message: "Lifecycle source cursor unavailable",
+            cause,
+          }),
+        ),
+      );
+    initializedLifecycleSources.add(state);
+  });
+
+  /** The journal is durable intent; only the bounded publication wave materializes a write set. */
+  const flushCanonical = Effect.fnUntraced(function* (threadId: string, maxRecords = Infinity) {
+    const { retainMany } = yield* SqlLifecycleRetainer;
+    const thread = (yield* getThread(threadId))[0];
+
+    if (thread === undefined) return;
+    const cursor = (yield* cursors.by("thread_id", threadId))[0];
+
+    if (cursor === undefined || cursor.through_sequence > thread.tail_sequence)
+      return yield* LifecyclePublicationError.make({ reason: "corrupt" });
+    let through = cursor.through_sequence;
+    const bound = Math.min(thread.tail_sequence, through + maxRecords);
+
+    while (through < bound) {
+      const page = yield* read(
+        RawReadRequest.make({
+          threadId,
+          fromSequenceExclusive: through,
+          limit: Math.min(128, bound - through),
+        }),
+      );
+
+      const facts: Array<Parameters<SqlLifecycleRetainMany>[0][number]> = [];
+      let bytes = 0;
+
+      yield* Stream.runForEach(page.records, (row) =>
+        Effect.gen(function* () {
+          const record = yield* Schema.decodeEffect(Schema.fromJsonString(CanonicalRecord))(
+            row.record_json,
+          );
+
+          if (record.recordId !== row.record_id || row.sequence !== through + 1)
+            return yield* LifecyclePublicationError.make({ reason: "corrupt" });
+          if (Schema.is(Schema.toType(LifecyclePublicationFact))(record.payload)) {
+            if (
+              bytes + storedTextBytes(row.record_json) > MAX_READ_PAGE_JSON_BYTES &&
+              facts.length > 0
+            ) {
+              yield* retainMany(facts);
+              facts.length = 0;
+              bytes = 0;
+            }
+            facts.push({
+              id: JSON.stringify([threadId, "record", record.recordId]),
+              ownerThreadId: yield* Schema.decodeEffect(ThreadId)(threadId),
+              canonicalSequence: row.sequence,
+              createdAt: record.createdAt,
+              fact: record.payload,
+            });
+            bytes += storedTextBytes(row.record_json);
+          }
+          through = row.sequence;
+        }),
+      );
+      if (page.count === 0) return yield* LifecyclePublicationError.make({ reason: "corrupt" });
+      yield* retainMany(facts);
+      yield* sql`UPDATE effect_agent_lifecycle_cursors SET through_sequence=${through} WHERE thread_id=${threadId} RETURNING *`.pipe(
+        cursors.write,
+      );
+    }
+  }, Effect.mapError(sourceFailure));
+
+  const flushPublications = Effect.fnUntraced(function* () {
+    let owners = 0;
+
+    for (const thread of yield* sourceThreads()) {
+      const cursor = (yield* cursors.by("thread_id", thread.thread_id))[0];
+
+      if (cursor !== undefined && cursor.through_sequence === thread.tail_sequence) continue;
+      yield* flushCanonical(thread.thread_id, 1024);
+      if (++owners === 4) break;
+    }
+  }, Effect.mapError(sourceFailure));
+
+  const sourcePending = Effect.gen(function* () {
+    for (const thread of yield* sourceThreads()) {
+      const cursor = (yield* cursors.by("thread_id", thread.thread_id))[0];
+
+      if (cursor === undefined || cursor.through_sequence > thread.tail_sequence)
+        return yield* LifecyclePublicationError.make({ reason: "corrupt" });
+      if (cursor.through_sequence < thread.tail_sequence) return true;
+    }
+
+    return false;
+  }).pipe(Effect.mapError(sourceFailure));
+
+  const ownedLifecycle =
+    lifecycle === undefined
+      ? undefined
+      : {
+          ...lifecycle,
+          storage: {
+            ...lifecycle.storage,
+            pendingDeadline: state.read(
+              Effect.gen(function* () {
+                const deadline = yield* lifecycle.storage.pendingDeadline;
+
+                if (!(yield* sourcePending)) return deadline;
+                const now = yield* Clock.currentTimeMillis;
+
+                return Option.some(Option.isSome(deadline) ? Math.min(now, deadline.value) : now);
+              }),
+            ),
+          },
+        };
+
   return {
     state,
+    cachedRecords: (threadId: string) =>
+      state.read(
+        Effect.gen(function* () {
+          const thread = (yield* getThread(threadId))[0];
+
+          return thread === undefined
+            ? undefined
+            : recordCache.prefix(threadId, thread.tail_sequence);
+        }),
+      ),
     threads,
-    lifecycle,
+    lifecycle: ownedLifecycle,
+    initializeLifecycleSource,
+    flushCanonical,
+    flushPublications,
     append,
     checkValueBound,
     exportThread,

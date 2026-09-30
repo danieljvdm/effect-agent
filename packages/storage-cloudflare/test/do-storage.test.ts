@@ -365,6 +365,7 @@ describe("DoThreadStore", () => {
               threadId,
             ),
           );
+          yield* invalidate(storage);
           expect(
             yield* store
               .recoveryCheckpoints!.load(LoadCheckpointRequest.make({ threadId }))

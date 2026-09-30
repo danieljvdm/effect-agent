@@ -471,8 +471,10 @@ const RuntimeLive = ThreadObject.layer(registrations, {
 });
 ```
 
-The adapter retains each typed fact in the source transaction. The existing alarm publishes
-pending facts asynchronously through an independent maintenance lane. Attempts, model calls,
+Source transactions durably retain publication intent. Canonical facts stay in the journal
+until the alarm materializes them together after native execution; ledger and delivery facts
+retain their own source receipts. The independent maintenance lane then publishes one bounded
+prefix. A turn's progress can arrive together with its settlement. Attempts, model calls,
 input joins, and handoffs continue while publication is pending or failing.
 
 Implement `publish(batch)` for a nonempty, ordinal-ordered array of at most eight facts from one
@@ -503,8 +505,9 @@ drains and operator retries per owner.
 
 Pending and parked obligations retain private payloads until acknowledgement. Keep native source
 admissions and Run-input records, and do not delete their Object, until publication debt is
-acknowledged. Enabling the option starts with new commits without backfilling history; keep the
-handler enabled until all debt drains. Existing SQL publication payloads and receipts are preserved
+acknowledged. First enabling the option starts with new commits without backfilling history.
+Existing source cursors resume retained journal intent; keep the handler enabled while writing
+new commits and until all debt drains. Existing SQL publication payloads and receipts are preserved
 when upgrading. In-memory/custom adapters do not retain these obligations. SQL assemblies outside
 Cloudflare can provide `lifecyclePublicationLayer` and call `drainLifecyclePublications` from their
 existing durable maintenance coordinator; its limit counts owners, not individual facts.
@@ -755,6 +758,18 @@ provide `memoryStoreLayer` with explicit `SqlMemoryLimits`, using `defaultDoMemo
 from `@effect-agent/storage-cloudflare/do-memory-store` or stricter validated limits. The generic SQL
 Memory defaults are not Durable Object limits. Thread Objects install no Memory tables unless
 the host composes the Memory store.
+
+Owner-local Memory reads reuse validated, write-through documents, operation receipts, and
+usage counters under the Thread Object's transaction gate. Rebuilt Layers share those views;
+eviction and failed transactions discard them. Cache misses read SQLite. Direct maintenance
+writes must follow the [storage invalidation contract](../storage/cloudflare#use-an-existing-object).
+
+The SQL Memory Layer also supplies `SqlMemoryBatchWriter` from `effect-agent/sql-memory-store`.
+Use `changeMany(commands)` to commit up to 128 commands atomically, with results in input order.
+Commands see earlier revisions in the batch; identical operation IDs recover their original
+results, and any conflict or exceeded limit rolls back the whole batch. Storage limits apply
+to every intermediate revision. Single-command `MemoryWriter.change` uses the same writer.
+The batch service is owner-local; routed `CloudflareMemoryClient.change` remains one command.
 
 Expected failures cross RPC in Schema-defined envelopes. `MemoryRpcError` distinguishes denied,
 protocol, budget, timeout, and unavailable failures; source and write errors retain their domain tags.

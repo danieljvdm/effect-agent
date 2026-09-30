@@ -349,7 +349,7 @@ Upgrades supported predecessor formats atomically and rejects incompatible store
 Test failpoints are in `@effect-agent/storage-sqlite/testing/sqlite-storage-failpoint-testing`.
 See the [SQLite storage guide](../storage/sqlite) for installation and agent wiring.
 
-The independent `memoryStoreLayer` from `effect-agent/sql-memory-store` supplies optional `MemoryReader` and `MemoryWriter` ports
+The independent `memoryStoreLayer` from `effect-agent/sql-memory-store` supplies optional `MemoryReader`, `MemoryWriter`, and `SqlMemoryBatchWriter` ports
 for conditional document updates and terminal withdrawal. It initializes only memory tables.
 Use `memoryReaderLayer` when the application needs no writer. See
 [memory lifecycle](../guide/context-management#memory-lifecycle).

@@ -1,7 +1,14 @@
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Effect, Layer, Schema } from "effect";
 import { MemoryStorageError, MemoryMutationFailpoint } from "effect-agent/memory-store";
-import { memoryStoreLayerWithFailpoints, SqlMemoryLimits } from "effect-agent/sql-memory-store";
+import {
+  memoryStoreLayerWithFailpoints,
+  SqlMemoryLimits,
+  SqlStorageOwner,
+} from "effect-agent/sql-memory-store";
+import * as SqlClientService from "effect/unstable/sql/SqlClient";
+
+import { ownedState } from "./internal/owned-state.ts";
 
 export class DoMemoryStorageLimits extends Schema.Class<DoMemoryStorageLimits>(
   "@effect-agent/storage-cloudflare/DoMemoryStorageLimits",
@@ -22,8 +29,9 @@ export const defaultDoMemoryStorageLimits = DoMemoryStorageLimits.make({
 });
 
 /**
- * Local memory only, without Thread tables. Keep one SQL client per owner and pass the
- * full storage handle: sql-only handles cannot provide atomic receipts and revisions.
+ * Local memory only, without Thread tables. Pass the full storage handle: sql-only
+ * handles cannot provide atomic receipts and revisions. Services over the same storage
+ * share a transaction gate and bounded, write-through document and receipt views.
  * Byte limits conservatively count encoded rows, not SQLite page/index overhead.
  * Optional withdrawal reserves default to zero and stay within hard byte/receipt limits.
  * Ordinary Put cannot consume them. Deploy exclusively upgraded writers before relying
@@ -34,18 +42,27 @@ export const doMemoryStoreLayerWithFailpoints = (
   limits: DoMemoryStorageLimits = defaultDoMemoryStorageLimits,
 ) =>
   Layer.unwrap(
-    Schema.decodeEffect(DoMemoryStorageLimits)(limits).pipe(
-      Effect.mapError(() =>
-        MemoryStorageError.make({ operation: "memory storage limits", reason: "invalid-input" }),
-      ),
-      Effect.map((validated) =>
-        memoryStoreLayerWithFailpoints.pipe(
-          Layer.provide(Layer.succeed(SqlMemoryLimits, validated)),
-          Layer.provide(SqliteClient.layer({ storage })),
+    Effect.gen(function* () {
+      const validated = yield* Schema.decodeEffect(DoMemoryStorageLimits)(limits).pipe(
+        Effect.mapError(() =>
+          MemoryStorageError.make({ operation: "memory storage limits", reason: "invalid-input" }),
         ),
-      ),
-    ),
-  );
+      );
+
+      const sql = yield* SqlClientService.SqlClient;
+
+      const owner = yield* ownedState(sql).pipe(
+        Effect.mapError(() =>
+          MemoryStorageError.make({ operation: "open memory owner", reason: "unavailable" }),
+        ),
+      );
+
+      return memoryStoreLayerWithFailpoints.pipe(
+        Layer.provide(Layer.succeed(SqlMemoryLimits, validated)),
+        Layer.provide(Layer.succeed(SqlStorageOwner, owner)),
+      );
+    }),
+  ).pipe(Layer.provide(SqliteClient.layer({ storage })));
 
 export const doMemoryStoreLayer = (
   storage: NonNullable<SqliteClient.SqliteClientConfig["storage"]>,

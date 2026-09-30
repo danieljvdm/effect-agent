@@ -85,6 +85,7 @@ export const ownedRows = <A, I>(
   table: string,
   key: (row: A) => string,
   identityColumn?: keyof A & string,
+  uniqueFields: ReadonlyArray<ReadonlyArray<keyof A & string>> = [],
 ) => {
   type View = {
     readonly id: string;
@@ -168,6 +169,13 @@ export const ownedRows = <A, I>(
         sql`SELECT * FROM ${sql(table)} WHERE ${sql(field)} = ${value}`,
       );
 
+    const byFields = (fields: ReadonlyArray<readonly [keyof A & string, string]>) =>
+      matching(
+        JSON.stringify(fields),
+        (row) => fields.every(([field, value]) => row[field] === value),
+        sql`SELECT * FROM ${sql(table)} WHERE ${sql.and(fields.map(([field, value]) => sql`${sql(field)} = ${value}`))}`,
+      );
+
     const apply =
       (remove: boolean) =>
       <E, R>(effect: Effect.Effect<ReadonlyArray<unknown>, E, R>) =>
@@ -195,9 +203,21 @@ export const ownedRows = <A, I>(
                 );
             }
 
+          for (const row of rows)
+            for (const fields of uniqueFields) {
+              const values = fields.map((field) => [field, row[field]] as const);
+
+              retain(
+                JSON.stringify(values),
+                (candidate) => values.every(([field, value]) => candidate[field] === value),
+                remove ? [] : [row],
+                1,
+              );
+            }
+
           return rows;
         });
 
-    return { by, matching, write: apply(false), remove: apply(true) };
+    return { by, byFields, matching, write: apply(false), remove: apply(true) };
   };
 };

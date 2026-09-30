@@ -369,6 +369,7 @@ const submissionsRows = ownedRows(
   "effect_agent_submissions",
   (row) => row.submission_id,
   "submission_id",
+  [["thread_id", "principal", "idempotency_key"]],
 );
 
 const ownershipRows = ownedRows(
@@ -441,6 +442,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
   const rows = {
     submissions: {
       by: submissionViews.by,
+      byFields: submissionViews.byFields,
       // The same RETURNING rows update the full-row views and the small discovery index.
       write: <E, R>(effect: Effect.Effect<ReadonlyArray<unknown>, E, R>) =>
         submissionViews
@@ -462,6 +464,24 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     effect: Effect.Effect<A, SqlError | DoStorageCorruptionError>,
     operation: string,
   ) => effect.pipe(Effect.mapError(internalFailure(operation)));
+
+  // Small lanes share control metadata; large retained histories keep indexed SQL reads.
+  const laneWork = Effect.fnUntraced(function* (threadId: string, operation: string) {
+    const work = yield* cached(
+      workRows.matching(
+        JSON.stringify(["lane", threadId]),
+        (row) => row.thread_id === threadId,
+        sql`SELECT submission_id, thread_id, queue_sequence, principal, idempotency_key,
+        deployment_id, receipt_id, state FROM effect_agent_submissions WHERE thread_id = ${threadId} LIMIT 129`,
+        128,
+      ),
+      operation,
+    );
+
+    return work.length > 128
+      ? undefined
+      : [...work].sort((a, b) => a.queue_sequence - b.queue_sequence);
+  });
 
   const retainLifecycle = (submission: SubmissionRow, fact: LifecyclePublicationFact) =>
     lifecycle === undefined
@@ -1148,13 +1168,14 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
         Effect.gen(function* () {
           const keyRowKey = `${validated.threadId}/${validated.principal}/${validated.idempotencyKey}`;
 
-          const existingRows = yield* sql<Record<string, unknown>>`
-            SELECT ${sql.literal(SUBMISSION_COLUMNS)}
-            FROM effect_agent_submissions
-            WHERE thread_id = ${validated.threadId}
-              AND principal = ${validated.principal}
-              AND idempotency_key = ${validated.idempotencyKey}
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+          const existingRows = yield* cached(
+            rows.submissions.byFields([
+              ["thread_id", validated.threadId],
+              ["principal", validated.principal],
+              ["idempotency_key", validated.idempotencyKey],
+            ]),
+            operation,
+          );
 
           const existing = yield* decodeSubmissionRows(operation, keyRowKey, existingRows);
 
@@ -1249,10 +1270,17 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
 
           // The first accepted input fixes ordinary/worker lane identity atomically with admission.
           // Canonical origin materialization can lag admission; a log scan cannot fence that race.
-          const firstRows = yield* sql<Record<string, unknown>>`
+          const lane = yield* laneWork(validated.threadId, operation);
+
+          const firstRows =
+            lane === undefined
+              ? yield* sql<Record<string, unknown>>`
             SELECT worker_admission_json FROM effect_agent_submissions
             WHERE thread_id=${validated.threadId} ORDER BY queue_sequence LIMIT 1
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+          `.pipe(Effect.mapError(sqlFailure(operation)))
+              : lane[0] === undefined
+                ? []
+                : [yield* requireSubmission(operation, lane[0].submission_id)];
 
           const first = yield* Schema.decodeUnknownEffect(
             Schema.Array(
@@ -1296,11 +1324,14 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
               });
           }
 
-          const maxRows = yield* sql<Record<string, unknown>>`
+          const maxRows =
+            lane === undefined
+              ? yield* sql<Record<string, unknown>>`
             SELECT COALESCE(MAX(queue_sequence), 0) AS max_queue_sequence
             FROM effect_agent_submissions
             WHERE thread_id = ${validated.threadId}
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+          `.pipe(Effect.mapError(sqlFailure(operation)))
+              : [{ max_queue_sequence: lane.at(-1)?.queue_sequence ?? 0 }];
 
           const decodedMax = yield* decodeRows(
             Schema.Array(MaxQueueSequenceRow),
@@ -1423,18 +1454,19 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
         return Option.some(yield* decodeSubmissionSnapshot(operation, row.value));
       }
 
-      const rows = yield* sql<Record<string, unknown>>`
-      SELECT ${sql.literal(SUBMISSION_COLUMNS)}
-      FROM effect_agent_submissions
-      WHERE thread_id = ${validated.threadId}
-        AND principal = ${validated.principal}
-        AND idempotency_key = ${validated.idempotencyKey}
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+      const foundRows = yield* cached(
+        rows.submissions.byFields([
+          ["thread_id", validated.threadId],
+          ["principal", validated.principal],
+          ["idempotency_key", validated.idempotencyKey],
+        ]),
+        operation,
+      );
 
       const decoded = yield* decodeSubmissionRows(
         operation,
         `${validated.threadId}/${validated.principal}/${validated.idempotencyKey}`,
-        rows,
+        foundRows,
       );
 
       if (decoded.length > 1) {
@@ -1464,18 +1496,19 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       request,
     ).pipe(Effect.mapError(internalFailure(operation)));
 
-    const rows = yield* sql<Record<string, unknown>>`
-      SELECT ${sql.literal(SUBMISSION_COLUMNS)}
-      FROM effect_agent_submissions
-      WHERE thread_id = ${validated.threadId}
-        AND principal = ${validated.principal}
-        AND idempotency_key = ${validated.idempotencyKey}
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+    const foundRows = yield* cached(
+      rows.submissions.byFields([
+        ["thread_id", validated.threadId],
+        ["principal", validated.principal],
+        ["idempotency_key", validated.idempotencyKey],
+      ]),
+      operation,
+    );
 
     const decoded = yield* decodeSubmissionRows(
       operation,
       `${validated.threadId}/${validated.principal}/${validated.idempotencyKey}`,
-      rows,
+      foundRows,
     );
 
     if (decoded.length > 1) {
@@ -1514,7 +1547,11 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           // Ownership belongs to the whole Thread, including unknown work skipped below.
           // Stored lease instants are normalized UTC strings, so the latest expiry covers
           // every live lease. This check and the epoch grant share one write transaction.
-          const ownershipRows = yield* sql<Record<string, unknown>>`
+          const lane = yield* laneWork(validated.threadId, operation);
+
+          const ownershipRows =
+            lane === undefined
+              ? yield* sql<Record<string, unknown>>`
             SELECT ownership.*
             FROM effect_agent_submission_ownership AS ownership
             JOIN effect_agent_submissions AS submission
@@ -1522,7 +1559,15 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             WHERE submission.thread_id = ${validated.threadId}
             ORDER BY ownership.lease_expires_at DESC
             LIMIT 1
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+          `.pipe(Effect.mapError(sqlFailure(operation)))
+              : (yield* Effect.forEach(
+                  lane.filter((item) => item.state !== "settled"),
+                  (item) =>
+                    cached(rows.ownership.by("submission_id", item.submission_id), operation),
+                ))
+                  .flat()
+                  .sort((a, b) => b.lease_expires_at.localeCompare(a.lease_expires_at))
+                  .slice(0, 1);
 
           const ownership = yield* decodeRows(
             Schema.Array(OwnershipRow),
@@ -1540,7 +1585,9 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             if (expiresAt > now.millis) return Option.none<Claim>();
           }
 
-          const headRows = yield* sql<Record<string, unknown>>`
+          const headRows =
+            lane === undefined
+              ? yield* sql<Record<string, unknown>>`
             SELECT ${sql.literal(SUBMISSION_COLUMNS)}
             FROM effect_agent_submissions
             WHERE thread_id = ${validated.threadId}
@@ -1553,7 +1600,29 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
               )
             ORDER BY queue_sequence ASC
             LIMIT ${validated.handoff === undefined ? 1 : validated.handoff.deferredSubmissionIds.length + 1}
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+          `.pipe(Effect.mapError(sqlFailure(operation)))
+              : yield* Effect.gen(function* () {
+                  const heads: Array<SubmissionRow> = [];
+
+                  for (const item of lane) {
+                    if (item.state === "settled") continue;
+                    if (
+                      item.state === "unknown" &&
+                      Option.isNone(yield* readAbortIntent(operation, item.submission_id))
+                    )
+                      continue;
+                    heads.push(yield* requireSubmission(operation, item.submission_id));
+                    if (
+                      heads.length >=
+                      (validated.handoff === undefined
+                        ? 1
+                        : validated.handoff.deferredSubmissionIds.length + 1)
+                    )
+                      break;
+                  }
+
+                  return heads;
+                });
 
           const heads = yield* decodeSubmissionRows(operation, validated.threadId, headRows);
 
@@ -2408,13 +2477,21 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
 
         if (stopped.length > 0) return [];
 
-        const laterRows = yield* sql<Record<string, unknown>>`
+        const lane = yield* laneWork(validated.threadId, operation);
+
+        const laterRows =
+          lane === undefined
+            ? yield* sql<Record<string, unknown>>`
           SELECT ${sql.literal(SUBMISSION_COLUMNS)}
           FROM effect_agent_submissions
           WHERE thread_id = ${validated.threadId}
             AND queue_sequence > ${host.queue_sequence}
           ORDER BY queue_sequence ASC
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(Effect.mapError(sqlFailure(operation)))
+            : yield* Effect.forEach(
+                lane.filter((item) => item.queue_sequence > host.queue_sequence),
+                (item) => requireSubmission(operation, item.submission_id),
+              );
 
         const later = yield* decodeSubmissionRows(operation, validated.threadId, laterRows);
         const claimed: Array<JoiningClaim> = [];

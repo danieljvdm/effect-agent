@@ -1,4 +1,7 @@
-import { makeSelectedReads } from "@effect-agent/storage-sql/sql-thread-native-reads";
+import {
+  makeSelectedReads,
+  SelectedReadOwner,
+} from "@effect-agent/storage-sql/sql-thread-native-reads";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import {
@@ -22,6 +25,7 @@ import {
   Digest,
   ObservationOffset,
 } from "effect-agent/records";
+import { SqlStorageOwner } from "effect-agent/sql-memory-store";
 import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "effect-agent/submission-ledger";
 import {
   AppendConflict,
@@ -72,7 +76,7 @@ import {
   RawReadRequest,
   type DoJournal,
 } from "./internal/do-journal.ts";
-import { invalidateOwnedState } from "./internal/owned-state.ts";
+import { invalidateOwnedState, ownedState } from "./internal/owned-state.ts";
 import { isAppendContention, withStorageSpan } from "./internal/storage-span.ts";
 
 /**
@@ -992,7 +996,30 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
     return Option.some(checkpoint);
   });
 
-  const selectedReads = yield* makeSelectedReads(decodeEnvelope);
+  const selectedReads = yield* makeSelectedReads(decodeEnvelope).pipe(
+    Effect.provideService(SelectedReadOwner, {
+      snapshot: journal.state.read,
+      tail: (threadId) =>
+        journal.getThread(threadId).pipe(
+          Effect.flatMap((rows) =>
+            Schema.decodeUnknownEffect(
+              Schema.UndefinedOr(
+                Schema.Struct({
+                  tail_sequence: CanonicalSequence,
+                  tail_digest: Digest,
+                  producer_epoch: ThreadMaterialization.fields.producerEpoch,
+                }),
+              ),
+            )(rows[0]),
+          ),
+          Effect.mapError((error) => storeError("native thread tail", error)),
+        ),
+      records: (threadId) =>
+        journal
+          .cachedRecords(threadId)
+          .pipe(Effect.mapError((error) => storeError("native journal view", error))),
+    }),
+  );
 
   const threadStore = ThreadStore.of({
     ...(journal.lifecycle === undefined
@@ -1087,3 +1114,8 @@ export const layer = (
  * the host mutation gate. Ordinary ThreadStore/SubmissionLedger writes maintain this view.
  */
 export const invalidate = invalidateOwnedState;
+
+/** Share the Object's transaction gate with owner-local SQL Memory compositions. */
+export const sqlOwnerLayer = Layer.effect(SqlStorageOwner)(
+  Effect.flatMap(SqlClientService.SqlClient, ownedState),
+);

@@ -1,9 +1,11 @@
+import { SqlLifecycleSource } from "@effect-agent/storage-sql/sql-lifecycle-publication";
 import { makeSqlMessageDeliveryStore } from "@effect-agent/storage-sql/sql-message-delivery-store";
 import { Effect, Layer } from "effect";
 import {
   MessageDeliveryStore,
   type MessageDeliveryStoreLimits,
 } from "effect-agent/message-delivery";
+import { SqlStorageOwner } from "effect-agent/sql-memory-store";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { DoStorageConfig } from "./DoStorageConfig.ts";
@@ -22,10 +24,16 @@ export const doMessageDeliveryStoreLayer = (limits?: MessageDeliveryStoreLimits)
       const config = yield* DoStorageConfig;
       const failpoint = yield* DoStorageFailpoint;
 
-      yield* initializeDoJournal(sql, failpoint.hit, config.maxStoredValueBytes);
+      const journal = yield* initializeDoJournal(sql, failpoint.hit, config.maxStoredValueBytes);
 
       return yield* makeSqlMessageDeliveryStore(limits, {
         maxStoredValueBytes: config.maxStoredValueBytes,
-      });
+      }).pipe(
+        Effect.provideService(SqlStorageOwner, journal.state),
+        Effect.provideService(SqlLifecycleSource, {
+          beforeRetain: (threadId) => journal.flushCanonical(threadId),
+          beforePending: journal.flushPublications(),
+        }),
+      );
     }),
   );
