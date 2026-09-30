@@ -15,8 +15,8 @@ Layers, and scoped resource ownership.
 
 ## Agent execution
 
-[The runtime model](./runtime-model) follows a run through context preparation, model calls,
-tool batches, subagents, and input delivered between turns.
+[The runtime model](./runtime-model) defines the turn, ownership, recovery, and wake rules
+shared by runtime, storage, and platform changes.
 
 ## Budgets and limits
 

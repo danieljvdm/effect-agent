@@ -8,7 +8,8 @@ description: Run an agent, stream its events, or observe it through a scoped han
 The runtime exposes one agent loop through `run`, `stream`, and `start`. All three decode input
 before instructions execute and require native model services. Use `runUnknown`, `streamUnknown`,
 or `startUnknown` for external values typed as `unknown`. See
-[Agent definitions](./agents#typed-and-external-inputs).
+[Agent definitions](./agents#typed-and-external-inputs) and the authoritative
+[runtime model](../concepts/runtime-model).
 
 Use `InMemory.layer` from `effect-agent` for in-memory conversations, including attached
 subagents. Provide it once around the application and reuse a Thread ID for follow-up Runs.
