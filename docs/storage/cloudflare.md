@@ -9,7 +9,10 @@ Cloudflare stores thread history and accepted work in Durable Object SQLite.
 Each Object owns its database, separate from other Objects. Records survive Object
 eviction and reconstruction. While the Object is live, the adapters share bounded,
 write-through memory for thread headers, submissions, recovery state, and the journal tail.
-Native reads reuse those committed views; cache misses reload validated rows. Memory stores
+Native reads reuse those committed views; cache misses reload validated rows. Canonical row
+retention shares one eight-MiB serialized-byte budget across the isolate, rather than allocating
+that allowance to each Object. Decoded row views are released with their retained raw rows.
+Memory stores
 over the same owner share its transaction gate and document, receipt, and usage views.
 Failed transactions discard cached state.
 

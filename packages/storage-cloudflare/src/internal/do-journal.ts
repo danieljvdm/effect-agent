@@ -73,9 +73,10 @@ const MAX_RECORDS_PER_THREAD = MAX_THREAD_EXPORT_RECORDS;
 const ZERO_SEQUENCE = Schema.decodeSync(CanonicalSequence)(0);
 const MAX_IDENTIFIER_LENGTH = 1_024;
 const MAX_READ_PAGE_JSON_BYTES = 4 * 1024 * 1024;
-// SQL pages and an incarnation's hydration window serve different limits. Keeping
-// only one page evicts the first page of ordinary multi-page journals on every read.
-const MAX_RECORD_CACHE_JSON_BYTES = 16 * 1024 * 1024;
+// A shared isolate budget permits multi-page hydration without multiplying its
+// retained payload by the number of resident Durable Object instances.
+const MAX_RECORD_CACHE_JSON_BYTES = 8 * 1024 * 1024;
+const MAX_RECORD_CACHE_ENTRIES = 4_096;
 /** Durable Object SQL storage allows at most 100 bound parameters per statement. */
 const MAX_BOUND_PARAMETERS = 100;
 const isSqlError = Schema.is(SqlError);
@@ -133,17 +134,31 @@ class RecordRow extends Schema.Class<RecordRow>("RecordRow")({
   sequence: CanonicalSequence,
 }) {}
 
+interface RecordCacheEntry {
+  readonly row: RecordRow;
+  readonly bytes: number;
+  readonly evict: () => void;
+}
+
+// Entries retain only their local row map, never a storage owner or incarnation.
+const isolateRecords = new Map<RecordCacheEntry, true>();
+let isolateRecordBytes = 0;
+
+const releaseRecord = (entry: RecordCacheEntry) => {
+  if (!isolateRecords.delete(entry)) return;
+  isolateRecordBytes -= entry.bytes;
+  entry.evict();
+};
+
 const recordCaches = new WeakMap<OwnedState, ReturnType<typeof makeRecordCache>>();
 
 const makeRecordCache = () => {
-  const records = new Map<string, { readonly row: RecordRow; readonly bytes: number }>();
-  let bytes = 0;
+  const records = new Map<string, RecordCacheEntry>();
   const key = (thread: string, sequence: number) => JSON.stringify([thread, sequence]);
 
   return {
     clear: () => {
-      records.clear();
-      bytes = 0;
+      for (const entry of records.values()) releaseRecord(entry);
     },
     get: (thread: string, sequence: number) => records.get(key(thread, sequence))?.row,
     prefix: (thread: string, through: number): ReadonlyArray<RecordRow> | undefined => {
@@ -165,16 +180,25 @@ const makeRecordCache = () => {
       if (prior?.row === row) return;
       const size = storedTextBytes(row.record_json);
 
-      if (prior !== undefined) bytes -= prior.bytes;
-      records.delete(id);
-      records.set(id, { row, bytes: size });
-      bytes += size;
-      while (bytes > MAX_RECORD_CACHE_JSON_BYTES) {
-        const oldest = records.entries().next().value;
+      if (prior !== undefined) releaseRecord(prior);
+
+      const entry: RecordCacheEntry = {
+        row,
+        bytes: size,
+        evict: () => records.delete(id),
+      };
+
+      records.set(id, entry);
+      isolateRecords.set(entry, true);
+      isolateRecordBytes += size;
+      while (
+        isolateRecordBytes > MAX_RECORD_CACHE_JSON_BYTES ||
+        isolateRecords.size > MAX_RECORD_CACHE_ENTRIES
+      ) {
+        const oldest = isolateRecords.keys().next().value;
 
         if (oldest === undefined) break;
-        records.delete(oldest[0]);
-        bytes -= oldest[1].bytes;
+        releaseRecord(oldest);
       }
     },
   };
@@ -574,8 +598,6 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
   failpoint: DoJournalFailpoint = noFailpoint,
   maxStoredValueBytes: number,
 ) {
-  const progress = yield* SqlStorageProgress;
-
   const verifyWorkerPredecessor = Effect.fnUntraced(function* (workerContract: boolean) {
     const requiredRows = yield* sql<Record<string, unknown>>`
     SELECT name
@@ -1002,7 +1024,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
     ),
   );
 
-  journal = makeJournal(sql, failpoint, maxStoredValueBytes, lifecycle, state, progress);
+  journal = yield* makeJournal(sql, failpoint, maxStoredValueBytes, lifecycle, state);
   if (lifecycle !== undefined) yield* journal.initializeLifecycleSource();
 
   return journal;
@@ -1014,116 +1036,117 @@ const makeJournal = (
   maxStoredValueBytes: number,
   lifecycle: Effect.Success<ReturnType<typeof makeSqlLifecyclePublication>>,
   state: OwnedState,
-  progress: Effect.Success<typeof SqlStorageProgress>,
-) => {
-  const threads = threadRows(state, sql);
-  const recovery = recoveryRows(state, sql);
-  const cursors = lifecycleCursorRows(state, sql);
-  let records = recordCaches.get(state);
+) =>
+  Effect.gen(function* () {
+    const progress = yield* SqlStorageProgress;
+    const threads = threadRows(state, sql);
+    const recovery = recoveryRows(state, sql);
+    const cursors = lifecycleCursorRows(state, sql);
+    let records = recordCaches.get(state);
 
-  if (records === undefined) {
-    records = makeRecordCache();
-    recordCaches.set(state, records);
-    state.invalidators.add(records.clear);
-  }
-  const recordCache = records;
+    if (records === undefined) {
+      records = makeRecordCache();
+      recordCaches.set(state, records);
+      state.invalidators.add(records.clear);
+    }
+    const recordCache = records;
 
-  /** Typed pre-write refusal for any single value over the configured byte bound. */
-  const checkValueBound = (
-    operation: string,
-    value: string,
-  ): Effect.Effect<void, DoValueBoundExceeded> => {
-    const actualBytes = storedTextBytes(value);
+    /** Typed pre-write refusal for any single value over the configured byte bound. */
+    const checkValueBound = (
+      operation: string,
+      value: string,
+    ): Effect.Effect<void, DoValueBoundExceeded> => {
+      const actualBytes = storedTextBytes(value);
 
-    return actualBytes > maxStoredValueBytes
-      ? Effect.fail(
-          DoValueBoundExceeded.make({
-            actualBytes,
-            maxBytes: maxStoredValueBytes,
-            operation,
-          }),
-        )
-      : Effect.void;
-  };
+      return actualBytes > maxStoredValueBytes
+        ? Effect.fail(
+            DoValueBoundExceeded.make({
+              actualBytes,
+              maxBytes: maxStoredValueBytes,
+              operation,
+            }),
+          )
+        : Effect.void;
+    };
 
-  /**
-   * Runs one journal write transaction on the Durable Object storage-backed
-   * `withTransaction` (`ctx.storage.transaction()` under the hood). Within one Durable
-   * Object there is exactly ONE writer, so the Node `BEGIN IMMEDIATE` + busy-retry +
-   * `SqliteWriteContention` machinery has no analogue here and is deliberately absent.
-   * Ownership-token and epoch checks still run INSIDE the transaction, so fencing atomicity
-   * (DUR-006) is preserved identically.
-   *
-   * Journal write transactions are always top level: the Durable Object client rejects
-   * nested transactions, so new journal operations must not wrap this helper inside another
-   * transaction. Expected outcomes may be captured only when every such refusal precedes
-   * mutation; real faults still roll back. Successful preflight reads never authorize a write.
-   */
-  const withWriteTransaction =
-    (operation: string, expected: (error: { readonly _tag: string }) => boolean = () => false) =>
-    <A, E extends { readonly _tag: string }>(
-      effect: Effect.Effect<A, E>,
-    ): Effect.Effect<A, E | DoStorageError> =>
-      state.transaction(storageResult(effect, expected)).pipe(
-        Effect.provideService(SqlClient.SqlClient, sql),
-        Effect.mapError((error) => (isSqlError(error) ? storageError(operation)(error) : error)),
-        Effect.tapError(annotateStorageError),
-        Effect.withSpan("DoJournal.withWriteTransaction", { attributes: { operation } }),
-        Effect.flatMap(Effect.fromResult),
-      );
+    /**
+     * Runs one journal write transaction on the Durable Object storage-backed
+     * `withTransaction` (`ctx.storage.transaction()` under the hood). Within one Durable
+     * Object there is exactly ONE writer, so the Node `BEGIN IMMEDIATE` + busy-retry +
+     * `SqliteWriteContention` machinery has no analogue here and is deliberately absent.
+     * Ownership-token and epoch checks still run INSIDE the transaction, so fencing atomicity
+     * (DUR-006) is preserved identically.
+     *
+     * Journal write transactions are always top level: the Durable Object client rejects
+     * nested transactions, so new journal operations must not wrap this helper inside another
+     * transaction. Expected outcomes may be captured only when every such refusal precedes
+     * mutation; real faults still roll back. Successful preflight reads never authorize a write.
+     */
+    const withWriteTransaction =
+      (operation: string, expected: (error: { readonly _tag: string }) => boolean = () => false) =>
+      <A, E extends { readonly _tag: string }>(
+        effect: Effect.Effect<A, E>,
+      ): Effect.Effect<A, E | DoStorageError> =>
+        state.transaction(storageResult(effect, expected)).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.mapError((error) => (isSqlError(error) ? storageError(operation)(error) : error)),
+          Effect.tapError(annotateStorageError),
+          Effect.withSpan("DoJournal.withWriteTransaction", { attributes: { operation } }),
+          Effect.flatMap(Effect.fromResult),
+        );
 
-  const materialize = Effect.fnUntraced(
-    function* (
-      threadId: string,
-      createdAt: string,
-      emptyTailDigest: string,
-      producerEpoch: ProducerEpoch,
-    ): Effect.fn.Return<
-      void,
-      DoFenceRejected | DoStorageCorruptionError | DoStorageError | DoValueBoundExceeded
-    > {
-      if (threadId.length > MAX_IDENTIFIER_LENGTH) {
-        return yield* DoStorageError.make({
-          operation: "materialize thread",
-          message: "Thread identity exceeds the Durable Object storage bounds.",
-        });
-      }
-      yield* checkValueBound("materialize thread", emptyTailDigest);
-      // Refusals and idempotent materialization need no transaction. Recheck before writes.
-      const current = yield* getThread(threadId);
+    const materialize = Effect.fnUntraced(
+      function* (
+        threadId: string,
+        createdAt: string,
+        emptyTailDigest: string,
+        producerEpoch: ProducerEpoch,
+      ): Effect.fn.Return<
+        void,
+        DoFenceRejected | DoStorageCorruptionError | DoStorageError | DoValueBoundExceeded
+      > {
+        if (threadId.length > MAX_IDENTIFIER_LENGTH) {
+          return yield* DoStorageError.make({
+            operation: "materialize thread",
+            message: "Thread identity exceeds the Durable Object storage bounds.",
+          });
+        }
+        yield* checkValueBound("materialize thread", emptyTailDigest);
+        // Refusals and idempotent materialization need no transaction. Recheck before writes.
+        const current = yield* getThread(threadId);
 
-      if (current.length === 1 && producerEpoch <= current[0].producer_epoch) {
-        if (producerEpoch === current[0].producer_epoch) return;
+        if (current.length === 1 && producerEpoch <= current[0].producer_epoch) {
+          if (producerEpoch === current[0].producer_epoch) return;
 
-        return yield* DoFenceRejected.make({
-          producerEpoch,
-          actualEpoch: current[0].producer_epoch,
-          message: "The materialization producer epoch is stale.",
-        });
-      }
-      yield* withWriteTransaction(
-        "materialize transaction",
-        (error) => error._tag === "DoFenceRejected",
-      )(
-        Effect.gen(function* () {
-          const existingRows = yield* getThread(threadId);
+          return yield* DoFenceRejected.make({
+            producerEpoch,
+            actualEpoch: current[0].producer_epoch,
+            message: "The materialization producer epoch is stale.",
+          });
+        }
+        yield* withWriteTransaction(
+          "materialize transaction",
+          (error) => error._tag === "DoFenceRejected",
+        )(
+          Effect.gen(function* () {
+            const existingRows = yield* getThread(threadId);
 
-          const existing = yield* decodeRows(
-            Schema.Array(ThreadRow),
-            "effect_agent_threads",
-            threadId,
-            existingRows,
-          );
+            const existing = yield* decodeRows(
+              Schema.Array(ThreadRow),
+              "effect_agent_threads",
+              threadId,
+              existingRows,
+            );
 
-          if (existing.length > 1) {
-            return yield* DoStorageCorruptionError.make({
-              table: "effect_agent_threads",
-              rowKey: threadId,
-              message: "A thread primary key returned more than one row.",
-            });
-          }
-          if (existing.length === 0) {
-            yield* sql`
+            if (existing.length > 1) {
+              return yield* DoStorageCorruptionError.make({
+                table: "effect_agent_threads",
+                rowKey: threadId,
+                message: "A thread primary key returned more than one row.",
+              });
+            }
+            if (existing.length === 0) {
+              yield* sql`
             INSERT INTO effect_agent_threads (
               thread_id,
               created_at,
@@ -1138,168 +1161,168 @@ const makeJournal = (
               ${producerEpoch}
             )
            RETURNING *`.pipe(
-              threads.write,
-              Effect.mapError((error) =>
-                error._tag === "SqlError" ? storageError("materialize thread")(error) : error,
-              ),
-            );
-
-            if (lifecycle !== undefined)
-              yield* sql`INSERT INTO effect_agent_lifecycle_cursors (thread_id, through_sequence)
-              VALUES (${threadId}, 0) RETURNING *`.pipe(
-                cursors.write,
+                threads.write,
                 Effect.mapError((error) =>
-                  error._tag === "SqlError"
-                    ? storageError("initialize lifecycle source")(error)
-                    : error,
+                  error._tag === "SqlError" ? storageError("materialize thread")(error) : error,
                 ),
               );
 
-            return;
-          }
-          if (producerEpoch < existing[0].producer_epoch) {
-            return yield* DoFenceRejected.make({
-              producerEpoch,
-              actualEpoch: existing[0].producer_epoch,
-              message: `Producer epoch ${producerEpoch} is stale; current epoch is ${existing[0].producer_epoch}.`,
-            });
-          }
-          if (producerEpoch > existing[0].producer_epoch) {
-            yield* sql`
+              if (lifecycle !== undefined)
+                yield* sql`INSERT INTO effect_agent_lifecycle_cursors (thread_id, through_sequence)
+              VALUES (${threadId}, 0) RETURNING *`.pipe(
+                  cursors.write,
+                  Effect.mapError((error) =>
+                    error._tag === "SqlError"
+                      ? storageError("initialize lifecycle source")(error)
+                      : error,
+                  ),
+                );
+
+              return;
+            }
+            if (producerEpoch < existing[0].producer_epoch) {
+              return yield* DoFenceRejected.make({
+                producerEpoch,
+                actualEpoch: existing[0].producer_epoch,
+                message: `Producer epoch ${producerEpoch} is stale; current epoch is ${existing[0].producer_epoch}.`,
+              });
+            }
+            if (producerEpoch > existing[0].producer_epoch) {
+              yield* sql`
             UPDATE effect_agent_threads
             SET producer_epoch = ${producerEpoch}
             WHERE thread_id = ${threadId}
            RETURNING *`.pipe(
-              threads.write,
-              Effect.mapError((error) =>
-                error._tag === "SqlError"
-                  ? storageError("advance materialization epoch")(error)
-                  : error,
-              ),
-            );
-          }
-        }),
-      );
-    },
-    withStorageSpan("DoJournal.materialize", (error) => error._tag === "DoFenceRejected"),
-  );
-
-  const getThread = Effect.fn("DoJournal.getThread")(function* (threadId: string) {
-    return (yield* threads
-      .by("thread_id", threadId)
-      .pipe(
-        Effect.mapError((error) =>
-          error._tag === "SqlError" ? storageError("read thread")(error) : error,
-        ),
-      )).filter((row) => row.thread_id === threadId);
-  });
-
-  const hasRecord = Effect.fnUntraced(function* (threadId: string, recordId: string) {
-    const thread = (yield* getThread(threadId))[0];
-    const prefix = recordCache.prefix(threadId, thread?.tail_sequence ?? 0);
-
-    if (prefix !== undefined) return prefix.some((row) => row.record_id === recordId);
-
-    const rows = yield* sql`SELECT record_id FROM effect_agent_canonical_records
-      WHERE thread_id = ${threadId} AND record_id = ${recordId}`.pipe(
-      Effect.mapError(storageError("read canonical record identity")),
+                threads.write,
+                Effect.mapError((error) =>
+                  error._tag === "SqlError"
+                    ? storageError("advance materialization epoch")(error)
+                    : error,
+                ),
+              );
+            }
+          }),
+        );
+      },
+      withStorageSpan("DoJournal.materialize", (error) => error._tag === "DoFenceRejected"),
     );
 
-    return rows.length > 0;
-  });
+    const getThread = Effect.fn("DoJournal.getThread")(function* (threadId: string) {
+      return (yield* threads
+        .by("thread_id", threadId)
+        .pipe(
+          Effect.mapError((error) =>
+            error._tag === "SqlError" ? storageError("read thread")(error) : error,
+          ),
+        )).filter((row) => row.thread_id === threadId);
+    });
 
-  const append = Effect.fnUntraced(
-    function* (
-      request: RawAppendRequest,
-      observed: ThreadRow,
-    ): Effect.fn.Return<RawAppendResult, AppendError> {
-      if (
-        request.threadId.length > MAX_IDENTIFIER_LENGTH ||
-        request.batchId.length > MAX_IDENTIFIER_LENGTH ||
-        request.records.some((record) => record.recordId.length > MAX_IDENTIFIER_LENGTH)
-      ) {
-        return yield* DoStorageError.make({
-          operation: "append canonical batch",
-          message: "Canonical identifiers exceed the Durable Object storage bounds.",
-        });
-      }
-      // The platform's ~2 MB per-value limit, enforced typed BEFORE any write (plan §1.2).
-      yield* checkValueBound("append canonical batch", request.batchJson);
-      yield* checkValueBound("append canonical batch", request.batchDigest);
-      yield* checkValueBound("append canonical batch", request.tailDigest);
-      yield* Effect.forEach(
-        request.records,
-        (record) => checkValueBound("append canonical record", record.recordJson),
-        { discard: true },
+    const hasRecord = Effect.fnUntraced(function* (threadId: string, recordId: string) {
+      const thread = (yield* getThread(threadId))[0];
+      const prefix = recordCache.prefix(threadId, thread?.tail_sequence ?? 0);
+
+      if (prefix !== undefined) return prefix.some((row) => row.record_id === recordId);
+
+      const rows = yield* sql`SELECT record_id FROM effect_agent_canonical_records
+      WHERE thread_id = ${threadId} AND record_id = ${recordId}`.pipe(
+        Effect.mapError(storageError("read canonical record identity")),
       );
 
-      const recordIds = request.records.map((record) => record.recordId);
+      return rows.length > 0;
+    });
 
-      if (new Set(recordIds).size !== recordIds.length) {
-        return yield* DoAppendConflict.make({
-          message: `Batch ${request.batchId} contains duplicate canonical record IDs.`,
-          reason: "record-identity",
-        });
-      }
+    const append = Effect.fnUntraced(
+      function* (
+        request: RawAppendRequest,
+        observed: ThreadRow,
+      ): Effect.fn.Return<RawAppendResult, AppendError> {
+        if (
+          request.threadId.length > MAX_IDENTIFIER_LENGTH ||
+          request.batchId.length > MAX_IDENTIFIER_LENGTH ||
+          request.records.some((record) => record.recordId.length > MAX_IDENTIFIER_LENGTH)
+        ) {
+          return yield* DoStorageError.make({
+            operation: "append canonical batch",
+            message: "Canonical identifiers exceed the Durable Object storage bounds.",
+          });
+        }
+        // The platform's ~2 MB per-value limit, enforced typed BEFORE any write (plan §1.2).
+        yield* checkValueBound("append canonical batch", request.batchJson);
+        yield* checkValueBound("append canonical batch", request.batchDigest);
+        yield* checkValueBound("append canonical batch", request.tailDigest);
+        yield* Effect.forEach(
+          request.records,
+          (record) => checkValueBound("append canonical record", record.recordJson),
+          { discard: true },
+        );
 
-      // The facade already read this tail. Reject a known stale writer without opening a
-      // transaction; a matching tail is still checked atomically below. Replays precede tail
-      // conflicts, preserving retry identity even after the log has advanced.
-      if (request.producerEpoch !== observed.producer_epoch) {
-        return yield* DoFenceRejected.make({
-          producerEpoch: request.producerEpoch,
-          actualEpoch: observed.producer_epoch,
-          message: "The append producer epoch is not current.",
-        });
-      }
-      if (
-        request.expectedTailSequence !== observed.tail_sequence ||
-        request.expectedTailDigest !== observed.tail_digest
-      ) {
-        const batches = yield* sql`
+        const recordIds = request.records.map((record) => record.recordId);
+
+        if (new Set(recordIds).size !== recordIds.length) {
+          return yield* DoAppendConflict.make({
+            message: `Batch ${request.batchId} contains duplicate canonical record IDs.`,
+            reason: "record-identity",
+          });
+        }
+
+        // The facade already read this tail. Reject a known stale writer without opening a
+        // transaction; a matching tail is still checked atomically below. Replays precede tail
+        // conflicts, preserving retry identity even after the log has advanced.
+        if (request.producerEpoch !== observed.producer_epoch) {
+          return yield* DoFenceRejected.make({
+            producerEpoch: request.producerEpoch,
+            actualEpoch: observed.producer_epoch,
+            message: "The append producer epoch is not current.",
+          });
+        }
+        if (
+          request.expectedTailSequence !== observed.tail_sequence ||
+          request.expectedTailDigest !== observed.tail_digest
+        ) {
+          const batches = yield* sql`
           SELECT batch_id FROM effect_agent_canonical_batches
           WHERE thread_id = ${request.threadId} AND batch_id = ${request.batchId}
         `.pipe(Effect.mapError(storageError("preflight append replay")));
 
-        // A possible replay still checks the current epoch and digest in the transaction.
-        if (batches.length === 0) {
-          return yield* DoAppendConflict.make({
-            reason: "tail",
-            message: "The canonical tail has advanced.",
-            actualTailSequence: observed.tail_sequence,
-            actualTailDigest: observed.tail_digest,
-          });
-        }
-      }
-
-      return yield* withWriteTransaction(
-        "append transaction",
-        isAppendContention,
-      )(
-        Effect.gen(function* () {
-          const threadRows = yield* getThread(request.threadId);
-
-          const thread = yield* decodeSingleRow(
-            Schema.Array(ThreadRow),
-            "effect_agent_threads",
-            request.threadId,
-            threadRows,
-          );
-
-          if (request.producerEpoch !== thread.producer_epoch) {
-            return yield* DoFenceRejected.make({
-              producerEpoch: request.producerEpoch,
-              actualEpoch: thread.producer_epoch,
-              message: `Producer epoch ${request.producerEpoch} is not the current epoch ${thread.producer_epoch}.`,
+          // A possible replay still checks the current epoch and digest in the transaction.
+          if (batches.length === 0) {
+            return yield* DoAppendConflict.make({
+              reason: "tail",
+              message: "The canonical tail has advanced.",
+              actualTailSequence: observed.tail_sequence,
+              actualTailDigest: observed.tail_digest,
             });
           }
+        }
 
-          const prefix = recordCache.prefix(request.threadId, thread.tail_sequence);
+        return yield* withWriteTransaction(
+          "append transaction",
+          isAppendContention,
+        )(
+          Effect.gen(function* () {
+            const threadRows = yield* getThread(request.threadId);
 
-          const batchRows =
-            prefix !== undefined && !prefix.some((row) => row.batch_id === request.batchId)
-              ? []
-              : yield* sql<Record<string, unknown>>`
+            const thread = yield* decodeSingleRow(
+              Schema.Array(ThreadRow),
+              "effect_agent_threads",
+              request.threadId,
+              threadRows,
+            );
+
+            if (request.producerEpoch !== thread.producer_epoch) {
+              return yield* DoFenceRejected.make({
+                producerEpoch: request.producerEpoch,
+                actualEpoch: thread.producer_epoch,
+                message: `Producer epoch ${request.producerEpoch} is not the current epoch ${thread.producer_epoch}.`,
+              });
+            }
+
+            const prefix = recordCache.prefix(request.threadId, thread.tail_sequence);
+
+            const batchRows =
+              prefix !== undefined && !prefix.some((row) => row.batch_id === request.batchId)
+                ? []
+                : yield* sql<Record<string, unknown>>`
           SELECT
             thread_id,
             batch_id,
@@ -1313,67 +1336,67 @@ const makeJournal = (
             AND batch_id = ${request.batchId}
         `.pipe(Effect.mapError(storageError("read idempotent batch")));
 
-          const batches = yield* decodeRows(
-            Schema.Array(BatchRow),
-            "effect_agent_canonical_batches",
-            `${request.threadId}/${request.batchId}`,
-            batchRows,
-          );
+            const batches = yield* decodeRows(
+              Schema.Array(BatchRow),
+              "effect_agent_canonical_batches",
+              `${request.threadId}/${request.batchId}`,
+              batchRows,
+            );
 
-          if (batches.length > 1) {
-            return yield* DoStorageCorruptionError.make({
-              table: "effect_agent_canonical_batches",
-              rowKey: `${request.threadId}/${request.batchId}`,
-              message: "A canonical batch primary key returned more than one row.",
-            });
-          }
-          if (batches.length === 1) {
-            const existing = batches[0];
+            if (batches.length > 1) {
+              return yield* DoStorageCorruptionError.make({
+                table: "effect_agent_canonical_batches",
+                rowKey: `${request.threadId}/${request.batchId}`,
+                message: "A canonical batch primary key returned more than one row.",
+              });
+            }
+            if (batches.length === 1) {
+              const existing = batches[0];
 
-            if (existing.batch_digest !== request.batchDigest) {
-              return yield* DoAppendConflict.make({
-                message: `Batch ${request.batchId} already exists with different canonical content.`,
-                reason: "batch-digest",
+              if (existing.batch_digest !== request.batchDigest) {
+                return yield* DoAppendConflict.make({
+                  message: `Batch ${request.batchId} already exists with different canonical content.`,
+                  reason: "batch-digest",
+                });
+              }
+
+              return RawAppendResult.make({
+                firstSequence: existing.first_sequence,
+                lastSequence: existing.last_sequence,
+                replayed: true,
+                tailDigest: existing.tail_digest,
               });
             }
 
-            return RawAppendResult.make({
-              firstSequence: existing.first_sequence,
-              lastSequence: existing.last_sequence,
-              replayed: true,
-              tailDigest: existing.tail_digest,
-            });
-          }
+            if (
+              request.expectedTailSequence !== thread.tail_sequence ||
+              request.expectedTailDigest !== thread.tail_digest
+            ) {
+              return yield* DoAppendConflict.make({
+                message:
+                  `Expected tail ${request.expectedTailSequence}/${request.expectedTailDigest} ` +
+                  `but found ${thread.tail_sequence}/${thread.tail_digest}.`,
+                reason: "tail",
+                actualTailSequence: thread.tail_sequence,
+                actualTailDigest: thread.tail_digest,
+              });
+            }
+            if (thread.tail_sequence + request.records.length > MAX_RECORDS_PER_THREAD) {
+              return yield* DoStorageError.make({
+                operation: "append canonical batch",
+                message: `Thread record limit ${MAX_RECORDS_PER_THREAD} would be exceeded.`,
+              });
+            }
 
-          if (
-            request.expectedTailSequence !== thread.tail_sequence ||
-            request.expectedTailDigest !== thread.tail_digest
-          ) {
-            return yield* DoAppendConflict.make({
-              message:
-                `Expected tail ${request.expectedTailSequence}/${request.expectedTailDigest} ` +
-                `but found ${thread.tail_sequence}/${thread.tail_digest}.`,
-              reason: "tail",
-              actualTailSequence: thread.tail_sequence,
-              actualTailDigest: thread.tail_digest,
-            });
-          }
-          if (thread.tail_sequence + request.records.length > MAX_RECORDS_PER_THREAD) {
-            return yield* DoStorageError.make({
-              operation: "append canonical batch",
-              message: `Thread record limit ${MAX_RECORDS_PER_THREAD} would be exceeded.`,
-            });
-          }
+            // Chunked to respect the Durable Object platform's 100-bound-parameter statement
+            // limit: a batch may carry up to 256 records.
+            const existingRecords: Array<RecordRow> =
+              prefix === undefined ? [] : prefix.filter((row) => recordIds.includes(row.record_id));
 
-          // Chunked to respect the Durable Object platform's 100-bound-parameter statement
-          // limit: a batch may carry up to 256 records.
-          const existingRecords: Array<RecordRow> =
-            prefix === undefined ? [] : prefix.filter((row) => recordIds.includes(row.record_id));
-
-          for (const chunk of prefix === undefined
-            ? chunked(recordIds, MAX_BOUND_PARAMETERS - 10)
-            : []) {
-            const existingRecordRows = yield* sql<Record<string, unknown>>`
+            for (const chunk of prefix === undefined
+              ? chunked(recordIds, MAX_BOUND_PARAMETERS - 10)
+              : []) {
+              const existingRecordRows = yield* sql<Record<string, unknown>>`
             SELECT
               thread_id,
               sequence,
@@ -1386,47 +1409,47 @@ const makeJournal = (
             ORDER BY sequence
           `.pipe(Effect.mapError(storageError("check canonical record identities")));
 
-            existingRecords.push(
-              ...(yield* decodeRows(
-                Schema.Array(RecordRow),
-                "effect_agent_canonical_records",
-                `${request.threadId}/record_ids`,
-                existingRecordRows,
-              )),
+              existingRecords.push(
+                ...(yield* decodeRows(
+                  Schema.Array(RecordRow),
+                  "effect_agent_canonical_records",
+                  `${request.threadId}/record_ids`,
+                  existingRecordRows,
+                )),
+              );
+            }
+            if (existingRecords.length > 0) {
+              return yield* DoAppendConflict.make({
+                message: `Canonical record ID ${existingRecords[0].record_id} already exists.`,
+                reason: "record-identity",
+              });
+            }
+
+            const firstSequence = yield* Schema.decodeEffect(CanonicalSequence)(
+              thread.tail_sequence + 1,
+            ).pipe(
+              Effect.mapError((error) =>
+                DoStorageError.make({
+                  cause: error,
+                  operation: "append canonical batch",
+                  message: error.message,
+                }),
+              ),
             );
-          }
-          if (existingRecords.length > 0) {
-            return yield* DoAppendConflict.make({
-              message: `Canonical record ID ${existingRecords[0].record_id} already exists.`,
-              reason: "record-identity",
-            });
-          }
 
-          const firstSequence = yield* Schema.decodeEffect(CanonicalSequence)(
-            thread.tail_sequence + 1,
-          ).pipe(
-            Effect.mapError((error) =>
-              DoStorageError.make({
-                cause: error,
-                operation: "append canonical batch",
-                message: error.message,
-              }),
-            ),
-          );
+            const lastSequence = yield* Schema.decodeEffect(CanonicalSequence)(
+              firstSequence + request.records.length - 1,
+            ).pipe(
+              Effect.mapError((error) =>
+                DoStorageError.make({
+                  cause: error,
+                  operation: "append canonical batch",
+                  message: error.message,
+                }),
+              ),
+            );
 
-          const lastSequence = yield* Schema.decodeEffect(CanonicalSequence)(
-            firstSequence + request.records.length - 1,
-          ).pipe(
-            Effect.mapError((error) =>
-              DoStorageError.make({
-                cause: error,
-                operation: "append canonical batch",
-                message: error.message,
-              }),
-            ),
-          );
-
-          yield* sql`
+            yield* sql`
           INSERT INTO effect_agent_canonical_batches (
             thread_id,
             batch_id,
@@ -1445,60 +1468,60 @@ const makeJournal = (
             ${request.batchJson}
           )
         `.pipe(Effect.mapError(storageError("insert canonical batch")));
-          yield* failpoint("append:after-batch-insert");
+            yield* failpoint("append:after-batch-insert");
 
-          const records = yield* Effect.forEach(request.records, (record, index) =>
-            Effect.gen(function* () {
-              const canonical = yield* Schema.decodeEffect(Schema.fromJsonString(CanonicalRecord))(
-                record.recordJson,
-              ).pipe(
-                Effect.mapError((error) =>
-                  DoStorageCorruptionError.make({
-                    table: "effect_agent_canonical_records",
-                    rowKey: record.recordId,
-                    message: error.message,
-                  }),
-                ),
-              );
+            const records = yield* Effect.forEach(request.records, (record, index) =>
+              Effect.gen(function* () {
+                const canonical = yield* Schema.decodeEffect(
+                  Schema.fromJsonString(CanonicalRecord),
+                )(record.recordJson).pipe(
+                  Effect.mapError((error) =>
+                    DoStorageCorruptionError.make({
+                      table: "effect_agent_canonical_records",
+                      rowKey: record.recordId,
+                      message: error.message,
+                    }),
+                  ),
+                );
 
-              return {
-                record,
-                canonical,
-                row: {
-                  thread_id: request.threadId,
-                  sequence: firstSequence + index,
-                  record_id: record.recordId,
-                  batch_id: request.batchId,
-                  record_json: record.recordJson,
-                  outstanding: canonicalRecordOutstanding(canonical),
-                },
-              };
-            }),
-          );
-
-          // Six bound columns per row; preserve the logical batch and every append barrier.
-          for (const group of chunked(records, Math.floor(MAX_BOUND_PARAMETERS / 6))) {
-            yield* sql`INSERT INTO effect_agent_canonical_records ${sql.insert(group.map(({ row }) => row))}`.pipe(
-              Effect.mapError(storageError("insert canonical records")),
+                return {
+                  record,
+                  canonical,
+                  row: {
+                    thread_id: request.threadId,
+                    sequence: firstSequence + index,
+                    record_id: record.recordId,
+                    batch_id: request.batchId,
+                    record_json: record.recordJson,
+                    outstanding: canonicalRecordOutstanding(canonical),
+                  },
+                };
+              }),
             );
-            for (const { canonical, row } of group) {
-              yield* indexCanonicalRecord(request.threadId, canonical, undefined, {
-                sequence: row.sequence,
-              }).pipe(
-                Effect.provideService(SqlClient.SqlClient, sql),
-                Effect.mapError(storageError("index canonical record")),
-              );
-              recordCache.put(
-                RecordRow.make({
-                  ...row,
-                  sequence: Schema.decodeSync(CanonicalSequence)(row.sequence),
-                }),
-              );
-              yield* failpoint("append:after-record-insert");
-            }
-          }
 
-          yield* sql`
+            // Six bound columns per row; preserve the logical batch and every append barrier.
+            for (const group of chunked(records, Math.floor(MAX_BOUND_PARAMETERS / 6))) {
+              yield* sql`INSERT INTO effect_agent_canonical_records ${sql.insert(group.map(({ row }) => row))}`.pipe(
+                Effect.mapError(storageError("insert canonical records")),
+              );
+              for (const { canonical, row } of group) {
+                yield* indexCanonicalRecord(request.threadId, canonical, undefined, {
+                  sequence: row.sequence,
+                }).pipe(
+                  Effect.provideService(SqlClient.SqlClient, sql),
+                  Effect.mapError(storageError("index canonical record")),
+                );
+                recordCache.put(
+                  RecordRow.make({
+                    ...row,
+                    sequence: Schema.decodeSync(CanonicalSequence)(row.sequence),
+                  }),
+                );
+                yield* failpoint("append:after-record-insert");
+              }
+            }
+
+            yield* sql`
           UPDATE effect_agent_threads
           SET
             tail_sequence = ${lastSequence},
@@ -1506,82 +1529,82 @@ const makeJournal = (
             producer_epoch = ${request.producerEpoch}
           WHERE thread_id = ${request.threadId}
          RETURNING *`.pipe(
-            threads.write,
-            Effect.mapError((error) =>
-              error._tag === "SqlError" ? storageError("advance thread tail")(error) : error,
-            ),
-          );
-          yield* failpoint("append:after-tail-update");
+              threads.write,
+              Effect.mapError((error) =>
+                error._tag === "SqlError" ? storageError("advance thread tail")(error) : error,
+              ),
+            );
+            yield* failpoint("append:after-tail-update");
 
-          // Retain one start prefix atomically with its canonical proof, before model/tool
-          // execution. Later facts stay journal-backed until the settlement publication wave.
-          if (
-            lifecycle !== undefined &&
-            records.some(
-              ({ canonical: { payload } }) =>
-                payload._tag === "RunStarted" || payload._tag === "SubagentStarted",
+            // Retain one start prefix atomically with its canonical proof, before model/tool
+            // execution. Later facts stay journal-backed until the settlement publication wave.
+            if (
+              lifecycle !== undefined &&
+              records.some(
+                ({ canonical: { payload } }) =>
+                  payload._tag === "RunStarted" || payload._tag === "SubagentStarted",
+              )
             )
-          )
-            yield* flushCanonical(request.threadId).pipe(
-              Effect.provideService(SqlLifecycleRetainer, { retainMany: lifecycle.retainMany }),
-              Effect.mapError((cause) =>
-                DoStorageError.make({
-                  operation: "retain lifecycle start prefix",
-                  message: "Lifecycle start intent could not be retained",
-                  cause,
-                }),
+              yield* flushCanonical(request.threadId).pipe(
+                Effect.provideService(SqlLifecycleRetainer, { retainMany: lifecycle.retainMany }),
+                Effect.mapError((cause) =>
+                  DoStorageError.make({
+                    operation: "retain lifecycle start prefix",
+                    message: "Lifecycle start intent could not be retained",
+                    cause,
+                  }),
+                ),
+              );
+
+            yield* progress.committed("canonical").pipe(
+              Effect.catchCause((cause) =>
+                Effect.failCause(
+                  Cause.map(cause, (error) =>
+                    DoStorageError.make({
+                      operation: "enroll canonical progress",
+                      message: error.message,
+                      cause: error,
+                    }),
+                  ),
+                ),
               ),
             );
 
-          yield* progress.committed("canonical").pipe(
-            Effect.catchCause((cause) =>
-              Effect.failCause(
-                Cause.map(cause, (error) =>
-                  DoStorageError.make({
-                    operation: "enroll canonical progress",
-                    message: error.message,
-                    cause: error,
-                  }),
-                ),
-              ),
-            ),
-          );
-
-          return RawAppendResult.make({
-            firstSequence,
-            lastSequence,
-            replayed: false,
-            tailDigest: request.tailDigest,
-          });
-        }),
-      );
-    },
-    withStorageSpan("DoJournal.append", isAppendContention),
-  );
-
-  const read = Effect.fnUntraced(function* (request: RawReadRequest) {
-    const thread = (yield* getThread(request.threadId))[0];
-
-    const through = Math.min(
-      thread?.tail_sequence ?? 0,
-      request.fromSequenceExclusive + request.limit,
+            return RawAppendResult.make({
+              firstSequence,
+              lastSequence,
+              replayed: false,
+              tailDigest: request.tailDigest,
+            });
+          }),
+        );
+      },
+      withStorageSpan("DoJournal.append", isAppendContention),
     );
 
-    const cached: Array<RecordRow> = [];
+    const read = Effect.fnUntraced(function* (request: RawReadRequest) {
+      const thread = (yield* getThread(request.threadId))[0];
 
-    for (let sequence = request.fromSequenceExclusive + 1; sequence <= through; sequence++) {
-      const record = recordCache.get(request.threadId, sequence);
+      const through = Math.min(
+        thread?.tail_sequence ?? 0,
+        request.fromSequenceExclusive + request.limit,
+      );
 
-      if (record === undefined) break;
-      cached.push(record);
-    }
-    if (cached.length === Math.max(0, through - request.fromSequenceExclusive)) {
-      return { count: cached.length, records: Stream.fromIterable(cached) };
-    }
+      const cached: Array<RecordRow> = [];
 
-    // Capture membership without retaining payloads. Append-only sequences keep each later
-    // payload query inside this snapshot, even when new records arrive during consumption.
-    const planRows = yield* sql<Record<string, unknown>>`
+      for (let sequence = request.fromSequenceExclusive + 1; sequence <= through; sequence++) {
+        const record = recordCache.get(request.threadId, sequence);
+
+        if (record === undefined) break;
+        cached.push(record);
+      }
+      if (cached.length === Math.max(0, through - request.fromSequenceExclusive)) {
+        return { count: cached.length, records: Stream.fromIterable(cached) };
+      }
+
+      // Capture membership without retaining payloads. Append-only sequences keep each later
+      // payload query inside this snapshot, even when new records arrive during consumption.
+      const planRows = yield* sql<Record<string, unknown>>`
       SELECT
         sequence,
         length(CAST(record_json AS BLOB)) AS record_json_bytes
@@ -1592,43 +1615,44 @@ const makeJournal = (
       LIMIT ${request.limit}
     `.pipe(Effect.mapError(storageError("read canonical records")));
 
-    const plan = yield* decodeRows(
-      Schema.Array(ReadPlanRow),
-      "effect_agent_canonical_records",
-      `${request.threadId}>${request.fromSequenceExclusive}`,
-      planRows,
-      "ReadPlanRow",
-    );
+      const plan = yield* decodeRows(
+        Schema.Array(ReadPlanRow),
+        "effect_agent_canonical_records",
+        `${request.threadId}>${request.fromSequenceExclusive}`,
+        planRows,
+        "ReadPlanRow",
+      );
 
-    const mismatch = () =>
-      DoStorageCorruptionError.make({
-        table: "effect_agent_canonical_records",
-        rowKey: `${request.threadId}>${request.fromSequenceExclusive}`,
-        message: "Canonical read membership, sequence, or payload size changed from its read plan.",
-      });
+      const mismatch = () =>
+        DoStorageCorruptionError.make({
+          table: "effect_agent_canonical_records",
+          rowKey: `${request.threadId}>${request.fromSequenceExclusive}`,
+          message:
+            "Canonical read membership, sequence, or payload size changed from its read plan.",
+        });
 
-    if (plan.length > request.limit) return yield* mismatch();
+      if (plan.length > request.limit) return yield* mismatch();
 
-    const pages: Array<ReadPage> = [];
-    let page: ReadPage | undefined;
-    let pageBytes = 0;
-    let previousSequence = request.fromSequenceExclusive;
+      const pages: Array<ReadPage> = [];
+      let page: ReadPage | undefined;
+      let pageBytes = 0;
+      let previousSequence = request.fromSequenceExclusive;
 
-    for (const row of plan) {
-      if (row.sequence !== previousSequence + 1) return yield* mismatch();
-      previousSequence = row.sequence;
-      if (page === undefined || pageBytes + row.record_json_bytes > MAX_READ_PAGE_JSON_BYTES) {
-        page = [row];
-        pages.push(page);
-        pageBytes = row.record_json_bytes;
-      } else {
-        page.push(row);
-        pageBytes += row.record_json_bytes;
+      for (const row of plan) {
+        if (row.sequence !== previousSequence + 1) return yield* mismatch();
+        previousSequence = row.sequence;
+        if (page === undefined || pageBytes + row.record_json_bytes > MAX_READ_PAGE_JSON_BYTES) {
+          page = [row];
+          pages.push(page);
+          pageBytes = row.record_json_bytes;
+        } else {
+          page.push(row);
+          pageBytes += row.record_json_bytes;
+        }
       }
-    }
 
-    const readPage = Effect.fn("DoJournal.readPage")(function* (page: ReadPage) {
-      const rows = yield* sql<Record<string, unknown>>`
+      const readPage = Effect.fn("DoJournal.readPage")(function* (page: ReadPage) {
+        const rows = yield* sql<Record<string, unknown>>`
         SELECT thread_id, sequence, record_id, batch_id, record_json
         FROM effect_agent_canonical_records
         WHERE thread_id = ${request.threadId}
@@ -1637,142 +1661,142 @@ const makeJournal = (
         ORDER BY sequence
       `.pipe(Effect.mapError(storageError("read canonical records")));
 
-      const decoded = yield* decodeRows(
-        Schema.Array(RecordRow),
-        "effect_agent_canonical_records",
-        `${request.threadId}/${page[0].sequence}`,
-        rows,
-        "RecordRow",
-      );
+        const decoded = yield* decodeRows(
+          Schema.Array(RecordRow),
+          "effect_agent_canonical_records",
+          `${request.threadId}/${page[0].sequence}`,
+          rows,
+          "RecordRow",
+        );
 
-      if (
-        decoded.length !== page.length ||
-        decoded.some(
-          (row, index) =>
-            row.thread_id !== request.threadId ||
-            row.sequence !== page[index].sequence ||
-            storedTextBytes(row.record_json) !== page[index].record_json_bytes,
-        )
-      ) {
-        return yield* mismatch();
-      }
+        if (
+          decoded.length !== page.length ||
+          decoded.some(
+            (row, index) =>
+              row.thread_id !== request.threadId ||
+              row.sequence !== page[index].sequence ||
+              storedTextBytes(row.record_json) !== page[index].record_json_bytes,
+          )
+        ) {
+          return yield* mismatch();
+        }
 
-      for (const row of decoded) recordCache.put(row);
+        for (const row of decoded) recordCache.put(row);
 
-      return decoded;
+        return decoded;
+      });
+
+      return {
+        count: plan.length,
+        records: Stream.fromIterable(pages).pipe(
+          Stream.flatMap((page) => Stream.fromIterableEffect(state.read(readPage(page)))),
+        ),
+      };
     });
 
-    return {
-      count: plan.length,
-      records: Stream.fromIterable(pages).pipe(
-        Stream.flatMap((page) => Stream.fromIterableEffect(state.read(readPage(page)))),
-      ),
-    };
-  });
+    const exportThread = Effect.fn("DoJournal.exportThread")(function* (threadId: string) {
+      return yield* state
+        .transaction(
+          Effect.gen(function* () {
+            const threadRows = yield* getThread(threadId);
 
-  const exportThread = Effect.fn("DoJournal.exportThread")(function* (threadId: string) {
-    return yield* state
-      .transaction(
+            const thread = yield* decodeSingleRow(
+              Schema.Array(ThreadRow),
+              "effect_agent_threads",
+              threadId,
+              threadRows,
+            );
+
+            yield* failpoint("export:after-thread-read");
+
+            if (thread.tail_sequence > MAX_RECORDS_PER_THREAD)
+              return yield* DoStorageError.make({
+                operation: "export thread",
+                message: "The thread exceeds the current export record limit.",
+              });
+            const records: Array<RecordRow> = [];
+            let afterSequence = ZERO_SEQUENCE;
+
+            while (afterSequence < thread.tail_sequence) {
+              const limit = Math.min(1_024, thread.tail_sequence - afterSequence);
+
+              const request = RawReadRequest.make({
+                threadId,
+                fromSequenceExclusive: afterSequence,
+                limit,
+              });
+
+              const plan = yield* read(request);
+              const page = yield* Stream.runCollect(plan.records);
+
+              if (
+                page.length !== limit ||
+                page.some((record, index) => record.sequence !== afterSequence + index + 1)
+              ) {
+                return yield* DoStorageCorruptionError.make({
+                  table: "effect_agent_canonical_records",
+                  rowKey: threadId,
+                  message:
+                    "The exported canonical prefix is not contiguous through its captured tail.",
+                });
+              }
+              records.push(...page);
+              afterSequence = page[page.length - 1].sequence;
+            }
+
+            const beyondTail =
+              yield* sql`SELECT sequence FROM effect_agent_canonical_records WHERE thread_id=${threadId} AND sequence > ${thread.tail_sequence} LIMIT 1`.pipe(
+                Effect.mapError(storageError("verify export tail")),
+              );
+
+            if (beyondTail.length !== 0)
+              return yield* DoStorageCorruptionError.make({
+                table: "effect_agent_canonical_records",
+                rowKey: threadId,
+                message: "Canonical records exist beyond the captured thread tail.",
+              });
+
+            return RawThreadExport.make({ thread, records });
+          }),
+        )
+        .pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.catchTag("SqlError", (error) =>
+            Effect.fail(storageError("export transaction")(error)),
+          ),
+        );
+    });
+
+    const saveCheckpoint = Effect.fn("DoJournal.saveCheckpoint")(function* (
+      checkpoint: RawCheckpoint,
+    ): Effect.fn.Return<void, CheckpointError> {
+      if (checkpoint.threadId.length > MAX_IDENTIFIER_LENGTH) {
+        return yield* DoStorageError.make({
+          operation: "save checkpoint",
+          message: "Checkpoint identity exceeds the Durable Object storage bounds.",
+        });
+      }
+      yield* checkValueBound("save checkpoint", checkpoint.checkpointJson);
+      yield* withWriteTransaction("checkpoint transaction")(
         Effect.gen(function* () {
-          const threadRows = yield* getThread(threadId);
+          const threadRows = yield* getThread(checkpoint.threadId);
 
           const thread = yield* decodeSingleRow(
             Schema.Array(ThreadRow),
             "effect_agent_threads",
-            threadId,
+            checkpoint.threadId,
             threadRows,
           );
 
-          yield* failpoint("export:after-thread-read");
-
-          if (thread.tail_sequence > MAX_RECORDS_PER_THREAD)
-            return yield* DoStorageError.make({
-              operation: "export thread",
-              message: "The thread exceeds the current export record limit.",
+          if (checkpoint.throughSequence > thread.tail_sequence) {
+            return yield* DoCheckpointConflict.make({
+              message:
+                `Checkpoint sequence ${checkpoint.throughSequence} is after canonical tail ` +
+                `${thread.tail_sequence}.`,
             });
-          const records: Array<RecordRow> = [];
-          let afterSequence = ZERO_SEQUENCE;
-
-          while (afterSequence < thread.tail_sequence) {
-            const limit = Math.min(1_024, thread.tail_sequence - afterSequence);
-
-            const request = RawReadRequest.make({
-              threadId,
-              fromSequenceExclusive: afterSequence,
-              limit,
-            });
-
-            const plan = yield* read(request);
-            const page = yield* Stream.runCollect(plan.records);
-
-            if (
-              page.length !== limit ||
-              page.some((record, index) => record.sequence !== afterSequence + index + 1)
-            ) {
-              return yield* DoStorageCorruptionError.make({
-                table: "effect_agent_canonical_records",
-                rowKey: threadId,
-                message:
-                  "The exported canonical prefix is not contiguous through its captured tail.",
-              });
-            }
-            records.push(...page);
-            afterSequence = page[page.length - 1].sequence;
           }
 
-          const beyondTail =
-            yield* sql`SELECT sequence FROM effect_agent_canonical_records WHERE thread_id=${threadId} AND sequence > ${thread.tail_sequence} LIMIT 1`.pipe(
-              Effect.mapError(storageError("verify export tail")),
-            );
-
-          if (beyondTail.length !== 0)
-            return yield* DoStorageCorruptionError.make({
-              table: "effect_agent_canonical_records",
-              rowKey: threadId,
-              message: "Canonical records exist beyond the captured thread tail.",
-            });
-
-          return RawThreadExport.make({ thread, records });
-        }),
-      )
-      .pipe(
-        Effect.provideService(SqlClient.SqlClient, sql),
-        Effect.catchTag("SqlError", (error) =>
-          Effect.fail(storageError("export transaction")(error)),
-        ),
-      );
-  });
-
-  const saveCheckpoint = Effect.fn("DoJournal.saveCheckpoint")(function* (
-    checkpoint: RawCheckpoint,
-  ): Effect.fn.Return<void, CheckpointError> {
-    if (checkpoint.threadId.length > MAX_IDENTIFIER_LENGTH) {
-      return yield* DoStorageError.make({
-        operation: "save checkpoint",
-        message: "Checkpoint identity exceeds the Durable Object storage bounds.",
-      });
-    }
-    yield* checkValueBound("save checkpoint", checkpoint.checkpointJson);
-    yield* withWriteTransaction("checkpoint transaction")(
-      Effect.gen(function* () {
-        const threadRows = yield* getThread(checkpoint.threadId);
-
-        const thread = yield* decodeSingleRow(
-          Schema.Array(ThreadRow),
-          "effect_agent_threads",
-          checkpoint.threadId,
-          threadRows,
-        );
-
-        if (checkpoint.throughSequence > thread.tail_sequence) {
-          return yield* DoCheckpointConflict.make({
-            message:
-              `Checkpoint sequence ${checkpoint.throughSequence} is after canonical tail ` +
-              `${thread.tail_sequence}.`,
-          });
-        }
-
-        const checkpointRows = yield* sql<Record<string, unknown>>`
+          const checkpointRows = yield* sql<Record<string, unknown>>`
           SELECT
             thread_id,
             through_sequence,
@@ -1783,34 +1807,34 @@ const makeJournal = (
             AND through_sequence = ${checkpoint.throughSequence}
         `.pipe(Effect.mapError(storageError("read idempotent checkpoint")));
 
-        const existing = yield* decodeRows(
-          Schema.Array(CheckpointRow),
-          "effect_agent_checkpoints",
-          `${checkpoint.threadId}/${checkpoint.throughSequence}`,
-          checkpointRows,
-        );
+          const existing = yield* decodeRows(
+            Schema.Array(CheckpointRow),
+            "effect_agent_checkpoints",
+            `${checkpoint.threadId}/${checkpoint.throughSequence}`,
+            checkpointRows,
+          );
 
-        if (existing.length > 1) {
-          return yield* DoStorageCorruptionError.make({
-            table: "effect_agent_checkpoints",
-            rowKey: `${checkpoint.threadId}/${checkpoint.throughSequence}`,
-            message: "A checkpoint primary key returned more than one row.",
-          });
-        }
-        if (existing.length === 1) {
-          if (
-            existing[0].tail_digest !== checkpoint.tailDigest ||
-            existing[0].checkpoint_json !== checkpoint.checkpointJson
-          ) {
-            return yield* DoCheckpointConflict.make({
-              message: "A different checkpoint already exists at this canonical sequence.",
+          if (existing.length > 1) {
+            return yield* DoStorageCorruptionError.make({
+              table: "effect_agent_checkpoints",
+              rowKey: `${checkpoint.threadId}/${checkpoint.throughSequence}`,
+              message: "A checkpoint primary key returned more than one row.",
             });
           }
+          if (existing.length === 1) {
+            if (
+              existing[0].tail_digest !== checkpoint.tailDigest ||
+              existing[0].checkpoint_json !== checkpoint.checkpointJson
+            ) {
+              return yield* DoCheckpointConflict.make({
+                message: "A different checkpoint already exists at this canonical sequence.",
+              });
+            }
 
-          return;
-        }
+            return;
+          }
 
-        yield* sql`
+          yield* sql`
           INSERT INTO effect_agent_checkpoints (
             thread_id,
             through_sequence,
@@ -1823,56 +1847,56 @@ const makeJournal = (
             ${checkpoint.checkpointJson}
           )
         `.pipe(Effect.mapError(storageError("insert checkpoint")));
-      }),
-    );
-  });
+        }),
+      );
+    });
 
-  const saveRecoveryCheckpoint = Effect.fn("DoJournal.saveRecoveryCheckpoint")(function* (
-    request: SaveRecoveryCheckpointRequest,
-    checkpointJson: string,
-  ) {
-    const { checkpoint } = request;
+    const saveRecoveryCheckpoint = Effect.fn("DoJournal.saveRecoveryCheckpoint")(function* (
+      request: SaveRecoveryCheckpointRequest,
+      checkpointJson: string,
+    ) {
+      const { checkpoint } = request;
 
-    if (checkpoint.threadId.length > MAX_IDENTIFIER_LENGTH) {
-      return yield* DoStorageError.make({
-        operation: "save recovery checkpoint",
-        message: "Checkpoint identity exceeds the Durable Object storage bounds.",
-      });
-    }
-    yield* checkValueBound("save recovery checkpoint", checkpointJson);
-    // Keep injected waits outside the storage-backed transaction callback.
-    yield* failpoint("save-recovery-checkpoint:before");
-    yield* withWriteTransaction("recovery checkpoint transaction")(
-      Effect.gen(function* () {
-        const threads = yield* getThread(checkpoint.threadId);
-        const thread = threads[0];
+      if (checkpoint.threadId.length > MAX_IDENTIFIER_LENGTH) {
+        return yield* DoStorageError.make({
+          operation: "save recovery checkpoint",
+          message: "Checkpoint identity exceeds the Durable Object storage bounds.",
+        });
+      }
+      yield* checkValueBound("save recovery checkpoint", checkpointJson);
+      // Keep injected waits outside the storage-backed transaction callback.
+      yield* failpoint("save-recovery-checkpoint:before");
+      yield* withWriteTransaction("recovery checkpoint transaction")(
+        Effect.gen(function* () {
+          const threads = yield* getThread(checkpoint.threadId);
+          const thread = threads[0];
 
-        if (thread === undefined)
-          return yield* ThreadNotMaterialized.make({ threadId: checkpoint.threadId });
-        if (request.producerEpoch !== thread.producer_epoch)
-          return yield* FenceRejected.make({
-            threadId: checkpoint.threadId,
-            actualEpoch: thread.producer_epoch,
-            attemptedEpoch: request.producerEpoch,
-          });
-        if (checkpoint.throughSequence > thread.tail_sequence)
-          return yield* CheckpointRejected.make({
-            threadId: checkpoint.threadId,
-            reason: "ahead-of-tail",
-          });
+          if (thread === undefined)
+            return yield* ThreadNotMaterialized.make({ threadId: checkpoint.threadId });
+          if (request.producerEpoch !== thread.producer_epoch)
+            return yield* FenceRejected.make({
+              threadId: checkpoint.threadId,
+              actualEpoch: thread.producer_epoch,
+              attemptedEpoch: request.producerEpoch,
+            });
+          if (checkpoint.throughSequence > thread.tail_sequence)
+            return yield* CheckpointRejected.make({
+              threadId: checkpoint.threadId,
+              reason: "ahead-of-tail",
+            });
 
-        const digests =
-          checkpoint.throughSequence === 0
-            ? [EMPTY_TAIL_DIGEST]
-            : yield* getTailDigestAt(checkpoint.threadId, checkpoint.throughSequence);
+          const digests =
+            checkpoint.throughSequence === 0
+              ? [EMPTY_TAIL_DIGEST]
+              : yield* getTailDigestAt(checkpoint.threadId, checkpoint.throughSequence);
 
-        if (digests.length !== 1 || digests[0] !== checkpoint.tailDigest)
-          return yield* CheckpointRejected.make({
-            threadId: checkpoint.threadId,
-            reason: "digest-mismatch",
-          });
+          if (digests.length !== 1 || digests[0] !== checkpoint.tailDigest)
+            return yield* CheckpointRejected.make({
+              threadId: checkpoint.threadId,
+              reason: "digest-mismatch",
+            });
 
-        yield* sql`
+          yield* sql`
           INSERT INTO effect_agent_recovery_checkpoints (thread_id, through_sequence, tail_digest, checkpoint_json)
           VALUES (${checkpoint.threadId}, ${checkpoint.throughSequence}, ${checkpoint.tailDigest}, ${checkpointJson})
           ON CONFLICT (thread_id) DO UPDATE SET
@@ -1882,33 +1906,33 @@ const makeJournal = (
           WHERE excluded.through_sequence >= effect_agent_recovery_checkpoints.through_sequence
           RETURNING *
         `.pipe(
-          recovery.write,
+            recovery.write,
+            Effect.mapError((error) =>
+              error._tag === "SqlError" ? storageError("save recovery checkpoint")(error) : error,
+            ),
+          );
+        }),
+      );
+      yield* failpoint("save-recovery-checkpoint:after");
+    });
+
+    const loadRecoveryCheckpoint = Effect.fn("DoJournal.loadRecoveryCheckpoint")(function* (
+      threadId: string,
+    ) {
+      return yield* recovery
+        .by("thread_id", threadId)
+        .pipe(
           Effect.mapError((error) =>
-            error._tag === "SqlError" ? storageError("save recovery checkpoint")(error) : error,
+            error._tag === "SqlError" ? storageError("load recovery checkpoint")(error) : error,
           ),
         );
-      }),
-    );
-    yield* failpoint("save-recovery-checkpoint:after");
-  });
+    });
 
-  const loadRecoveryCheckpoint = Effect.fn("DoJournal.loadRecoveryCheckpoint")(function* (
-    threadId: string,
-  ) {
-    return yield* recovery
-      .by("thread_id", threadId)
-      .pipe(
-        Effect.mapError((error) =>
-          error._tag === "SqlError" ? storageError("load recovery checkpoint")(error) : error,
-        ),
-      );
-  });
-
-  const loadCheckpoint = Effect.fn("DoJournal.loadCheckpoint")(function* (
-    threadId: string,
-    atOrBeforeSequence: CanonicalSequence,
-  ) {
-    const rows = yield* sql<Record<string, unknown>>`
+    const loadCheckpoint = Effect.fn("DoJournal.loadCheckpoint")(function* (
+      threadId: string,
+      atOrBeforeSequence: CanonicalSequence,
+    ) {
+      const rows = yield* sql<Record<string, unknown>>`
       SELECT
         thread_id,
         through_sequence,
@@ -1921,32 +1945,32 @@ const makeJournal = (
       LIMIT 1
     `.pipe(Effect.mapError(storageError("load checkpoint")));
 
-    return yield* decodeRows(
-      Schema.Array(CheckpointRow),
-      "effect_agent_checkpoints",
-      `${threadId}<=${atOrBeforeSequence}`,
-      rows,
-    );
-  });
+      return yield* decodeRows(
+        Schema.Array(CheckpointRow),
+        "effect_agent_checkpoints",
+        `${threadId}<=${atOrBeforeSequence}`,
+        rows,
+      );
+    });
 
-  const getTailDigestAt = Effect.fn("DoJournal.getTailDigestAt")(function* (
-    threadId: string,
-    sequence: CanonicalSequence,
-  ) {
-    const thread = (yield* getThread(threadId))[0];
+    const getTailDigestAt = Effect.fn("DoJournal.getTailDigestAt")(function* (
+      threadId: string,
+      sequence: CanonicalSequence,
+    ) {
+      const thread = (yield* getThread(threadId))[0];
 
-    if (thread !== undefined && sequence === thread.tail_sequence) return [thread.tail_digest];
-    if (sequence === 0) {
-      const threads = yield* getThread(threadId);
+      if (thread !== undefined && sequence === thread.tail_sequence) return [thread.tail_digest];
+      if (sequence === 0) {
+        const threads = yield* getThread(threadId);
 
-      return threads.length === 0
-        ? []
-        : [threads[0].tail_sequence === 0 ? threads[0].tail_digest : undefined].filter(
-            (value): value is string => value !== undefined,
-          );
-    }
+        return threads.length === 0
+          ? []
+          : [threads[0].tail_sequence === 0 ? threads[0].tail_digest : undefined].filter(
+              (value): value is string => value !== undefined,
+            );
+      }
 
-    const rows = yield* sql<Record<string, unknown>>`
+      const rows = yield* sql<Record<string, unknown>>`
       SELECT
         thread_id,
         batch_id,
@@ -1960,21 +1984,21 @@ const makeJournal = (
         AND last_sequence = ${sequence}
     `.pipe(Effect.mapError(storageError("read canonical digest at sequence")));
 
-    const batches = yield* decodeRows(
-      Schema.Array(BatchRow),
-      "effect_agent_canonical_batches",
-      `${threadId}/${sequence}`,
-      rows,
-    );
+      const batches = yield* decodeRows(
+        Schema.Array(BatchRow),
+        "effect_agent_canonical_batches",
+        `${threadId}/${sequence}`,
+        rows,
+      );
 
-    return batches.map((batch) => batch.tail_digest);
-  });
+      return batches.map((batch) => batch.tail_digest);
+    });
 
-  const scanStoredPayloads = Effect.fn("DoJournal.scanStoredPayloads")(function* () {
-    return yield* state
-      .transaction(
-        Effect.gen(function* () {
-          const threads = yield* sql<Record<string, unknown>>`
+    const scanStoredPayloads = Effect.fn("DoJournal.scanStoredPayloads")(function* () {
+      return yield* state
+        .transaction(
+          Effect.gen(function* () {
+            const threads = yield* sql<Record<string, unknown>>`
             SELECT
               thread_id,
               created_at,
@@ -1985,7 +2009,7 @@ const makeJournal = (
             ORDER BY thread_id
           `.pipe(Effect.mapError(storageError("scan threads")));
 
-          const batches = yield* sql<Record<string, unknown>>`
+            const batches = yield* sql<Record<string, unknown>>`
             SELECT
               thread_id,
               batch_id,
@@ -1998,7 +2022,7 @@ const makeJournal = (
             ORDER BY thread_id, first_sequence
           `.pipe(Effect.mapError(storageError("scan canonical batches")));
 
-          const records = yield* sql<Record<string, unknown>>`
+            const records = yield* sql<Record<string, unknown>>`
             SELECT
               thread_id,
               sequence,
@@ -2009,7 +2033,7 @@ const makeJournal = (
             ORDER BY thread_id, sequence
           `.pipe(Effect.mapError(storageError("scan canonical records")));
 
-          const checkpoints = yield* sql<Record<string, unknown>>`
+            const checkpoints = yield* sql<Record<string, unknown>>`
             SELECT
               thread_id,
               through_sequence,
@@ -2019,239 +2043,239 @@ const makeJournal = (
             ORDER BY thread_id, through_sequence
           `.pipe(Effect.mapError(storageError("scan checkpoints")));
 
-          return {
-            threads: yield* decodeRows(
-              Schema.Array(ThreadRow),
-              "effect_agent_threads",
-              "startup_scan",
-              threads,
-            ),
-            batches: yield* decodeRows(
-              Schema.Array(BatchRow),
-              "effect_agent_canonical_batches",
-              "startup_scan",
-              batches,
-            ),
-            records: yield* decodeRows(
-              Schema.Array(RecordRow),
-              "effect_agent_canonical_records",
-              "startup_scan",
-              records,
-            ),
-            checkpoints: yield* decodeRows(
-              Schema.Array(CheckpointRow),
-              "effect_agent_checkpoints",
-              "startup_scan",
-              checkpoints,
-            ),
-          };
-        }),
-      )
-      .pipe(
-        Effect.provideService(SqlClient.SqlClient, sql),
-        Effect.catchTag("SqlError", (error) =>
-          Effect.fail(storageError("startup scan transaction")(error)),
-        ),
+            return {
+              threads: yield* decodeRows(
+                Schema.Array(ThreadRow),
+                "effect_agent_threads",
+                "startup_scan",
+                threads,
+              ),
+              batches: yield* decodeRows(
+                Schema.Array(BatchRow),
+                "effect_agent_canonical_batches",
+                "startup_scan",
+                batches,
+              ),
+              records: yield* decodeRows(
+                Schema.Array(RecordRow),
+                "effect_agent_canonical_records",
+                "startup_scan",
+                records,
+              ),
+              checkpoints: yield* decodeRows(
+                Schema.Array(CheckpointRow),
+                "effect_agent_checkpoints",
+                "startup_scan",
+                checkpoints,
+              ),
+            };
+          }),
+        )
+        .pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.catchTag("SqlError", (error) =>
+            Effect.fail(storageError("startup scan transaction")(error)),
+          ),
+        );
+    });
+
+    const sourceFailure = (cause: unknown) =>
+      LifecyclePublicationError.make({ reason: "unavailable", cause });
+
+    const sourceThreads = Effect.fnUntraced(function* () {
+      const all = yield* threads.matching(
+        "lifecycle-owners",
+        () => true,
+        sql`SELECT * FROM effect_agent_threads LIMIT 129`,
+        128,
       );
-  });
 
-  const sourceFailure = (cause: unknown) =>
-    LifecyclePublicationError.make({ reason: "unavailable", cause });
+      if (all.length <= 128) return all;
 
-  const sourceThreads = Effect.fnUntraced(function* () {
-    const all = yield* threads.matching(
-      "lifecycle-owners",
-      () => true,
-      sql`SELECT * FROM effect_agent_threads LIMIT 129`,
-      128,
-    );
-
-    if (all.length <= 128) return all;
-
-    // Large custom hosts hydrate only owners whose journal has an unmaterialized suffix.
-    return yield* Schema.decodeUnknownEffect(Schema.Array(ThreadRow))(
-      yield* sql`SELECT t.* FROM effect_agent_threads t LEFT JOIN effect_agent_lifecycle_cursors c ON c.thread_id=t.thread_id
+      // Large custom hosts hydrate only owners whose journal has an unmaterialized suffix.
+      return yield* Schema.decodeUnknownEffect(Schema.Array(ThreadRow))(
+        yield* sql`SELECT t.* FROM effect_agent_threads t LEFT JOIN effect_agent_lifecycle_cursors c ON c.thread_id=t.thread_id
         WHERE c.thread_id IS NULL OR t.tail_sequence > c.through_sequence ORDER BY t.thread_id LIMIT 128`,
-    );
-  });
+      );
+    });
 
-  const initializeLifecycleSource = Effect.fnUntraced(function* () {
-    if (initializedLifecycleSources.has(state)) return;
-    yield* state
-      .transaction(
-        Effect.gen(function* () {
-          const existing =
-            yield* sql`SELECT name FROM sqlite_master WHERE name='effect_agent_lifecycle_cursors'`;
+    const initializeLifecycleSource = Effect.fnUntraced(function* () {
+      if (initializedLifecycleSources.has(state)) return;
+      yield* state
+        .transaction(
+          Effect.gen(function* () {
+            const existing =
+              yield* sql`SELECT name FROM sqlite_master WHERE name='effect_agent_lifecycle_cursors'`;
 
-          if (existing.length === 0) {
-            yield* sql`CREATE TABLE effect_agent_lifecycle_cursors (
+            if (existing.length === 0) {
+              yield* sql`CREATE TABLE effect_agent_lifecycle_cursors (
         thread_id TEXT PRIMARY KEY, through_sequence INTEGER NOT NULL
       )`;
-            // Existing inline writers already retained their facts. Enabling publication on an
-            // old store starts here too; it does not publish historical facts retroactively.
-          }
-          // New Threads created with publication disabled have no cursor. Never advance
-          // existing cursors: they can owe intent from an interrupted Attempt.
-          yield* sql`INSERT INTO effect_agent_lifecycle_cursors(thread_id, through_sequence)
+              // Existing inline writers already retained their facts. Enabling publication on an
+              // old store starts here too; it does not publish historical facts retroactively.
+            }
+            // New Threads created with publication disabled have no cursor. Never advance
+            // existing cursors: they can owe intent from an interrupted Attempt.
+            yield* sql`INSERT INTO effect_agent_lifecycle_cursors(thread_id, through_sequence)
         SELECT thread_id, tail_sequence FROM effect_agent_threads WHERE true
         ON CONFLICT(thread_id) DO NOTHING`;
-          yield* sourceThreads();
-        }),
-      )
-      .pipe(
-        Effect.provideService(SqlClient.SqlClient, sql),
-        Effect.mapError((cause) =>
-          DoStorageError.make({
-            operation: "initialize lifecycle source",
-            message: "Lifecycle source cursor unavailable",
-            cause,
+            yield* sourceThreads();
           }),
-        ),
-      );
-    initializedLifecycleSources.add(state);
-  });
+        )
+        .pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.mapError((cause) =>
+            DoStorageError.make({
+              operation: "initialize lifecycle source",
+              message: "Lifecycle source cursor unavailable",
+              cause,
+            }),
+          ),
+        );
+      initializedLifecycleSources.add(state);
+    });
 
-  /** The journal is durable intent; only the bounded publication wave materializes a write set. */
-  const flushCanonical = Effect.fnUntraced(function* (threadId: string, maxRecords = Infinity) {
-    const { retainMany } = yield* SqlLifecycleRetainer;
-    const thread = (yield* getThread(threadId))[0];
+    /** The journal is durable intent; only the bounded publication wave materializes a write set. */
+    const flushCanonical = Effect.fnUntraced(function* (threadId: string, maxRecords = Infinity) {
+      const { retainMany } = yield* SqlLifecycleRetainer;
+      const thread = (yield* getThread(threadId))[0];
 
-    if (thread === undefined) return;
-    const cursor = (yield* cursors.by("thread_id", threadId))[0];
-
-    if (cursor === undefined || cursor.through_sequence > thread.tail_sequence)
-      return yield* LifecyclePublicationError.make({ reason: "corrupt" });
-    let through = cursor.through_sequence;
-    const bound = Math.min(thread.tail_sequence, through + maxRecords);
-
-    while (through < bound) {
-      const page = yield* read(
-        RawReadRequest.make({
-          threadId,
-          fromSequenceExclusive: through,
-          limit: Math.min(128, bound - through),
-        }),
-      );
-
-      const facts: Array<Parameters<SqlLifecycleRetainMany>[0][number]> = [];
-      let bytes = 0;
-
-      yield* Stream.runForEach(page.records, (row) =>
-        Effect.gen(function* () {
-          const record = yield* Schema.decodeEffect(Schema.fromJsonString(CanonicalRecord))(
-            row.record_json,
-          );
-
-          if (record.recordId !== row.record_id || row.sequence !== through + 1)
-            return yield* LifecyclePublicationError.make({ reason: "corrupt" });
-          if (Schema.is(Schema.toType(LifecyclePublicationFact))(record.payload)) {
-            if (
-              bytes + storedTextBytes(row.record_json) > MAX_READ_PAGE_JSON_BYTES &&
-              facts.length > 0
-            ) {
-              yield* retainMany(facts);
-              facts.length = 0;
-              bytes = 0;
-            }
-            facts.push({
-              id: JSON.stringify([threadId, "record", record.recordId]),
-              ownerThreadId: yield* Schema.decodeEffect(ThreadId)(threadId),
-              canonicalSequence: row.sequence,
-              createdAt: record.createdAt,
-              fact: record.payload,
-            });
-            bytes += storedTextBytes(row.record_json);
-          }
-          through = row.sequence;
-        }),
-      );
-      if (page.count === 0) return yield* LifecyclePublicationError.make({ reason: "corrupt" });
-      yield* retainMany(facts);
-      yield* sql`UPDATE effect_agent_lifecycle_cursors SET through_sequence=${through} WHERE thread_id=${threadId} RETURNING *`.pipe(
-        cursors.write,
-      );
-    }
-  }, Effect.mapError(sourceFailure));
-
-  const flushPublications = Effect.fnUntraced(function* () {
-    let owners = 0;
-
-    for (const thread of yield* sourceThreads()) {
-      const cursor = (yield* cursors.by("thread_id", thread.thread_id))[0];
-
-      if (cursor !== undefined && cursor.through_sequence === thread.tail_sequence) continue;
-      yield* flushCanonical(thread.thread_id, 1024);
-      if (++owners === 4) break;
-    }
-  }, Effect.mapError(sourceFailure));
-
-  const sourcePending = Effect.gen(function* () {
-    for (const thread of yield* sourceThreads()) {
-      const cursor = (yield* cursors.by("thread_id", thread.thread_id))[0];
+      if (thread === undefined) return;
+      const cursor = (yield* cursors.by("thread_id", threadId))[0];
 
       if (cursor === undefined || cursor.through_sequence > thread.tail_sequence)
         return yield* LifecyclePublicationError.make({ reason: "corrupt" });
-      if (cursor.through_sequence < thread.tail_sequence) return true;
-    }
+      let through = cursor.through_sequence;
+      const bound = Math.min(thread.tail_sequence, through + maxRecords);
 
-    return false;
-  }).pipe(Effect.mapError(sourceFailure));
+      while (through < bound) {
+        const page = yield* read(
+          RawReadRequest.make({
+            threadId,
+            fromSequenceExclusive: through,
+            limit: Math.min(128, bound - through),
+          }),
+        );
 
-  const ownedLifecycle =
-    lifecycle === undefined
-      ? undefined
-      : {
-          ...lifecycle,
-          storage: {
-            ...lifecycle.storage,
-            retainedPendingDeadline: lifecycle.storage.pendingDeadline,
-            pendingDeadline: state.read(
-              Effect.gen(function* () {
-                const deadline = yield* lifecycle.storage.pendingDeadline;
+        const facts: Array<Parameters<SqlLifecycleRetainMany>[0][number]> = [];
+        let bytes = 0;
 
-                if (!(yield* sourcePending)) return deadline;
-                const now = yield* Clock.currentTimeMillis;
+        yield* Stream.runForEach(page.records, (row) =>
+          Effect.gen(function* () {
+            const record = yield* Schema.decodeEffect(Schema.fromJsonString(CanonicalRecord))(
+              row.record_json,
+            );
 
-                return Option.some(Option.isSome(deadline) ? Math.min(now, deadline.value) : now);
-              }),
-            ),
-          },
-        };
+            if (record.recordId !== row.record_id || row.sequence !== through + 1)
+              return yield* LifecyclePublicationError.make({ reason: "corrupt" });
+            if (Schema.is(Schema.toType(LifecyclePublicationFact))(record.payload)) {
+              if (
+                bytes + storedTextBytes(row.record_json) > MAX_READ_PAGE_JSON_BYTES &&
+                facts.length > 0
+              ) {
+                yield* retainMany(facts);
+                facts.length = 0;
+                bytes = 0;
+              }
+              facts.push({
+                id: JSON.stringify([threadId, "record", record.recordId]),
+                ownerThreadId: yield* Schema.decodeEffect(ThreadId)(threadId),
+                canonicalSequence: row.sequence,
+                createdAt: record.createdAt,
+                fact: record.payload,
+              });
+              bytes += storedTextBytes(row.record_json);
+            }
+            through = row.sequence;
+          }),
+        );
+        if (page.count === 0) return yield* LifecyclePublicationError.make({ reason: "corrupt" });
+        yield* retainMany(facts);
+        yield* sql`UPDATE effect_agent_lifecycle_cursors SET through_sequence=${through} WHERE thread_id=${threadId} RETURNING *`.pipe(
+          cursors.write,
+        );
+      }
+    }, Effect.mapError(sourceFailure));
 
-  return {
-    state,
-    cachedRecords: (threadId: string) =>
-      state.read(
-        Effect.gen(function* () {
-          const thread = (yield* getThread(threadId))[0];
+    const flushPublications = Effect.fnUntraced(function* () {
+      let owners = 0;
 
-          return thread === undefined
-            ? undefined
-            : recordCache.prefix(threadId, thread.tail_sequence);
-        }),
-      ),
-    threads,
-    lifecycle: ownedLifecycle,
-    initializeLifecycleSource,
-    flushCanonical,
-    flushPublications,
-    append,
-    checkValueBound,
-    exportThread,
-    getThread,
-    hasRecord,
-    getTailDigestAt,
-    loadCheckpoint,
-    loadRecoveryCheckpoint,
-    saveRecoveryCheckpoint,
-    materialize,
-    read: (request: RawReadRequest) => state.read(read(request)),
-    saveCheckpoint,
-    scanStoredPayloads,
-    withWriteTransaction,
-  } as const;
-};
+      for (const thread of yield* sourceThreads()) {
+        const cursor = (yield* cursors.by("thread_id", thread.thread_id))[0];
 
-export type DoJournal = ReturnType<typeof makeJournal>;
+        if (cursor !== undefined && cursor.through_sequence === thread.tail_sequence) continue;
+        yield* flushCanonical(thread.thread_id, 1024);
+        if (++owners === 4) break;
+      }
+    }, Effect.mapError(sourceFailure));
+
+    const sourcePending = Effect.gen(function* () {
+      for (const thread of yield* sourceThreads()) {
+        const cursor = (yield* cursors.by("thread_id", thread.thread_id))[0];
+
+        if (cursor === undefined || cursor.through_sequence > thread.tail_sequence)
+          return yield* LifecyclePublicationError.make({ reason: "corrupt" });
+        if (cursor.through_sequence < thread.tail_sequence) return true;
+      }
+
+      return false;
+    }).pipe(Effect.mapError(sourceFailure));
+
+    const ownedLifecycle =
+      lifecycle === undefined
+        ? undefined
+        : {
+            ...lifecycle,
+            storage: {
+              ...lifecycle.storage,
+              retainedPendingDeadline: lifecycle.storage.pendingDeadline,
+              pendingDeadline: state.read(
+                Effect.gen(function* () {
+                  const deadline = yield* lifecycle.storage.pendingDeadline;
+
+                  if (!(yield* sourcePending)) return deadline;
+                  const now = yield* Clock.currentTimeMillis;
+
+                  return Option.some(Option.isSome(deadline) ? Math.min(now, deadline.value) : now);
+                }),
+              ),
+            },
+          };
+
+    return {
+      state,
+      cachedRecords: (threadId: string) =>
+        state.read(
+          Effect.gen(function* () {
+            const thread = (yield* getThread(threadId))[0];
+
+            return thread === undefined
+              ? undefined
+              : recordCache.prefix(threadId, thread.tail_sequence);
+          }),
+        ),
+      threads,
+      lifecycle: ownedLifecycle,
+      initializeLifecycleSource,
+      flushCanonical,
+      flushPublications,
+      append,
+      checkValueBound,
+      exportThread,
+      getThread,
+      hasRecord,
+      getTailDigestAt,
+      loadCheckpoint,
+      loadRecoveryCheckpoint,
+      saveRecoveryCheckpoint,
+      materialize,
+      read: (request: RawReadRequest) => state.read(read(request)),
+      saveCheckpoint,
+      scanStoredPayloads,
+      withWriteTransaction,
+    } as const;
+  });
+
+export type DoJournal = Effect.Success<ReturnType<typeof makeJournal>>;
 
 export const initializeDoJournal = ensureCurrentStorage;

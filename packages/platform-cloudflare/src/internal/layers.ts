@@ -649,6 +649,9 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                     ? []
                     : [DueQueue.Lifecycle, DueQueue.LifecycleStart],
                 ),
+                Match.when("lifecycle-ack", () =>
+                  options.lifecyclePublication === undefined ? [] : [DueQueue.Lifecycle],
+                ),
                 Match.exhaustive,
               );
 

@@ -272,6 +272,7 @@ describe("DC alarm semantics", () => {
         expect(generation.dirty > generation.processed).toBe(true);
         expect(yield* Effect.promise(() => scheduledAlarm(thread))).not.toBeNull();
         follower.release();
+        yield* TestClock.adjust(1_000);
         yield* Effect.promise(() =>
           runInDurableObject(stubFor(thread), (instance) => Promise.resolve(instance.alarm())),
         );
@@ -403,65 +404,88 @@ describe("DC alarm semantics", () => {
 
   it("issue #93: a pass cannot acknowledge a pre-armed generation while its RPC mutation is in flight", async () => {
     const thread = lane("issue-93-in-flight-mutation");
-    const receipt = await submitTo(approvalDefinition, thread);
+    // Only the explicitly forced event may own this paused race. A real-time automatic
+    // delivery would consume the physical alarm while waiting behind that event's gate.
+    const liveClock = Effect.runSync(Clock.Clock);
+    const nowMillis = () => Date.now() + 86_400_000;
+    const nowNanos = () => BigInt(nowMillis()) * 1_000_000n;
 
-    await drainAlarmsUntil(thread, anyInState(thread, "suspended"));
-    await drainAlarmsUntil(thread, async () => (await scheduledAlarm(thread)) === null);
+    maintenanceClocks.set(thread, {
+      currentTimeMillisUnsafe: nowMillis,
+      currentTimeMillis: Effect.sync(nowMillis),
+      currentTimeNanosUnsafe: nowNanos,
+      currentTimeNanos: Effect.sync(nowNanos),
+      monotonicTimeNanosUnsafe: () => liveClock.monotonicTimeNanosUnsafe(),
+      monotonicTimeNanos: liveClock.monotonicTimeNanos,
+      sleep: (duration) => liveClock.sleep(duration),
+    });
+    try {
+      const receipt = await submitTo(approvalDefinition, thread);
 
-    armMaintenancePause(
-      thread,
-      "maintenance:mutation:armed",
-      "maintenance:begin:after",
-      "maintenance:mutation:finished",
-      "maintenance:finish:before",
-      "maintenance:finish:after",
-    );
+      await drainAlarmsUntil(thread, anyInState(thread, "suspended"));
+      await drainAlarmsUntil(thread, async () => (await scheduledAlarm(thread)) === null);
 
-    const resolution = runClient(
-      Effect.gen(function* () {
-        const client = yield* CloudflareThreadClient;
+      armMaintenancePause(
+        thread,
+        "maintenance:mutation:armed",
+        "maintenance:begin:after",
+        "maintenance:mutation:finished",
+        "maintenance:finish:before",
+        "maintenance:finish:after",
+      );
 
-        return yield* client.resolveApproval(
-          decodeThreadId(thread),
-          ApprovalDecisionCommand.make({
-            submissionId: receipt.submissionId,
-            toolCallId: BOOK_TOOL_CALL_ID,
-            decision: "approved",
-            resolver: "cf-issue-93-in-flight-approver",
-            reason: "hold the RPC after its pre-arm and before its durable decision",
-          }),
-        );
-      }),
-    );
+      const resolution = runClient(
+        Effect.gen(function* () {
+          const client = yield* CloudflareThreadClient;
 
-    await awaitMaintenancePause(thread, "maintenance:mutation:armed");
+          return yield* client.resolveApproval(
+            decodeThreadId(thread),
+            ApprovalDecisionCommand.make({
+              submissionId: receipt.submissionId,
+              toolCallId: BOOK_TOOL_CALL_ID,
+              decision: "approved",
+              resolver: "cf-issue-93-in-flight-approver",
+              reason: "hold the RPC after its pre-arm and before its durable decision",
+            }),
+          );
+        }),
+      );
 
-    // Start a forced pass while the RPC is still between pre-arm and body. It snapshots both the
-    // new generation and the active-mutation count, then pauses before recovery.
-    const forcedPass = runDurableObjectAlarm(stubFor(thread)).catch(() => undefined);
+      await awaitMaintenancePause(thread, "maintenance:mutation:armed");
 
-    await awaitMaintenancePause(thread, "maintenance:begin:after");
+      // Start a forced pass while the RPC is still between pre-arm and body. It snapshots both the
+      // new generation and the active-mutation count, then pauses before recovery.
+      const forcedPass = runDurableObjectAlarm(stubFor(thread)).catch(() => undefined);
 
-    // Let the mutation body finish BEFORE the pass observes durable state, but hold the RPC at
-    // its body-complete boundary. The pass may see the approval decision, but must conservatively
-    // retain this overlapped generation rather than acknowledge a body that was not visible at
-    // its snapshot boundary.
-    releaseMaintenancePause(thread, "maintenance:mutation:armed");
-    await awaitMaintenancePause(thread, "maintenance:mutation:finished");
-    releaseMaintenancePause(thread, "maintenance:mutation:finished");
-    releaseMaintenancePause(thread, "maintenance:begin:after");
-    await awaitMaintenancePause(thread, "maintenance:finish:before");
-    releaseMaintenancePause(thread, "maintenance:finish:before");
-    await awaitMaintenancePause(thread, "maintenance:finish:after");
-    const generation = await maintenanceGeneration(thread);
+      await awaitMaintenancePause(thread, "maintenance:begin:after");
 
-    expect(generation.dirty > generation.processed).toBe(true);
-    expect(await scheduledAlarm(thread)).not.toBeNull();
-    releaseMaintenancePause(thread, "maintenance:finish:after");
-    await resolution;
-    await forcedPass;
-    await drainAlarmsUntil(thread, allSettled(thread));
-    await assertConvergence(thread);
+      // Let the mutation body finish BEFORE the pass observes durable state, but hold the RPC at
+      // its body-complete boundary. The pass may see the approval decision, but must conservatively
+      // retain this overlapped generation rather than acknowledge a body that was not visible at
+      // its snapshot boundary.
+      releaseMaintenancePause(thread, "maintenance:mutation:armed");
+      await awaitMaintenancePause(thread, "maintenance:mutation:finished");
+      releaseMaintenancePause(thread, "maintenance:mutation:finished");
+      releaseMaintenancePause(thread, "maintenance:begin:after");
+      await awaitMaintenancePause(thread, "maintenance:finish:before");
+      releaseMaintenancePause(thread, "maintenance:finish:before");
+      await awaitMaintenancePause(thread, "maintenance:finish:after");
+      const generation = await maintenanceGeneration(thread);
+
+      try {
+        expect(generation.dirty > generation.processed).toBe(true);
+        expect(await scheduledAlarm(thread)).not.toBeNull();
+      } finally {
+        releaseMaintenancePause(thread, "maintenance:finish:after");
+        await resolution;
+        await forcedPass;
+      }
+      await drainAlarmsUntil(thread, allSettled(thread));
+      await assertConvergence(thread);
+    } finally {
+      releaseMaintenancePause(thread);
+      maintenanceClocks.delete(thread);
+    }
   }, 30_000);
 
   it.each([true])(

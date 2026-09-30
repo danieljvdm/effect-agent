@@ -572,7 +572,7 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
 
           if (acknowledged.length > 0)
             yield* progress
-              .committed("lifecycle")
+              .committed("lifecycle-ack")
               .pipe(Effect.catchCause((cause) => Effect.failCause(Cause.map(cause, failure))));
           yield* sql`DELETE FROM ${retries} WHERE id IN (
             SELECT id FROM ${relation} WHERE owner_thread_id = ${batch[0].ownerThreadId}

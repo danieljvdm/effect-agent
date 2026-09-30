@@ -11,6 +11,7 @@ export const HostLaneId = LaneId.check(
 export const Deadline = Schema.NullOr(Schema.Finite);
 export const MinimumRetryMillis = 1_000;
 export const MaximumNoProgressRearms = 8;
+export const ParkedRetryMillis = 60 * 60_000;
 
 /** Scheduling metadata only. Domain outboxes, claims and receipts remain authoritative. */
 export class DueLane extends Schema.Class<DueLane>("CloudflareDueLane")({
@@ -21,6 +22,7 @@ export class DueLane extends Schema.Class<DueLane>("CloudflareDueLane")({
   progressKey: Schema.NullOr(Schema.NonEmptyString.check(Schema.isMaxLength(512))),
   notBefore: Schema.Finite,
   state: Schema.Literals(["idle", "pending", "parked"]),
+  reported: Schema.Literals([0, 1]),
 }) {}
 
 export const Native = "effect-agent:native";
@@ -65,7 +67,8 @@ export const make = (storage: DurableObjectStorage) => {
   const initialize = () => {
     sql.exec(`CREATE TABLE IF NOT EXISTS platform_cloudflare_due_queue (
     id TEXT PRIMARY KEY, revision INTEGER NOT NULL, dueAt REAL, stalls INTEGER NOT NULL,
-    progressKey TEXT, notBefore REAL NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'pending'
+    progressKey TEXT, notBefore REAL NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'pending',
+    reported INTEGER NOT NULL DEFAULT 0
   )`);
 
     const columns = new Set(
@@ -75,6 +78,10 @@ export const make = (storage: DurableObjectStorage) => {
         .map((row) => row.name),
     );
 
+    if (!columns.has("reported"))
+      sql.exec(
+        "ALTER TABLE platform_cloudflare_due_queue ADD COLUMN reported INTEGER NOT NULL DEFAULT 0",
+      );
     if (!columns.has("progressKey"))
       sql.exec("ALTER TABLE platform_cloudflare_due_queue ADD COLUMN progressKey TEXT");
     if (!columns.has("notBefore"))
@@ -96,7 +103,7 @@ export const make = (storage: DurableObjectStorage) => {
     const rows = decode(
       sql
         .exec(
-          "SELECT id, revision, dueAt, stalls, progressKey, notBefore, state FROM platform_cloudflare_due_queue",
+          "SELECT id, revision, dueAt, stalls, progressKey, notBefore, state, reported FROM platform_cloudflare_due_queue",
         )
         .toArray(),
     );
@@ -115,14 +122,14 @@ export const make = (storage: DurableObjectStorage) => {
           .exec(
             `INSERT INTO platform_cloudflare_due_queue (id, revision, dueAt, stalls, progressKey, notBefore) VALUES (?, 1, ?, 0, ?, 0)
      ON CONFLICT(id) DO UPDATE SET revision = revision + ?,
-       dueAt = CASE WHEN ? = 0 AND stalls >= ${MaximumNoProgressRearms} THEN NULL
-         WHEN ? = 1 THEN excluded.dueAt
+       dueAt = CASE WHEN ? = 1 THEN excluded.dueAt
          WHEN dueAt IS NULL THEN max(excluded.dueAt, notBefore)
          ELSE max(notBefore, min(dueAt, excluded.dueAt)) END,
        state = CASE WHEN ? = 1 THEN 'pending' WHEN stalls >= ${MaximumNoProgressRearms} THEN state ELSE 'pending' END,
        stalls = CASE WHEN ? = 1 THEN 0 ELSE stalls END,
        notBefore = CASE WHEN ? = 1 THEN 0 ELSE notBefore END,
-       progressKey = coalesce(excluded.progressKey, progressKey) RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state`,
+       reported = CASE WHEN ? = 1 THEN 0 ELSE reported END,
+       progressKey = coalesce(excluded.progressKey, progressKey) RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported`,
             id,
             dueAt,
             progressKey ?? null,
@@ -155,7 +162,7 @@ export const make = (storage: DurableObjectStorage) => {
       decode(
         sql
           .exec(
-            "INSERT OR IGNORE INTO platform_cloudflare_due_queue (id, revision, dueAt, stalls, progressKey, notBefore) VALUES (?, 0, 0, 0, NULL, 0) RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state",
+            "INSERT OR IGNORE INTO platform_cloudflare_due_queue (id, revision, dueAt, stalls, progressKey, notBefore) VALUES (?, 0, 0, 0, NULL, 0) RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported",
             id,
           )
           .toArray(),
@@ -165,16 +172,20 @@ export const make = (storage: DurableObjectStorage) => {
 
   /** Charge before fallible work so a crash cannot replay an uncharged attempt. */
   const claim = (lane: DueLane, nowMillis: number, native = false) => {
-    const notBefore = nowMillis + Math.min(60_000, MinimumRetryMillis * 2 ** lane.stalls);
+    const notBefore =
+      nowMillis +
+      (lane.stalls + 1 >= MaximumNoProgressRearms
+        ? ParkedRetryMillis
+        : Math.min(60_000, MinimumRetryMillis * 2 ** lane.stalls));
 
     const rows = decode(
       sql
         .exec(
-          `UPDATE platform_cloudflare_due_queue SET stalls = stalls + 1, notBefore = ?,
+          `UPDATE platform_cloudflare_due_queue SET stalls = min(stalls + 1, ${MaximumNoProgressRearms}), notBefore = ?,
        state = CASE WHEN stalls + 1 >= ${MaximumNoProgressRearms} THEN 'parked' ELSE 'pending' END,
-       dueAt = CASE WHEN stalls + 1 >= ${MaximumNoProgressRearms} THEN NULL ELSE ? END
-       WHERE id = ? AND revision = ? AND stalls < ${MaximumNoProgressRearms}
-       AND dueAt IS NOT NULL AND (dueAt <= ? OR (? = 1 AND notBefore <= ?)) RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state`,
+       dueAt = ?
+       WHERE id = ? AND revision = ?
+       AND dueAt IS NOT NULL AND (dueAt <= ? OR (? = 1 AND notBefore <= ?)) RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported`,
           notBefore,
           notBefore,
           lane.id,
@@ -194,18 +205,18 @@ export const make = (storage: DurableObjectStorage) => {
   const complete = (lane: DueLane, dueAt: number | null) => {
     Schema.decodeSync(Deadline)(dueAt);
 
-    const guarded =
-      dueAt === null || lane.stalls >= MaximumNoProgressRearms
-        ? null
-        : Math.max(dueAt, lane.notBefore);
+    const guarded = dueAt === null ? null : Math.max(dueAt, lane.notBefore);
 
     retain(
       decode(
         sql
           .exec(
-            "UPDATE platform_cloudflare_due_queue SET dueAt = ?, state = ?, revision = revision + 1 WHERE id = ? AND revision = ? RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state",
+            "UPDATE platform_cloudflare_due_queue SET dueAt = ?, state = ?, stalls = CASE WHEN ? IS NULL THEN 0 ELSE stalls END, notBefore = CASE WHEN ? IS NULL THEN 0 ELSE notBefore END, reported = CASE WHEN ? IS NULL THEN 0 ELSE reported END, revision = revision + 1 WHERE id = ? AND revision = ? RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported",
             guarded,
-            dueAt === null ? "idle" : guarded === null ? "parked" : "pending",
+            dueAt === null ? "idle" : lane.stalls >= MaximumNoProgressRearms ? "parked" : "pending",
+            dueAt,
+            dueAt,
+            dueAt,
             lane.id,
             lane.revision,
           )
@@ -221,19 +232,24 @@ export const make = (storage: DurableObjectStorage) => {
     const publication = read().find((row) => row.id === Publication);
 
     const guarded =
-      (row?.stalls ?? 0) >= MaximumNoProgressRearms || publication?.state === "parked"
+      dueAt === null || publication?.state === "parked"
         ? null
-        : dueAt === null
-          ? null
-          : Math.max(dueAt, row?.notBefore ?? 0);
+        : Math.max(dueAt, row?.notBefore ?? 0);
 
     retain(
       decode(
         sql
           .exec(
-            "UPDATE platform_cloudflare_due_queue SET dueAt = ?, state = ? WHERE id = ? RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state",
+            "UPDATE platform_cloudflare_due_queue SET dueAt = ?, state = ?, stalls = CASE WHEN ? IS NULL THEN 0 ELSE stalls END, notBefore = CASE WHEN ? IS NULL THEN 0 ELSE notBefore END, reported = CASE WHEN ? IS NULL THEN 0 ELSE reported END WHERE id = ? RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported",
             guarded,
-            dueAt === null ? "idle" : guarded === null ? "parked" : "pending",
+            dueAt === null
+              ? "idle"
+              : (row?.stalls ?? 0) >= MaximumNoProgressRearms
+                ? "parked"
+                : "pending",
+            dueAt,
+            dueAt,
+            dueAt,
             Native,
           )
           .toArray(),
@@ -241,7 +257,31 @@ export const make = (storage: DurableObjectStorage) => {
     );
   };
 
-  return { initialize, read, dirty, progress, register, claim, complete, checkpointNative };
+  const takeParkedReports = () => {
+    const rows = decode(
+      sql
+        .exec(
+          "UPDATE platform_cloudflare_due_queue SET reported = 1 WHERE state = 'parked' AND reported = 0 RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported",
+        )
+        .toArray(),
+    );
+
+    retain(rows);
+
+    return rows;
+  };
+
+  return {
+    initialize,
+    read,
+    dirty,
+    progress,
+    register,
+    claim,
+    complete,
+    checkpointNative,
+    takeParkedReports,
+  };
 };
 
 export const next = (rows: ReadonlyArray<DueLane>) =>

@@ -5,6 +5,7 @@ import {
   DateTime,
   Deferred,
   Effect,
+  ErrorReporter,
   Exit,
   Fiber,
   Layer,
@@ -68,6 +69,12 @@ export class DurableAlarmError extends Schema.TaggedError<DurableAlarmError>()(
     message: Schema.String,
     cause: Schema.optionalKey(Schema.Defect()),
   },
+) {}
+
+/** Content-free operational notice: pending work now retries at the hourly ceiling. */
+class MaintenanceRetryParked extends Schema.TaggedError<MaintenanceRetryParked>()(
+  "MaintenanceRetryParked",
+  { lane: Schema.String, retryAfterMillis: Schema.Number },
 ) {}
 
 const alarmFailure =
@@ -691,7 +698,7 @@ export class ThreadMutationGate extends Context.Service<
        * Native admission, approval, abort and unknown resolution keep the default true.
        * Host producers use false and name only the lanes for which they create work.
        * Receipt-only bookkeeping with no new obligation names no lanes. Enrollment preserves
-       * the finite retry budget; only recordProgress or a newer source cursor replenishes it.
+       * a pending retry budget; idle completion or actual source progress replenishes it.
        * Actual new work must record that progress in its source transaction, so a commit
        * after parking cannot be stranded by eviction before this body returns.
        */
@@ -1061,6 +1068,38 @@ export class ThreadMaintenance extends Context.Service<
       const queueSnapshot = runTransaction("read maintenance due queue", async () =>
         dueQueue.read(),
       );
+
+      const reportParked = Effect.gen(function* () {
+        if (!(yield* queueSnapshot).some((row) => row.state === "parked" && row.reported === 0))
+          return;
+
+        const rows = yield* runTransaction("mark parked maintenance reports", () =>
+          ctx.storage.transaction(async () => dueQueue.takeParkedReports()),
+        );
+
+        for (const row of rows) {
+          const lane = [
+            DueQueue.Native,
+            DueQueue.Publication,
+            DueQueue.Projection,
+            DueQueue.Messages,
+            DueQueue.RecoveryEvents,
+            DueQueue.Lifecycle,
+            DueQueue.LifecycleStart,
+          ].includes(row.id)
+            ? row.id.slice("effect-agent:".length)
+            : "host";
+
+          yield* ErrorReporter.report(
+            Cause.fail(
+              MaintenanceRetryParked.make({
+                lane,
+                retryAfterMillis: DueQueue.ParkedRetryMillis,
+              }),
+            ),
+          );
+        }
+      }).pipe(Effect.catchCause((cause) => ErrorReporter.report(cause)));
 
       yield* runTransaction("register native maintenance lanes", async () => {
         for (const id of [
@@ -2628,6 +2667,11 @@ export class ThreadMaintenance extends Context.Service<
                 current.some(
                   (row) =>
                     !afterNativeIds.has(row.id) &&
+                    // Both phases drain the same lifecycle queue. Lazy retention during
+                    // this wave must not interrupt its own publication before acknowledgement.
+                    !(
+                      row.id === DueQueue.LifecycleStart && afterNativeIds.has(DueQueue.Lifecycle)
+                    ) &&
                     !active.has(row.id) &&
                     row.dueAt !== null &&
                     row.dueAt <= now &&
@@ -2839,8 +2883,11 @@ export class ThreadMaintenance extends Context.Service<
                   "The maintenance event exceeded its 14 minute deadline; durable recovery remains pending",
               }),
           }),
+          Effect.ensuring(reportParked),
         ),
-        ensureAlarm: mutations.withSnapshot(() => ensureAlarm()),
+        ensureAlarm: mutations
+          .withSnapshot(() => ensureAlarm())
+          .pipe(Effect.tap(() => reportParked)),
         withMutation: (body) =>
           mutations.withMutation(
             body.pipe(Effect.tap(() => publishCommitted.pipe(Effect.provide(publicationContext)))),

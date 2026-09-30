@@ -15,6 +15,7 @@ export type SqlStorageProgressKind =
   | "submission"
   | "control"
   | "lifecycle"
+  | "lifecycle-ack"
   | "delivery";
 
 /**

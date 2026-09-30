@@ -5,7 +5,19 @@ import {
   threadStoreLayer,
 } from "@effect-agent/storage-cloudflare/do-thread-store";
 import { runInDurableObject } from "cloudflare:test";
-import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer, Logger, Option, Stream } from "effect";
+import {
+  Cause,
+  Clock,
+  Deferred,
+  Effect,
+  ErrorReporter,
+  Exit,
+  Fiber,
+  Layer,
+  Logger,
+  Option,
+  Stream,
+} from "effect";
 import { CurrentBindingSelection, type BindingSelection } from "effect-agent/agent-registration";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { ProducerId } from "effect-agent/records";
@@ -99,7 +111,9 @@ describe("maintenance retry deadlines", () => {
                   expect(attempts).toBeLessThanOrEqual(8);
                   yield* gate.withMutation(Effect.void);
                   yield* maintenance.ensureAlarm;
-                  expect(yield* Effect.promise(() => state.storage.getAlarm())).toBeNull();
+                  expect(yield* Effect.promise(() => state.storage.getAlarm())).toBeGreaterThan(
+                    yield* Clock.currentTimeMillis,
+                  );
                 }).pipe(
                   Effect.provide(Layer.fresh(ThreadMaintenance.layer)),
                   Effect.provideService(ThreadPublication, publication),
@@ -156,7 +170,9 @@ describe("maintenance retry deadlines", () => {
                     }
                     if (!finishes) expect(attempts).toBeLessThanOrEqual(8);
                     expect(settled).toBe(finishes ? 1 : 0);
-                    expect(yield* Effect.promise(() => state.storage.getAlarm())).toBeNull();
+                    const deadline = yield* Effect.promise(() => state.storage.getAlarm());
+
+                    expect(deadline === null).toBe(finishes);
                     const ledger = yield* SubmissionLedger;
 
                     expect((yield* Stream.runCollect(ledger.scanNonterminal)).length).toBe(
@@ -212,6 +228,8 @@ describe("maintenance retry deadlines", () => {
               Effect.gen(function* () {
                 const context = yield* DurableObjectContext;
                 let calls = 0;
+                let pending = true;
+                const reports: Array<string> = [];
                 let renew: Effect.Effect<void, DurableAlarmError> = Effect.void;
 
                 yield* Effect.gen(function* () {
@@ -226,7 +244,10 @@ describe("maintenance retry deadlines", () => {
                     yield* maintenance.pass;
                   }
                   expect(calls).toBeLessThan(20);
-                  expect(yield* Effect.promise(() => context.ctx.storage.getAlarm())).toBeNull();
+                  expect(
+                    yield* Effect.promise(() => context.ctx.storage.getAlarm()),
+                  ).toBeGreaterThan(yield* Clock.currentTimeMillis);
+                  expect(reports).toEqual(["MaintenanceRetryParked"]);
                   const parkedCalls = calls;
 
                   yield* gate.schedule("test:no-progress", 0, 2n);
@@ -240,8 +261,19 @@ describe("maintenance retry deadlines", () => {
                     yield* maintenance.pass;
                   }
                   expect(calls).toBeLessThanOrEqual(parkedCalls + 8);
+                  const deadline = yield* Effect.promise(() => context.ctx.storage.getAlarm());
+
                   yield* gate.schedule("test:no-progress", 0);
+                  expect(yield* Effect.promise(() => context.ctx.storage.getAlarm())).toBe(
+                    deadline,
+                  );
+                  expect(reports).toEqual(["MaintenanceRetryParked", "MaintenanceRetryParked"]);
+                  pending = false;
+                  yield* Effect.promise(() => adjust(deadline! - clock.currentTimeMillisUnsafe()));
+                  yield* maintenance.pass;
+                  expect(calls).toBe(parkedCalls + 9);
                   expect(yield* Effect.promise(() => context.ctx.storage.getAlarm())).toBeNull();
+                  expect(reports).toHaveLength(2);
                 }).pipe(
                   Effect.provide(
                     ThreadMaintenance.layer.pipe(Layer.provideMerge(ThreadMutationGate.layer)),
@@ -256,12 +288,19 @@ describe("maintenance retry deadlines", () => {
                           // Renewing an unchanged deadline inside a lane is not source progress.
                           yield* renew;
 
-                          return Option.some((yield* Clock.currentTimeMillis) + 1);
+                          return pending
+                            ? Option.some((yield* Clock.currentTimeMillis) + 1)
+                            : Option.none<number>();
                         }),
                       },
                     ],
                   }),
                   Effect.provideService(Clock.Clock, clock),
+                  Effect.provide(
+                    ErrorReporter.layer([
+                      ErrorReporter.make(({ error }) => reports.push(error.name)),
+                    ]),
+                  ),
                 );
               }),
             ),
@@ -293,9 +332,11 @@ describe("maintenance retry deadlines", () => {
             const gate = yield* ThreadMutationGate;
 
             yield* maintenance.pass;
-            yield* gate.schedule("test:instrumented-host", 0);
-            yield* maintenance.pass;
-            expect(delivered).toBe(1);
+            for (let input = 0; input < 12; input++) {
+              yield* gate.schedule("test:instrumented-host", 0);
+              yield* maintenance.pass;
+              expect(delivered).toBe(input + 1);
+            }
           }).pipe(
             Effect.provide(
               ThreadMaintenance.layer.pipe(Layer.provideMerge(ThreadMutationGate.layer)),

@@ -146,9 +146,13 @@ for (const completion of ["interrupted"] as const) {
                 Layer.succeed(MessageDeliveryFailpoint, {
                   hit: (point) =>
                     Effect.gen(function* () {
-                      if (point === "message-delivery:accept:after")
+                      // The parked commit owns acceptance without a periodic status retry.
+                      if (point === "message-delivery:park:after")
                         yield* Deferred.succeed(accepted, undefined);
-                      if (point === "message-delivery:process:after")
+                      if (
+                        point === "message-delivery:process:after" ||
+                        point === "message-delivery:complete:after"
+                      )
                         yield* Deferred.succeed(processed, undefined);
                       if (point !== "message-delivery:claim:after") return;
                       claims++;
@@ -229,10 +233,12 @@ for (const completion of ["interrupted"] as const) {
 
           expect(admitted).toMatchObject({
             message: retained.delivery.message,
-            status: "accepted",
+            status: "parked",
             settlement: null,
+            reason: "awaiting-settlement",
           });
-          if (admitted.status !== "accepted") return yield* Effect.die("Expected acceptance");
+          if (admitted.status !== "parked" || admitted.receipt === null)
+            return yield* Effect.die("Expected acceptance with retained receipt");
           expect((yield* start).delivery).toEqual(admitted);
           expect(admissions).toBe(1);
           expect(modelCalls).toBe(0);
@@ -1154,7 +1160,18 @@ for (const point of ["terminalize:after-canonical-append", "failed-with-queue"] 
           expect(summary.state).toBe(point === "failed-with-queue" ? "failed" : "completed");
           expect(summary.run?.outcome).toBe(point === "failed-with-queue" ? "failed" : "completed");
           expect(calls).toBe(1);
-          expect(yield* withFacet(nextOwner, startCommand)).toEqual(start);
+          expect(yield* withFacet(nextOwner, startCommand)).toEqual({
+            ...start,
+            delivery: {
+              ...start.delivery,
+              status: "processed",
+              reason: null,
+              settlement: {
+                settlementId: expect.any(String),
+                outcome: point === "failed-with-queue" ? "failed" : "completed",
+              },
+            },
+          });
           expect(
             yield* withFacet(
               nextOwner,
@@ -1462,7 +1479,7 @@ for (const point of ["worker:after-source-append", "worker:after-origin-append"]
           const successor = yield* withFacet(next, command);
 
           expect(successor.worker).toEqual(saved?.envelope.workerAdmission?.origin.worker);
-          expect(successor.delivery.status).toBe("accepted");
+          expect(successor.delivery.status).toBe("parked");
           expect(
             (yield* Context.get(second, MessageDeliveryStore).list({
               ownerThreadId: sourceThreadId,

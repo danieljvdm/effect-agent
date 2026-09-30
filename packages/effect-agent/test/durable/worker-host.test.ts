@@ -783,7 +783,7 @@ layer(NodeCrypto.layer)((it) => {
           }),
         });
 
-        expect(started.delivery.status).toBe("accepted");
+        expect(started.delivery.status).toBe("parked");
         expect(sourceReads).toBe(1);
         h.deny("send");
         const denied = yield* h.host.start(command).pipe(Effect.flip);
@@ -1135,11 +1135,8 @@ layer(NodeCrypto.layer)((it) => {
           { concurrency: "unbounded" },
         );
 
-        expect(raced.map((result) => result.delivery.status).sort()).toEqual([
-          "accepted",
-          "refused",
-        ]);
-        const first = raced.find((result) => result.delivery.status === "accepted")!;
+        expect(raced.map((result) => result.delivery.status).sort()).toEqual(["parked", "refused"]);
+        const first = raced.find((result) => result.delivery.status === "parked")!;
 
         limit = 0;
 

@@ -10,6 +10,7 @@ import {
   Effect,
   Exit,
   FileSystem,
+  Fiber,
   Layer,
   Option,
   Schema,
@@ -207,12 +208,32 @@ describe("Node message delivery recovery", () => {
               const store = Context.get(secondContext, MessageDeliveryStore);
 
               expect(host.startupRecovery).toEqual([]);
-              const accepted = yield* waitFor(store, (record) => record.status === "accepted");
+              const accepted = yield* waitFor(store, (record) => record.status === "parked");
 
               expect(accepted.receipt?.threadId).toBe(destinationThreadId);
               expect(accepted.settlement).toBeNull();
               expect(accepted.envelope).toEqual(frozen.envelope);
               yield* Deferred.succeed(release, undefined);
+
+              // Generic host envelopes have no native source provenance. The host
+              // acknowledges the retained receipt, rather than polling its status.
+              if (accepted.receipt === null) return yield* Effect.die("Expected retained receipt");
+
+              const terminal = yield* host
+                .awaitSettlement(accepted.receipt)
+                .pipe(Effect.forkScoped);
+
+              yield* TestClock.adjust(2_000);
+              const settlement = yield* Fiber.join(terminal);
+
+              yield* store.change(messageKey, {
+                _tag: "Complete",
+                receipt: accepted.receipt!,
+                settlement,
+                admissionKey: frozen.envelope.admissionKey,
+                inputDigest: frozen.envelope.inputDigest,
+                nowMillis: yield* Clock.currentTimeMillis,
+              });
               const processed = yield* waitFor(store, (record) => record.status === "processed");
 
               expect(processed.receipt).toEqual(accepted.receipt);
@@ -292,7 +313,7 @@ describe("Node message delivery recovery", () => {
 
             const accepted = yield* waitFor(
               Context.get(thirdContext, MessageDeliveryStore),
-              (record) => record.status === "accepted",
+              (record) => record.status === "parked",
             );
 
             expect(accepted.receipt?.receiptId).toBe(admitted.value.receiptId);

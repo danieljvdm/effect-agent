@@ -837,7 +837,7 @@ export const bookDefinition = Agent.make("cf-book", {
   output: FixtureOutput,
   instructions: ({ ref }) => `Book it. [ref:${ref}]`,
   toolkit: bookTools,
-  policy: fixturePolicy,
+  policy: AgentPolicy.make({ ...fixturePolicy, maxDuration: "5 minutes" }),
 });
 
 /** Approval-gated booking tool; unannotated → fail-closed `uncertain` execution class. */
