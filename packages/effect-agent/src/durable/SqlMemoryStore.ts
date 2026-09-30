@@ -174,7 +174,9 @@ class MemoryViews {
 
 const ownedViews = new WeakMap<SqlStorageOwner, MemoryViews>();
 
-const memoryViews = (owner: SqlStorageOwner | undefined) => {
+const memoryViews = Effect.fn("SqliteMemoryStore.memoryViews")(function* () {
+  const owner = yield* SqlStorageOwner;
+
   if (owner === undefined) return undefined;
   let views = ownedViews.get(owner);
 
@@ -185,7 +187,7 @@ const memoryViews = (owner: SqlStorageOwner | undefined) => {
   }
 
   return views;
-};
+});
 
 const documentViewKey = (key: MemoryKey) =>
   JSON.stringify(["document", key.namespace.address, key.id]);
@@ -405,7 +407,7 @@ const validateReceiptResult = Effect.fn("SqliteMemoryStore.validateReceiptResult
 
 const readUsage = Effect.fn("SqliteMemoryStore.readUsage")(function* () {
   const sql = yield* SqlClientService.SqlClient;
-  const views = memoryViews(yield* SqlStorageOwner);
+  const views = yield* memoryViews();
   const operation = "read memory usage";
 
   const rows = yield* query(
@@ -573,7 +575,7 @@ const initializeMemorySchema = Effect.fn("SqliteMemoryStore.initialize")(functio
 const makeMemoryReader = Effect.fn("SqliteMemoryStore.makeReader")(function* () {
   const sql = yield* SqlClientService.SqlClient;
   const owner = yield* SqlStorageOwner;
-  const views = memoryViews(owner);
+  const views = yield* memoryViews();
 
   const readDocuments = Effect.fn("SqliteMemoryStore.readDocuments")(
     function* (
@@ -664,7 +666,7 @@ const makeMemoryReader = Effect.fn("SqliteMemoryStore.makeReader")(function* () 
 const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
   const sql = yield* SqlClientService.SqlClient;
   const owner = yield* SqlStorageOwner;
-  const views = memoryViews(owner);
+  const views = yield* memoryViews();
 
   const usage = readUsage().pipe(
     Effect.provideService(SqlClientService.SqlClient, sql),

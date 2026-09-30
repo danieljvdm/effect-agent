@@ -1002,7 +1002,7 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
       tail: (threadId) =>
         journal.getThread(threadId).pipe(
           Effect.flatMap((rows) =>
-            Schema.decodeUnknownEffect(
+            Schema.decodeEffect(
               Schema.UndefinedOr(
                 Schema.Struct({
                   tail_sequence: CanonicalSequence,
