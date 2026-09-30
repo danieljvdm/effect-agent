@@ -29,7 +29,7 @@ export const doMessageDeliveryStoreLayer = (limits?: MessageDeliveryStoreLimits)
       return yield* makeSqlMessageDeliveryStore(limits, {
         maxStoredValueBytes: config.maxStoredValueBytes,
       }).pipe(
-        Effect.provideService(SqlStorageOwner, journal.state),
+        Effect.provideService(SqlStorageOwner, journal.owner),
         Effect.provideService(SqlLifecycleSource, {
           beforeRetain: (threadId) => journal.flushCanonical(threadId),
           beforePending: journal.flushPublications(),

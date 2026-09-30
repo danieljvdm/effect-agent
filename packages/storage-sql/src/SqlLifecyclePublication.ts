@@ -110,11 +110,12 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
   let owned: OwnedView | undefined;
 
   if (owner !== undefined) {
-    let namespaces = ownedViews.get(owner);
+    const identity = owner.identity ?? owner;
+    let namespaces = ownedViews.get(identity);
 
     if (namespaces === undefined) {
       namespaces = new Map();
-      ownedViews.set(owner, namespaces);
+      ownedViews.set(identity, namespaces);
     }
     const key = namespace ?? "";
 

@@ -997,10 +997,11 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
   yield* verifyWorkerPredecessor(true);
 
   const state = yield* ownedState(sql);
+  const owner = (yield* SqlStorageOwner) ?? state;
   let journal: DoJournal | undefined;
 
   const lifecycle = yield* makeSqlLifecyclePublication(undefined, maxStoredValueBytes).pipe(
-    Effect.provideService(SqlStorageOwner, state),
+    Effect.provideService(SqlStorageOwner, owner),
     Effect.provideService(SqlLifecycleSource, {
       beforeRetain: (threadId) =>
         Effect.suspend(() =>
@@ -1024,7 +1025,9 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
     ),
   );
 
-  journal = yield* makeJournal(sql, failpoint, maxStoredValueBytes, lifecycle, state);
+  journal = yield* makeJournal(sql, failpoint, maxStoredValueBytes, lifecycle, state).pipe(
+    Effect.provideService(SqlStorageOwner, owner),
+  );
   if (lifecycle !== undefined) yield* journal.initializeLifecycleSource();
 
   return journal;
@@ -1038,6 +1041,7 @@ const makeJournal = (
   state: OwnedState,
 ) =>
   Effect.gen(function* () {
+    const owner = (yield* SqlStorageOwner) ?? state;
     const progress = yield* SqlStorageProgress;
     const threads = threadRows(state, sql);
     const recovery = recoveryRows(state, sql);
@@ -1087,7 +1091,7 @@ const makeJournal = (
       <A, E extends { readonly _tag: string }>(
         effect: Effect.Effect<A, E>,
       ): Effect.Effect<A, E | DoStorageError> =>
-        state.transaction(storageResult(effect, expected)).pipe(
+        owner.transaction(storageResult(effect, expected)).pipe(
           Effect.provideService(SqlClient.SqlClient, sql),
           Effect.mapError((error) => (isSqlError(error) ? storageError(operation)(error) : error)),
           Effect.tapError(annotateStorageError),
@@ -2244,6 +2248,7 @@ const makeJournal = (
 
     return {
       state,
+      owner,
       threads,
       lifecycle: ownedLifecycle,
       initializeLifecycleSource,

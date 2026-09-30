@@ -1,5 +1,5 @@
 import { Effect, Exit, Scheduler, Schema } from "effect";
-import type { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient } from "effect/unstable/sql/SqlClient";
 import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 
 export const LaneId = Schema.NonEmptyString.check(Schema.isMaxLength(256));
@@ -42,6 +42,7 @@ const equivalent = Schema.toEquivalence(DueLane);
 type Change = { readonly before: DueLane | undefined; readonly after: DueLane };
 type Frame = {
   readonly parent: Frame | undefined;
+  readonly sqlDepth: number | undefined;
   readonly rows: ReadonlyArray<DueLane> | undefined;
   readonly changes: Map<string, Change>;
   readonly deadlines: Map<string, number>;
@@ -49,11 +50,18 @@ type Frame = {
 type View = {
   rows: ReadonlyArray<DueLane> | undefined;
   frame: Frame | undefined;
+  retained: number;
   changes: Map<string, Change>;
   deadlines: Map<string, number>;
 };
 const views = new WeakMap<DurableObjectStorage, View>();
-const installed = new WeakMap<SqlClient, WeakSet<DurableObjectStorage>>();
+
+/** Only the explicit source boundary may retain speculative rows across operations. */
+export const buffering = (storage: DurableObjectStorage): boolean =>
+  views.get(storage)?.frame !== undefined;
+
+export const ownsTransaction = (storage: DurableObjectStorage, depth: number): boolean =>
+  views.get(storage)?.frame?.sqlDepth === depth;
 
 export const invalidate = (storage: DurableObjectStorage): void => {
   const view = views.get(storage);
@@ -70,18 +78,41 @@ export const make = (storage: DurableObjectStorage) => {
   let view = views.get(storage);
 
   if (view === undefined) {
-    view = { rows: undefined, frame: undefined, changes: new Map(), deadlines: new Map() };
+    view = {
+      rows: undefined,
+      frame: undefined,
+      retained: 0,
+      changes: new Map(),
+      deadlines: new Map(),
+    };
     views.set(storage, view);
   }
   const current = view;
 
   const trim = () => {
-    if (current.frame === undefined && (current.rows?.length ?? 0) > 128) current.rows = undefined;
+    if (current.frame === undefined && current.retained === 0 && (current.rows?.length ?? 0) > 128)
+      current.rows = undefined;
   };
 
-  const begin = (): Frame => {
+  /** Retain the pass's write-through view without deferring claims or source commits.
+   * Failed source transactions still invalidate it; large views are released at exit. */
+  const withView = <A, E, R>(body: Effect.Effect<A, E, R>) =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        current.retained++;
+      }),
+      () => body,
+      () =>
+        Effect.sync(() => {
+          current.retained--;
+          trim();
+        }),
+    );
+
+  const begin = (sqlDepth?: number): Frame => {
     const frame: Frame = {
       parent: current.frame,
+      sqlDepth,
       rows: current.rows,
       changes: current.changes,
       deadlines: current.deadlines,
@@ -143,61 +174,70 @@ export const make = (storage: DurableObjectStorage) => {
       if (change.before === undefined || !equivalent(change.before, change.after)) write(change);
   };
 
-  /** Install once on the shared client, preserving its connection permit, scheduler and
-   * nested storage transactions. The flush is inside the source transaction, before commit.
-   * The finalizer runs after storage settles, including a commit rejection or interruption. */
-  const install = (client: SqlClient) => {
-    let storages = installed.get(client);
-
-    if (storages === undefined) {
-      storages = new WeakSet();
-      installed.set(client, storages);
-    }
-    if (storages.has(storage)) return;
-    storages.add(storage);
-    const original = client.withTransaction;
-
-    const withTransaction: SqlClient["withTransaction"] = (body) =>
-      Effect.uninterruptibleMask((restore) =>
-        Effect.suspend(() => {
-          let frame: Frame | undefined;
-
-          return original(
-            Effect.sync(() => {
-              frame = begin();
-            }).pipe(
-              Effect.andThen(restore(body)),
-              Effect.tap(() =>
-                Effect.try({
-                  try: () => {
-                    if (frame !== undefined) flush(frame);
-                  },
-                  catch: (cause) =>
-                    new SqlError({
-                      reason: new UnknownError({
-                        cause,
-                        operation: "flush maintenance due queue",
-                        message: "Maintenance intent could not commit",
-                      }),
-                    }),
-                }),
-              ),
-            ),
-          ).pipe(
-            Effect.onExit((exit) =>
-              Effect.sync(() => {
-                if (frame !== undefined) finish(frame, Exit.isSuccess(exit));
+  /** Own the flush inside the source transaction without changing the SQL service.
+   * Acquire its shared connection permit through Effect requirements. Cleanup follows
+   * native settlement, including commit rejection or interruption. */
+  const withTransaction = <A, E, R>(body: Effect.Effect<A, E, R>) =>
+    Effect.flatMap(SqlClient, (client) =>
+      Effect.flatMap(Effect.serviceOption(client.transactionService), (ambient) => {
+        if (ambient._tag === "Some" && !ownsTransaction(storage, ambient.value[1]))
+          return Effect.fail(
+            SqlError.make({
+              reason: UnknownError.make({
+                operation: "begin maintenance source transaction",
+                message:
+                  "Use ThreadMutationGate.withTransaction at the outermost source transaction",
+                cause: new Error(
+                  "Unwrapped SQL transaction cannot own buffered maintenance intent",
+                ),
               }),
-            ),
-            // A released permit can resume another transaction. Do not auto-yield
-            // between the driver's settlement and removing this transaction's frame.
-            Effect.provideService(Scheduler.PreventSchedulerYield, true),
+            }),
           );
-        }),
-      );
 
-    Object.assign(client, { withTransaction });
-  };
+        return Effect.uninterruptibleMask((restore) =>
+          Effect.suspend(() => {
+            let frame: Frame | undefined;
+
+            return client
+              .withTransaction(
+                Effect.flatMap(Effect.serviceOption(client.transactionService), (transaction) =>
+                  Effect.sync(() => {
+                    if (transaction._tag === "None") throw new Error("SQL transaction unavailable");
+                    frame = begin(transaction.value[1]);
+                  }),
+                ).pipe(
+                  Effect.andThen(restore(body)),
+                  Effect.tap(() =>
+                    Effect.try({
+                      try: () => {
+                        if (frame !== undefined) flush(frame);
+                      },
+                      catch: (cause) =>
+                        SqlError.make({
+                          reason: UnknownError.make({
+                            cause,
+                            operation: "flush maintenance due queue",
+                            message: "Maintenance intent could not commit",
+                          }),
+                        }),
+                    }),
+                  ),
+                ),
+              )
+              .pipe(
+                Effect.onExit((exit) =>
+                  Effect.sync(() => {
+                    if (frame !== undefined) finish(frame, Exit.isSuccess(exit));
+                  }),
+                ),
+                // A released permit can resume another transaction. Do not auto-yield
+                // between the driver's settlement and removing this transaction's frame.
+                Effect.provideService(Scheduler.PreventSchedulerYield, true),
+              );
+          }),
+        );
+      }),
+    );
 
   const transaction = async <A>(
     body: (transaction: DurableObjectTransaction) => Promise<A>,
@@ -267,7 +307,8 @@ export const make = (storage: DurableObjectStorage) => {
         .toArray(),
     );
 
-    if (current.frame !== undefined || rows.length <= 128) current.rows = rows;
+    if (current.frame !== undefined || current.retained > 0 || rows.length <= 128)
+      current.rows = rows;
 
     return rows;
   };
@@ -422,7 +463,8 @@ export const make = (storage: DurableObjectStorage) => {
 
   return {
     initialize,
-    install,
+    withView,
+    withTransaction,
     transaction,
     read,
     dirty,

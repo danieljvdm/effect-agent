@@ -45,14 +45,24 @@ it("applies the consuming adapter's stored-value bound to a shared pending view"
       const text = Schema.encodeSync(Schema.fromJsonString(MessageDeliveryRecord))(record);
       const size = new TextEncoder().encode(text).byteLength;
 
+      // Transaction decorators retain the physical owner's cache identity.
+      const owner = () => ({
+        identity: journal.state,
+        read: journal.state.read,
+        transaction: journal.state.transaction,
+        invalidators: journal.state.invalidators,
+      });
+
       const higher = yield* makeSqlMessageDeliveryStore(undefined, {
         maxStoredValueBytes: size + 1,
-      }).pipe(Effect.provideService(SqlStorageOwner, journal.state));
+      }).pipe(Effect.provideService(SqlStorageOwner, owner()));
 
       const lower = yield* makeSqlMessageDeliveryStore(undefined, {
         maxStoredValueBytes: size - 1,
-      }).pipe(Effect.provideService(SqlStorageOwner, journal.state));
+      }).pipe(Effect.provideService(SqlStorageOwner, owner()));
 
+      // Seed the other adapter's empty view before the source commit.
+      yield* lower.list({ ownerThreadId: record.key.ownerThreadId, pendingOnly: true, limit: 1 });
       yield* higher.insert(record);
       yield* higher.list({ ownerThreadId: record.key.ownerThreadId, pendingOnly: true, limit: 1 });
       const direct = yield* lower.get(record.key).pipe(Effect.result);

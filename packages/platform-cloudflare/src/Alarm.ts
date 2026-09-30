@@ -43,6 +43,7 @@ import {
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { DurableObjectStorage } from "effect-cf";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
+import type { SqlError } from "effect/unstable/sql/SqlError";
 
 import { DurableObjectContext } from "./CloudflareBindings.ts";
 import { AuxiliaryDispatchMillis, CloudflareDurableRuntimeConfig } from "./CloudflareConfig.ts";
@@ -97,15 +98,20 @@ const makeStorageEffect = Effect.gen(function* () {
     Effect.flatMap(Effect.serviceOption(sql.transactionService), (current) => {
       const body = Effect.uninterruptible(execute);
 
-      // Source transactions own the queue view through flush and rollback.
-      return current._tag === "Some"
-        ? body
-        : Effect.scoped(
-            Effect.andThen(
-              sql.reserve.pipe(Effect.mapError(alarmFailure(operation))),
-              body.pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? invalidate : Effect.void))),
-            ),
-          );
+      // Explicit source transactions own the view through flush and rollback.
+      // Unwrapped host SQL keeps eager writes and discards speculative cache rows.
+      if (current._tag === "Some") {
+        if (DueQueue.buffering(ctx.storage)) return body;
+
+        return body.pipe(Effect.ensuring(invalidate));
+      }
+
+      return Effect.scoped(
+        Effect.andThen(
+          sql.reserve.pipe(Effect.mapError(alarmFailure(operation))),
+          body.pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? invalidate : Effect.void))),
+        ),
+      );
     });
 });
 
@@ -691,9 +697,15 @@ const CurrentNativeSource = Context.Reference<boolean>(
 export class ThreadMutationGate extends Context.Service<
   ThreadMutationGate,
   {
+    /** Commit source facts and their scheduling intent together. The flush runs before
+     * native commit; failed or interrupted transactions discard their queue view. */
+    readonly withTransaction: <A, E, R>(
+      body: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | SqlError, R>;
     readonly withMutation: <A, E, R>(
       body: Effect.Effect<A, E, R>,
       /**
+       * Call outside SQL transactions so prearming commits before the body runs.
        * Native admission, approval, abort and unknown resolution keep the default true.
        * Host producers use false and name only the lanes for which they create work.
        * Receipt-only bookkeeping with no new obligation names no lanes. Enrollment preserves
@@ -738,7 +750,6 @@ export class ThreadMutationGate extends Context.Service<
       const sql = yield* SqlClient;
       const dueQueue = DueQueue.make(ctx.storage);
 
-      dueQueue.install(sql);
       const config = yield* CloudflareDurableRuntimeConfig;
       const failpoint = yield* ThreadMaintenanceFailpoint;
       // A fresh incarnation has no live mutations; durable generations survive eviction.
@@ -760,6 +771,21 @@ export class ThreadMutationGate extends Context.Service<
 
       const runTransaction = yield* makeStorageOperation;
 
+      const validateSourceBoundary = Effect.flatMap(
+        Effect.serviceOption(sql.transactionService),
+        (current) =>
+          current._tag === "Some" &&
+          DueQueue.buffering(ctx.storage) &&
+          !DueQueue.ownsTransaction(ctx.storage, current.value[1])
+            ? Effect.fail(
+                DurableAlarmError.make({
+                  operation: "enroll maintenance source",
+                  message: "Nested source scheduling requires ThreadMutationGate.withTransaction",
+                }),
+              )
+            : Effect.void,
+      );
+
       yield* runTransaction("initialize maintenance due queue", async () => {
         dueQueue.initialize();
         dueQueue.register(DueQueue.Native);
@@ -770,6 +796,7 @@ export class ThreadMutationGate extends Context.Service<
         dueAt: number,
         progressCursor?: bigint,
       ) {
+        yield* validateSourceBoundary;
         const now = yield* Clock.currentTimeMillis;
         const current = yield* Effect.serviceOption(sql.transactionService);
 
@@ -884,34 +911,47 @@ export class ThreadMutationGate extends Context.Service<
           readonly lanes?: ReadonlyArray<string>;
         },
       ): Effect.Effect<A, E | DurableAlarmError, R> =>
-        Effect.acquireUseRelease(
-          generationGate.withPermit(
-            beginMutation(options?.invalidatesRecovery ?? true, options?.lanes ?? []),
-          ),
-          (enrolled) =>
-            failpoint.hit("maintenance:mutation:armed").pipe(
-              Effect.andThen(
-                Effect.flatMap(CurrentMutationLanes, (current) =>
-                  body.pipe(
-                    Effect.provideService(CurrentMutationLanes, [
-                      ...new Set([...current, ...enrolled]),
-                    ]),
-                  ),
+        Effect.flatMap(Effect.serviceOption(sql.transactionService), (current) =>
+          // Reject before the generation gate: a prearmer may already be waiting
+          // for this caller's SQL connection while holding that gate.
+          Option.isSome(current)
+            ? Effect.fail(
+                DurableAlarmError.make({
+                  operation: "prearm maintenance mutation",
+                  message:
+                    "Run withMutation outside the source SQL transaction so prearming commits first",
+                }),
+              )
+            : Effect.acquireUseRelease(
+                generationGate.withPermit(
+                  beginMutation(options?.invalidatesRecovery ?? true, options?.lanes ?? []),
                 ),
+                (enrolled) =>
+                  failpoint.hit("maintenance:mutation:armed").pipe(
+                    Effect.andThen(
+                      Effect.flatMap(CurrentMutationLanes, (current) =>
+                        body.pipe(
+                          Effect.provideService(CurrentMutationLanes, [
+                            ...new Set([...current, ...enrolled]),
+                          ]),
+                        ),
+                      ),
+                    ),
+                    // The committed outbox may be claimed by the alarm even while the caller
+                    // is suspended after commit. This synchronous decrement does not acquire the
+                    // native snapshot gate: a snapshot may conservatively retain its active count.
+                    // Native certification keeps its broader guard until the mutation is released.
+                    Effect.tap(() => releaseLanes(enrolled, true).pipe(Effect.andThen(notify))),
+                    Effect.tap(() => failpoint.hit("maintenance:mutation:finished")),
+                  ),
+                (enrolled) => endMutation(enrolled).pipe(Effect.andThen(notify)),
               ),
-              // The committed outbox may be claimed by the alarm even while the caller
-              // is suspended after commit. This synchronous decrement does not acquire the
-              // native snapshot gate: a snapshot may conservatively retain its active count.
-              // Native certification keeps its broader guard until the mutation is released.
-              Effect.tap(() => releaseLanes(enrolled, true).pipe(Effect.andThen(notify))),
-              Effect.tap(() => failpoint.hit("maintenance:mutation:finished")),
-            ),
-          (enrolled) => endMutation(enrolled).pipe(Effect.andThen(notify)),
         );
 
       const recordProgress = Effect.fn("ThreadMutationGate.recordProgress")(function* (
         lanes: ReadonlyArray<string>,
       ) {
+        yield* validateSourceBoundary;
         if (Option.isNone(yield* Effect.serviceOption(sql.transactionService)))
           return yield* DurableAlarmError.make({
             operation: "record source progress",
@@ -946,6 +986,8 @@ export class ThreadMutationGate extends Context.Service<
       });
 
       return ThreadMutationGate.of({
+        withTransaction: <A, E, R>(body: Effect.Effect<A, E, R>) =>
+          dueQueue.withTransaction(body).pipe(Effect.provideService(SqlClient, sql)),
         withMutation,
         schedule,
         recordProgress,
@@ -2859,7 +2901,7 @@ export class ThreadMaintenance extends Context.Service<
 
           return yield* alarm.withWakesDeferred(
             maintenancePassGate.withPermit(
-              Effect.scoped(pass(yieldAfter, dispatchUntil, observed)).pipe(
+              dueQueue.withView(Effect.scoped(pass(yieldAfter, dispatchUntil, observed))).pipe(
                 // Close event-owned auxiliary work and release Attempt ownership before
                 // failure rearming, while still holding the pass permit.
                 Effect.onErrorIf(
