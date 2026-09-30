@@ -130,7 +130,7 @@ describe("Cloudflare replaceable compaction", () => {
               output: Schema.String,
               instructions: "Retain the conversation.",
               toolkit: Toolkit.empty,
-              policy: { maxTurns: 1, maxDuration: "30 seconds", contextTokenLimit: 20_000 },
+              policy: { maxTurns: 1, maxDuration: "30 seconds", contextTokenLimit: 250_000 },
             }),
             model,
           );
@@ -186,8 +186,8 @@ describe("Cloudflare replaceable compaction", () => {
             }),
           );
 
-          const process = Effect.fnUntraced(function* (input: string) {
-            const receipt = yield* runtime.submit(agent, input, submitOptions(thread, input));
+          const process = Effect.fnUntraced(function* (input: string, key = input) {
+            const receipt = yield* runtime.submit(agent, input, submitOptions(thread, key));
 
             expect(receipt.submissionId.endsWith(`:${thread}`)).toBe(true);
             const result = yield* runtime.processThreadHead(receipt.threadId);
@@ -202,7 +202,13 @@ describe("Cloudflare replaceable compaction", () => {
 
           yield* process("retired request");
           rollover = true;
-          const original = yield* process("begin compacted conversation");
+
+          // The context fits by itself; copying it beside the completed Run's input/response
+          // records must not disable the cache by exceeding the persisted JSON byte bound.
+          const original = yield* process(
+            `begin compacted conversation ${"x".repeat(400_000)}`,
+            "begin compacted conversation",
+          );
 
           rollover = false;
           retiredThrough = original.records.length;

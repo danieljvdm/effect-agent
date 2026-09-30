@@ -52,6 +52,8 @@ conversation. A later Run can start from that context and its own records, with 
 and accounting. Each completion refreshes the context from the new records, so sequential Runs
 need not reread the retired archive. The snapshot contains canonical messages, never transient
 context or provider-only prompt transformations.
+If retaining the completed Run's recovery data would exceed cache bounds, the snapshot keeps
+only Thread context and identity records; recovering that Run uses canonical history.
 
 This optional cache holds one latest snapshot per Thread. Saves require the current producer
 epoch and bind the snapshot to a canonical batch tail. It is separate from the generic
