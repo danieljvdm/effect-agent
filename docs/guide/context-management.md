@@ -1265,8 +1265,10 @@ An evidence index supplies retrieval candidates; canonical history and the submi
 recovery. After a committed rollover, the runtime can use a compatible
 [recovery checkpoint](../concepts/durability#recovery-checkpoints) containing the replacement
 context, cumulative accounting, and retained control and Durable Step evidence. It reads at most
-4,096 suffix records through pages of at most 1,024; an absent, invalid, or incompatible checkpoint
-or suffix falls back to the captured canonical prefix. Checkpoint eligibility is separate from
+4,096 suffix records through pages of at most 1,024. After completion, eligible sequential Runs
+reuse canonical Thread context and refresh it from their new records. A new compaction, late
+evidence, or an absent, invalid, or incompatible checkpoint or suffix uses the captured canonical
+prefix. Checkpoint eligibility is separate from
 index coverage and prompt size, so measure both the checkpoint path and full-replay fallback before
 adopting longer histories.
 

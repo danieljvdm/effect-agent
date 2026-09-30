@@ -47,6 +47,12 @@ replacement context, protected instructions and input, cumulative usage and poli
 the latest replayable tool batch, and required control and Durable Step evidence. Completed Step
 results remain available for reuse after an ownership change.
 
+When that Run completes, an eligible checkpoint also preserves the complete Thread's canonical
+conversation. A later Run can start from that context and its own records, with fresh instructions
+and accounting. Each completion refreshes the context from the new records, so sequential Runs
+need not reread the retired archive. The snapshot contains canonical messages, never transient
+context or provider-only prompt transformations.
+
 This optional cache holds one latest snapshot per Thread. Saves require the current producer
 epoch and bind the snapshot to a canonical batch tail. It is separate from the generic
 `ThreadStore.checkpoints` slot used by application projections. Neither slot changes canonical
@@ -58,6 +64,12 @@ records, read in pages of at most 1,024. Missing, corrupt, incompatible, or inel
 fall back to the captured canonical prefix. A longer or incompatible suffix also uses full replay;
 cache capacity never justifies dropping control or Step evidence. Storage infrastructure failures
 remain typed failures.
+
+Cross-Run reuse requires proven original-input boundaries and an unambiguous, single-Run suffix.
+Interleaved continuations, late results, joined settlements, unsupported identities, or a new
+compaction can require full replay. New compaction reconstructs its canonical coverage before
+certifying another snapshot. Context without compaction can still grow with the conversation;
+a checkpoint does not make every Thread operation independent of history size.
 
 The canonical log and submission ledger remain authoritative. A history-search index supplies
 retrieval candidates and cannot stand in for this recovery state. Ordinary unresolved tools keep

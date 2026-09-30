@@ -1970,6 +1970,8 @@ const makeJournal = (
             );
       }
 
+      // Resolve both primary keys; last_sequence alone scans the Thread's archived batches.
+      // Retain the batch-end predicate so an interior record cannot certify a checkpoint.
       const rows = yield* sql<Record<string, unknown>>`
       SELECT
         thread_id,
@@ -1981,6 +1983,10 @@ const makeJournal = (
         batch_json
       FROM effect_agent_canonical_batches
       WHERE thread_id = ${threadId}
+        AND batch_id = (
+          SELECT batch_id FROM effect_agent_canonical_records
+          WHERE thread_id = ${threadId} AND sequence = ${sequence}
+        )
         AND last_sequence = ${sequence}
     `.pipe(Effect.mapError(storageError("read canonical digest at sequence")));
 

@@ -15,7 +15,10 @@ import {
   contextWindowMessage,
 } from "../engine/Compaction.ts";
 import { digestJson, type DigestError } from "./Digest.ts";
-import { type JournalCheckpointSeed } from "./internal/journal-checkpoint.ts";
+import {
+  type JournalCheckpointSeed,
+  type ThreadContextCheckpoint,
+} from "./internal/journal-checkpoint.ts";
 import {
   makeJournalMetadata,
   toolExecutionKey,
@@ -610,13 +613,19 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   onBoundary?: (boundary: JournalBoundary) => void,
   seed?: JournalCheckpointSeed,
   preparedMetadata?: JournalMetadata,
+  priorContext?: ThreadContextCheckpoint,
 ): Effect.fn.Return<RunJournalProjection, RunJournalError | E, R> {
   if (seed !== undefined && seed.runId !== ownerRunId)
     return yield* journalError("Recovery checkpoint belongs to another Run");
+  if (seed !== undefined && priorContext !== undefined)
+    return yield* journalError("Run recovery and prior Thread context cannot seed the same replay");
+
+  const historical =
+    priorContext === undefined ? [] : (yield* decodePromptMessages(priorContext.prompt)).content;
 
   let state: FoldState = {
-    all: [],
-    before: [],
+    all: [...historical],
+    before: [...historical],
     pendingTools: [],
     pendingToolsForRun: false,
     committedTurns: seed?.committedTurns ?? 0,
@@ -678,6 +687,9 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   const compactions = metadata.compactions.filter(({ sequence, payload }) =>
     isInRunView(sequence, payload, ownerRunId),
   );
+
+  if (priorContext !== undefined && compactions.length > 0)
+    return yield* journalError("New compaction requires the complete canonical context mapping");
 
   const recordsForRun = records.pipe(
     Stream.filter(({ sequence, record: { payload } }) =>
@@ -827,7 +839,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     ];
   };
 
-  let latestWindowId: string | undefined = seed?.contextWindowId;
+  let latestWindowId: string | undefined = seed?.contextWindowId ?? priorContext?.contextWindowId;
   let latestWindowSequence = seed?.throughSequence ?? -1;
   let rolloverCoveredThrough = 0;
 
