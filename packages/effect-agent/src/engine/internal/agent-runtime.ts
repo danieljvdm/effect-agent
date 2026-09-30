@@ -7977,23 +7977,31 @@ const enforceDurationDeadline = <A, E, R>(
   execution: Stream.Stream<A, E, R>,
   durationDeadlineMillis: number,
   durationLimit: AgentPolicyError,
-): Stream.Stream<A, E | AgentPolicyError, R> =>
-  Stream.unwrap(
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      const remaining = durationDeadlineMillis - now;
+): Stream.Stream<A, E | AgentPolicyError, R> => {
+  const beforeDeadline = Effect.fnUntraced(function* <Value, Error, Requirements>(
+    effect: Effect.Effect<Value, Error, Requirements>,
+  ): Effect.fn.Return<Value, Error | AgentPolicyError, Requirements> {
+    const now = yield* Clock.currentTimeMillis;
+    const remaining = durationDeadlineMillis - now;
 
-      if (remaining <= 0) {
-        return Stream.fail(durationLimit);
-      }
+    if (remaining <= 0) {
+      return yield* Effect.fail(durationLimit);
+    }
 
-      return execution.pipe(
-        Stream.interruptWhen(
-          Effect.sleep(remaining).pipe(Effect.andThen(Effect.fail(durationLimit))),
-        ),
-      );
-    }),
-  );
+    return yield* effect.pipe(
+      Effect.timeoutOrElse({
+        duration: remaining,
+        orElse: () => Effect.fail(durationLimit),
+      }),
+    );
+  });
+
+  // Guard acquisition and each pull against the same deadline. A merged timer
+  // stream can deadlock at a cooperative scheduler yield (see #692).
+  return Stream.fromPull(
+    beforeDeadline(Stream.toPull(execution)).pipe(Effect.map(beforeDeadline)),
+  ).pipe(Stream.scoped);
+};
 
 const guardBudgetStream = <A, E, R, HookError, HookRequirements>(
   stream: Stream.Stream<A, E, R>,

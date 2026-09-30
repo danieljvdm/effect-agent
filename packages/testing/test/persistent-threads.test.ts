@@ -18,7 +18,7 @@ import {
   SchemaIssue,
   Stream,
 } from "effect";
-import { PersistentHistory } from "effect-agent";
+import { Output, PersistentHistory } from "effect-agent";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
 import * as AgentRuntime from "effect-agent/agent-runtime";
@@ -29,7 +29,7 @@ import { RunContextPreparationPassthrough } from "effect-agent/run-options";
 import { ThreadHistory } from "effect-agent/thread-history";
 import { replayThread } from "effect-agent/thread-projection";
 import { ThreadExportRequest, ThreadMaterialization, ThreadStore } from "effect-agent/thread-store";
-import { Model, Tool, Toolkit } from "effect/unstable/ai";
+import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 
 const threadId = Schema.decodeSync(ThreadId)("retained-history");
 const options = { threadId };
@@ -123,6 +123,64 @@ const withDatabase = <A, E, R>(use: (filename: string) => Effect.Effect<A, E, R>
   ).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, services)));
 
 describe("persistent threads", () => {
+  // https://github.com/danieljvdm/effect-agent/issues/692
+  // Use the live runner without an Effect timeout: another racing fiber hides the hang.
+  it("completes sequential SQLite history runs across scheduler yields", () => {
+    const chat = Agent.make("history-scheduler", {
+      input: Schema.Struct({ text: Schema.String }),
+      output: Output.text(Schema.String),
+      instructions: "Reply briefly.",
+      toolkit: Toolkit.empty,
+    });
+
+    const model = Model.make(
+      "scripted",
+      "history-scheduler",
+      Layer.effect(LanguageModel.LanguageModel, LanguageModel.LanguageModel).pipe(
+        Layer.provide(
+          ScriptedModel.layer([
+            {
+              _tag: "Stream",
+              parts: [
+                { type: "text-start", id: "answer" },
+                { type: "text-delta", id: "answer", delta: "ok" },
+                { type: "text-end", id: "answer" },
+                {
+                  type: "finish",
+                  reason: "stop",
+                  usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } },
+                },
+              ],
+              termination: { _tag: "Complete" },
+            },
+          ]),
+        ),
+      ),
+    );
+
+    return Effect.runPromise(
+      withDatabase((filename) =>
+        Effect.gen(function* () {
+          for (let message = 1; message <= 100; message++) {
+            const result = yield* AgentRuntime.run(
+              chat,
+              { text: `message ${message}` },
+              options,
+            ).pipe(Effect.provide(model));
+
+            expect(result.output).toBe("ok");
+          }
+
+          const log = yield* exported;
+          const projection = replayThread(threadId, log.records, log.tailDigest);
+
+          expect(projection.completedRuns).toHaveLength(100);
+          expect(projection.modelOutputs).toEqual(Array.from({ length: 100 }, () => "ok"));
+        }).pipe(Effect.provide(sqliteLayer({ filename }))),
+      ),
+    );
+  }, 10_000);
+
   it.effect("does not commit or publish completion when final result decoding fails", () =>
     Effect.gen(function* () {
       const decodes = yield* Ref.make(0);
