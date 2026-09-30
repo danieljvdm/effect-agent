@@ -16,6 +16,7 @@ import {
   PubSub,
   Queue,
   Result,
+  Schedule,
   Schema,
   SchemaAST,
   SchemaGetter,
@@ -3965,6 +3966,31 @@ const snapshotCompactionMessages = Effect.fnUntraced(function* (
   });
 });
 
+const HttpStatus = AiError.HttpResponseDetails.fields.status.check(
+  Schema.isBetween({ minimum: 100, maximum: 599 }),
+);
+
+const decodeHttpErrorPayload = Schema.decodeUnknownOption(
+  Schema.Union([Schema.Struct({ code: HttpStatus }), Schema.Struct({ status: HttpStatus })]),
+);
+
+/** Native error parts carry unknown payloads; classify only validated HTTP statuses. */
+const isTransientErrorPayload = (error: Response.ErrorPart["error"]): boolean =>
+  Option.exists(
+    decodeHttpErrorPayload(error),
+    (payload) =>
+      AiError.reasonFromHttpStatus({ status: "code" in payload ? payload.code : payload.status })
+        .isRetryable,
+  );
+
+/** Content streamed before a failure makes the call unsafe to repeat. */
+const hasStreamedContent = (trace: TurnTrace): boolean =>
+  trace.toolCalls.size > 0 ||
+  trace.parts.some((part) => part.type !== "response-metadata" && part.type !== "error");
+
+const MODEL_RETRY_BASE = Duration.seconds(1);
+const MODEL_RETRY_MAX_DELAY = Duration.seconds(30);
+
 /** Text a provider overflow classification matches against (message + reason). */
 const overflowText = (error: AiError.AiError): string => `${error.message} ${error.reason.message}`;
 
@@ -5588,6 +5614,12 @@ const makeTurn = <
               .map((entry) => entry.tool)),
       ) as unknown as Toolkit.Toolkit<Tools>;
 
+      // Hosted tools may execute before emitting a response part. Only readonly
+      // hosted tools are safe to repeat after a failure or joined-input restart.
+      const canRepeatModelCall = !Object.values(modelToolkit.tools).some(
+        (tool) => Tool.isProviderDefined(tool) && !Context.get(tool.annotations, Tool.Readonly),
+      );
+
       if (options.durability !== undefined && snapshot !== undefined) {
         if (
           options.durability.noteToolExposure === undefined &&
@@ -6462,11 +6494,59 @@ const makeTurn = <
           ),
         );
 
+      // Retry after part processing: metadata emits no events, so it cannot reset
+      // Stream.retry's schedule. Content makes the response ineligible for retry.
+      const attemptWithRetries = Stream.suspend(() => attempt(compactedOutgoing())).pipe(
+        Stream.retry(($) =>
+          $(Schedule.exponential(MODEL_RETRY_BASE)).pipe(
+            Schedule.upTo({ times: policy.modelRetries ?? 0 }),
+            Schedule.while(({ input: error }) => {
+              const lastPart = trace.parts.at(-1);
+
+              return (
+                canRepeatModelCall &&
+                !hasStreamedContent(trace) &&
+                ((lastPart?.type === "error" && isTransientErrorPayload(lastPart.error)) ||
+                  (AiError.isAiError(error) && error.isRetryable))
+              );
+            }),
+            Schedule.modifyDelay(({ input: error, duration }) => {
+              const backoff = Duration.min(duration, MODEL_RETRY_MAX_DELAY);
+              const retryAfter = AiError.isAiError(error) ? error.retryAfter : undefined;
+
+              return Effect.succeed(
+                retryAfter === undefined ? backoff : Duration.max(backoff, retryAfter),
+              );
+            }),
+            Schedule.tap(({ input: error, attempt: retry, duration }) =>
+              Effect.gen(function* () {
+                trace.parts.length = 0;
+                trace.responsePartCount = 0;
+                trace.responsePartBytes = 0;
+                // The failed attempt's usage was already retained on exit.
+                trace.usage = undefined;
+                delete trace.response;
+                delete trace.finishMetadata;
+                yield* Effect.logWarning("agent model call retrying").pipe(
+                  Effect.annotateLogs({
+                    runId: context.runId,
+                    turnId,
+                    retry,
+                    delayMillis: Duration.toMillis(duration),
+                    error: errorMessage(error),
+                  }),
+                );
+              }),
+            ),
+          ),
+        ),
+      );
+
       // RUN-027: one summarize-and-retry for a classified provider context
       // overflow when compaction is configured; every other provider error
       // propagates unchanged. A response that already streamed parts mutated
       // the trace, so it is never retried.
-      const response = attempt(compactedOutgoing()).pipe(
+      const response = attemptWithRetries.pipe(
         Stream.catch(
           (
             error,
@@ -6475,10 +6555,7 @@ const makeTurn = <
             AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
             InterpreterRequirements<typeof agent, HookRequirements, InstructionRequirements>
           > => {
-            if (
-              !(error instanceof AiError.AiError) ||
-              !isContextOverflowMessage(overflowText(error))
-            ) {
+            if (!AiError.isAiError(error) || !isContextOverflowMessage(overflowText(error))) {
               return Stream.fail(error);
             }
             const message = overflowText(error);
@@ -6514,8 +6591,7 @@ const makeTurn = <
                   .pipe(
                     Effect.mapError(
                       (inner): AgentRuntimeFailure<typeof agent, HookError, InstructionError> =>
-                        inner instanceof AiError.AiError &&
-                        isContextOverflowMessage(overflowText(inner))
+                        AiError.isAiError(inner) && isContextOverflowMessage(overflowText(inner))
                           ? ContextOverflowError.make({
                               message: overflowText(inner),
                               retried: true,
@@ -6540,10 +6616,9 @@ const makeTurn = <
 
                 // The retried call is outside the outer catch: a second
                 // classified overflow converts here, typed, no retry.
-                const retried: TurnStream = attempt(compactedOutgoing()).pipe(
+                const retried: TurnStream = attemptWithRetries.pipe(
                   Stream.catch((again): TurnStream =>
-                    again instanceof AiError.AiError &&
-                    isContextOverflowMessage(overflowText(again))
+                    AiError.isAiError(again) && isContextOverflowMessage(overflowText(again))
                       ? Stream.fail(
                           ContextOverflowError.make({
                             message: overflowText(again),
@@ -7149,15 +7224,11 @@ const makeTurn = <
 
       // Only the model stream is cancellable. It resolves no application Tools and
       // closes its waiter before continuation can commit a response or start a Handler.
-      // Hosted effects may happen before reporting a part. Only Tools explicitly
-      // annotated Readonly are safe to discard and repeat.
       const restartSignal =
         policy.restartOnJoinedInput === true &&
         context.modelRestarts < 2 &&
         (options.durability === undefined || options.durability.commitModelRestart !== undefined) &&
-        !Object.values(modelToolkit.tools).some(
-          (tool) => Tool.isProviderDefined(tool) && !Context.get(tool.annotations, Tool.Readonly),
-        )
+        canRepeatModelCall
           ? options.input?.awaitJoin
           : undefined;
 

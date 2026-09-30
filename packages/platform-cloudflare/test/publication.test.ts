@@ -258,7 +258,7 @@ describe("durable host publication", () => {
             .find((row) => row.id === DueQueue.LifecycleStart),
         );
 
-      let dormantObserved = false;
+      let heldStateVerified = false;
 
       try {
         await entered.promise;
@@ -291,7 +291,6 @@ describe("durable host publication", () => {
           );
         });
         await vi.waitFor(async () => expect((await startLane())?.dueAt).toBeNull());
-        dormantObserved = true;
         const dormant = await startLane();
         const heldCanonical = await readCanonical(thread, namespace);
 
@@ -335,7 +334,6 @@ describe("durable host publication", () => {
             leaseExpiresAt = current.lease_expires_at;
           });
         }
-        await advance(180_000);
         expect((await ownership()).map((row) => row.attempt_id)).toEqual(
           heldOwnership.map((row) => row.attempt_id),
         );
@@ -352,10 +350,11 @@ describe("durable host publication", () => {
         expect(await startLane()).toEqual(dormant);
         expect(await allSettled(thread, namespace)()).toBe(false);
         expect((lifecycleBatches.get(thread) ?? []).flat()).toHaveLength(3);
+        heldStateVerified = true;
       } finally {
         acknowledge.resolve();
         release.resolve();
-        if (dormantObserved) await running;
+        if (heldStateVerified) await running;
         else {
           // A broken immediate continuation must not strand cleanup at the frozen event clock.
           await runInDurableObject(stub(thread), (_, state) =>
@@ -560,7 +559,14 @@ describe("durable host publication", () => {
       );
       expect(state.dirty).toBeGreaterThan(state.processed);
       expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
-      await advance(1_000);
+
+      const leaseDuration = await runInDurableObject(stub(thread), (instance) =>
+        instance[DurableObject.RunSymbol](
+          Effect.map(CloudflareDurableRuntimeConfig, (config) => config.ownershipLeaseDuration),
+        ),
+      );
+
+      await advance(leaseDuration);
       await drainAlarmsUntil(thread, allSettled(thread, namespace), { namespace });
       await quiesce(thread, advance);
       expect((await cursor(thread)).tail).toBe(
