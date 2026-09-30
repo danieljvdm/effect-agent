@@ -118,6 +118,12 @@ const Count = Schema.Struct({
   pending: SqlInteger.pipe(Schema.decodeTo(Schema.Natural)),
 });
 
+const PendingSize = Schema.Struct({
+  count: SqlInteger.pipe(Schema.decodeTo(Schema.Natural)),
+  total_bytes: SqlInteger.pipe(Schema.decodeTo(Schema.Natural)),
+  max_bytes: SqlInteger.pipe(Schema.decodeTo(Schema.Natural)),
+});
+
 const Deadline = Schema.Struct({
   deadline: Schema.NullOr(SqlInteger.pipe(Schema.decodeTo(ScheduleInstant))),
 });
@@ -131,10 +137,22 @@ const Scan = Schema.Struct({
 const codec = Schema.fromJsonString(MessageDeliveryRecord);
 const bytes = (text: string): number => new TextEncoder().encode(text).byteLength;
 
+interface PendingRecord {
+  readonly record: MessageDeliveryRecord;
+  /** Size of the authoritative stored text, independent of the consuming adapter's limit. */
+  readonly storedBytes: number;
+}
+
+const pendingRowLimit = 128;
+const pendingByteLimit = 4 * 1024 * 1024;
+
+const pendingBytes = (records: ReadonlyArray<PendingRecord>) =>
+  records.reduce((total, entry) => total + entry.storedBytes, 0);
+
 // Disposable complete pending sets shared by adapters on the same physical owner.
 const pendingViews = new WeakMap<
   SqlStorageOwner,
-  Map<string, Map<string, ReadonlyArray<MessageDeliveryRecord>>>
+  Map<string, Map<string, ReadonlyArray<PendingRecord>>>
 >();
 
 const compareMessageIds = (left: string, right: string): number => {
@@ -188,7 +206,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
     execute(statement).pipe(Effect.mapError((cause) => storage(operation, cause)));
 
   const owner = yield* SqlStorageOwner;
-  let pending: Map<string, ReadonlyArray<MessageDeliveryRecord>> | undefined;
+  let pending: Map<string, ReadonlyArray<PendingRecord>> | undefined;
 
   if (owner !== undefined) {
     let namespaces = pendingViews.get(owner);
@@ -201,7 +219,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
 
     pending = namespaces.get(namespace);
     if (pending === undefined) {
-      const view = new Map<string, ReadonlyArray<MessageDeliveryRecord>>();
+      const view = new Map<string, ReadonlyArray<PendingRecord>>();
 
       pending = view;
       namespaces.set(namespace, view);
@@ -212,30 +230,30 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
   const isPending = (record: MessageDeliveryRecord) =>
     record.status !== "processed" && record.status !== "refused";
 
-  const retainPending = (threadId: string, records: ReadonlyArray<MessageDeliveryRecord>) => {
+  const retainPending = (threadId: string, records: ReadonlyArray<PendingRecord>) => {
     if (pending === undefined) return;
     pending.delete(threadId);
-    if (records.length > 128 || bytes(JSON.stringify(records)) > 4 * 1024 * 1024) return;
+    if (records.length > pendingRowLimit || pendingBytes(records) > pendingByteLimit) return;
     pending.set(threadId, records);
     let total = 0;
 
-    for (const rows of pending.values()) total += bytes(JSON.stringify(rows));
-    while (pending.size > 128 || total > 4 * 1024 * 1024) {
+    for (const rows of pending.values()) total += pendingBytes(rows);
+    while (pending.size > 128 || total > pendingByteLimit) {
       const oldest = pending.entries().next().value;
 
       if (oldest === undefined) break;
-      total -= bytes(JSON.stringify(oldest[1]));
+      total -= pendingBytes(oldest[1]);
       pending.delete(oldest[0]);
     }
   };
 
-  const updatePending = (record: MessageDeliveryRecord) => {
+  const updatePending = (record: MessageDeliveryRecord, storedBytes: number) => {
     const prior = pending?.get(record.key.ownerThreadId);
 
     if (prior === undefined) return;
-    const next = prior.filter((value) => value.key.messageId !== record.key.messageId);
+    const next = prior.filter((value) => value.record.key.messageId !== record.key.messageId);
 
-    if (isPending(record)) next.push(record);
+    if (isPending(record)) next.push({ record, storedBytes });
     retainPending(record.key.ownerThreadId, next);
   };
 
@@ -368,7 +386,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
           "insert",
           sql`INSERT INTO ${relation("effect_agent_message_deliveries")} (owner_thread_id, message_id, version, state, deadline_at_millis, record_json ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, read_metadata` })}) VALUES (${input.key.ownerThreadId}, ${input.key.messageId}, ${input.version}, ${input.status}, ${messageDeliveryDeadline(input)}, ${text} ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, ${deliveryMetadata(input)}::jsonb` })})`,
         );
-        updatePending(input);
+        updatePending(input, bytes(text));
 
         if (lifecycle !== undefined)
           yield* lifecycle
@@ -426,7 +444,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
 
         if (rows.length !== 1 || rows[0] === undefined)
           return yield* MessageDeliveryError.make({ reason: "conflict", operation: "change" });
-        updatePending(rows[0]);
+        updatePending(rows[0], bytes(text));
 
         if (
           lifecycle !== undefined &&
@@ -479,19 +497,46 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
         let complete = pending.get(input.ownerThreadId);
 
         if (complete === undefined) {
-          const rows = yield* query(
-            "pending-view",
-            sql`SELECT owner_thread_id, message_id, version, state, deadline_at_millis, record_json FROM ${relation("effect_agent_message_deliveries")} WHERE owner_thread_id = ${input.ownerThreadId} AND state NOT IN ('processed', 'refused') ORDER BY message_id LIMIT 129`,
+          // Bound payload allocation before fetching text. Oversized complete sets fall back to
+          // the requested page; the owner read gate keeps this proof and hydration consistent.
+          const sizes = yield* query(
+            "pending-view-size",
+            sql`SELECT COUNT(*) AS count, COALESCE(SUM(record_bytes), 0) AS total_bytes, COALESCE(MAX(record_bytes), 0) AS max_bytes FROM (SELECT ${sql.onDialectOrElse({ orElse: () => sql`length(CAST(record_json AS BLOB))`, pg: () => sql`octet_length(record_json)` })} AS record_bytes FROM ${relation("effect_agent_message_deliveries")} WHERE owner_thread_id = ${input.ownerThreadId} AND state NOT IN ('processed', 'refused') LIMIT ${pendingRowLimit + 1}) AS pending_sizes`,
           );
 
-          const records = yield* decodeRows(rows);
+          const size = (yield* Schema.decodeUnknownEffect(Schema.Array(PendingSize))(sizes).pipe(
+            Effect.mapError((cause) => corrupt("pending-view-size", cause)),
+          ))[0];
 
-          retainPending(input.ownerThreadId, records);
-          complete = pending.get(input.ownerThreadId);
+          if (size === undefined) return yield* corrupt("pending-view-size");
+          if (
+            size.count <= pendingRowLimit &&
+            size.total_bytes <= pendingByteLimit &&
+            size.max_bytes <= maxStoredValueBytes
+          ) {
+            const rows = yield* query(
+              "pending-view",
+              sql`SELECT owner_thread_id, message_id, version, state, deadline_at_millis, record_json FROM ${relation("effect_agent_message_deliveries")} WHERE owner_thread_id = ${input.ownerThreadId} AND state NOT IN ('processed', 'refused') ORDER BY message_id LIMIT ${pendingRowLimit + 1}`,
+            );
+
+            const records = yield* Schema.decodeUnknownEffect(Schema.Array(Row))(rows).pipe(
+              Effect.mapError((cause) => corrupt("rows", cause)),
+              Effect.flatMap((rows) =>
+                Effect.forEach(rows, (row) =>
+                  decode(row).pipe(
+                    Effect.map((record) => ({ record, storedBytes: bytes(row.record_json) })),
+                  ),
+                ),
+              ),
+            );
+
+            retainPending(input.ownerThreadId, records);
+            complete = pending.get(input.ownerThreadId);
+          }
         }
         if (complete !== undefined) {
           const selected = complete
-            .filter((record) => {
+            .filter(({ record }) => {
               if (
                 input.after !== undefined &&
                 compareMessageIds(record.key.messageId, input.after) <= 0
@@ -514,9 +559,14 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
                   (record.status === "pending" || record.status === "parked"))
               );
             })
-            .sort((a, b) => compareMessageIds(a.key.messageId, b.key.messageId));
+            .sort((a, b) => compareMessageIds(a.record.key.messageId, b.record.key.messageId))
+            .slice(0, input.limit + 1);
 
-          const items = selected.slice(0, input.limit);
+          // A shared view must enforce the requesting adapter's bound, including lookahead.
+          if (selected.some((entry) => entry.storedBytes > maxStoredValueBytes))
+            return yield* corrupt("stored-value-bytes");
+
+          const items = selected.slice(0, input.limit).map((entry) => entry.record);
 
           return {
             items,

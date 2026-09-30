@@ -4559,6 +4559,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     ctx: AttemptAppendContext,
     submission: SubmissionSnapshot,
     tokenRef: Ref.Ref<OwnershipToken>,
+    renewAtRef: Ref.Ref<number>,
     records: ReadonlyArray<CanonicalRecordEnvelope>,
     canonical: Stream.Stream<CanonicalRecordEnvelope, ThreadStoreError | ThreadNotMaterialized>,
     canonicalThrough: CanonicalSequence,
@@ -7798,18 +7799,33 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       // Liveness only: the lease keeps the claim visible; correctness stays with the epoch fence.
       // OwnershipLost ends the race and interrupts the Run fiber cleanly.
       const renewal = halt(
-        Effect.repeat(
-          Effect.gen(function* () {
-            const ownershipToken = yield* Ref.get(tokenRef);
+        Effect.gen(function* () {
+          // Binding selection and preparation consume the acquired lease too. Carry the next
+          // deadline across model continuations; an overdue first renewal must run immediately.
+          const renewAt = yield* Ref.get(renewAtRef);
+          const now = yield* Clock.currentTimeMillis;
 
-            const renewal = yield* ledger.renewOwnership(
-              RenewOwnershipRequest.make({ submissionId, ownershipToken }),
-            );
+          yield* Effect.sleep(Math.max(0, renewAt - now));
+          yield* Effect.repeat(
+            Effect.gen(function* () {
+              const ownershipToken = yield* Ref.get(tokenRef);
+              const renewingAt = yield* Clock.currentTimeMillis;
 
-            yield* Ref.set(tokenRef, renewal.ownershipToken);
-          }).pipe(Effect.uninterruptible),
-          { schedule: Schedule.spaced(config.leaseRenewalInterval) },
-        ).pipe(Effect.delay(config.leaseRenewalInterval), Effect.andThen(Effect.never)),
+              const renewal = yield* ledger.renewOwnership(
+                RenewOwnershipRequest.make({ submissionId, ownershipToken }),
+              );
+
+              yield* Ref.set(tokenRef, renewal.ownershipToken);
+              yield* Ref.set(
+                renewAtRef,
+                renewingAt + Duration.toMillis(config.leaseRenewalInterval),
+              );
+            }).pipe(Effect.uninterruptible),
+            { schedule: Schedule.spaced(config.leaseRenewalInterval) },
+          );
+
+          return yield* Effect.never;
+        }),
       );
 
       const execution = Effect.raceFirst(consume, Effect.raceFirst(abortWatcher, renewal));
@@ -8031,6 +8047,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     threadId: ThreadId,
     claim: Claim,
     tokenRef: Ref.Ref<OwnershipToken>,
+    renewAtRef: Ref.Ref<number>,
     resumeAfterRetention: () => void,
     onHandoff: (nextSubmissionId: SubmissionId) => void,
     yieldAfter?: DateTime.Utc,
@@ -8467,6 +8484,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           ctx,
           submission,
           tokenRef,
+          renewAtRef,
           currentRecords,
           canonical,
           tail.tailSequence,
@@ -8647,6 +8665,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     threadId: ThreadId,
     handoff?: ClaimHandoff,
   ) {
+    const acquiringAt = yield* Clock.currentTimeMillis;
+
     const claimed = yield* ledger.claim(
       ClaimRequest.make({
         threadId,
@@ -8658,6 +8678,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     if (Option.isNone(claimed)) return Option.none();
     const claim = claimed.value;
     const tokenRef = yield* Ref.make(claim.ownershipToken);
+
+    const renewAtRef = yield* Ref.make(
+      acquiringAt + Duration.toMillis(config.leaseRenewalInterval),
+    );
 
     yield* Effect.addFinalizer(() =>
       Ref.get(tokenRef).pipe(
@@ -8681,7 +8705,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         message: "The submission adapter did not honor the requested handoff",
       });
 
-    return Option.some({ claim, tokenRef });
+    return Option.some({ claim, tokenRef, renewAtRef });
   }, Effect.uninterruptible);
 
   const processThreadHead = (
@@ -8701,7 +8725,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           const claimed = yield* acquireClaim(threadId, handoff);
 
           if (Option.isNone(claimed)) return Option.none();
-          const { claim, tokenRef } = claimed.value;
+          const { claim, tokenRef, renewAtRef } = claimed.value;
 
           const attributes = {
             threadId,
@@ -8781,6 +8805,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 attemptThreadId,
                 attemptClaim,
                 tokenRef,
+                renewAtRef,
                 () => {
                   resumeAfterRetention = true;
                 },

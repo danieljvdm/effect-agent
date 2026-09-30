@@ -20,7 +20,11 @@ import {
 } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
-import { DurableWorkerBinding, type ResolvedBinding } from "effect-agent/agent-registration";
+import {
+  CurrentBindingSelection,
+  DurableWorkerBinding,
+  type ResolvedBinding,
+} from "effect-agent/agent-registration";
 import { CompactionError, ContextCompactor } from "effect-agent/context-compactor";
 import { ModelCallContext } from "effect-agent/context-window";
 import {
@@ -44,6 +48,7 @@ import { projectRunJournal, turnIdForRun, turnResponseBatch } from "effect-agent
 import { RunContextPreparation, RunToolAuthorization } from "effect-agent/run-options";
 import {
   AbortCommand,
+  ClaimRequest,
   IdempotencyKey,
   LedgerError,
   OwnershipRenewal,
@@ -1159,6 +1164,74 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
       yield* Fiber.join(interrupt);
       expect((yield* snapshot(receipt)).ownership).toBeUndefined();
       expect((yield* runtime.submissionStatus(receipt))._tag).toBe("pending");
+    }),
+  );
+
+  // Regression: 405916b0 restarted the first-renewal interval after binding preparation.
+  // Cleanup and stale-owner tests do not cover a healthy owner made reclaimable by that delay.
+  it.effect("keeps its claim live after slow binding selection", () =>
+    Effect.gen(function* () {
+      const ledger = yield* SubmissionLedger;
+      const config = yield* DurableRuntimeConfig;
+      const selecting = yield* Deferred.make<void>();
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const selected = yield* Ref.make(false);
+
+      const agent = Agent.withModel(
+        definition,
+        makeModel(
+          Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
+            Stream.drain,
+            Stream.concat(Stream.fromEffect(Deferred.await(release)).pipe(Stream.drain)),
+            Stream.concat(Stream.fromIterable(finalParts)),
+          ),
+        ),
+      );
+
+      const binding = yield* DurableWorkerBinding.make(agent, digests);
+
+      const runtime = yield* makeRuntime([binding]).pipe(
+        Effect.provideService(DurableRuntimeConfig, {
+          ...config,
+          leaseRenewalInterval: Duration.seconds(10),
+        }),
+        Effect.provideService(CurrentBindingSelection, {
+          key: "slow-selection",
+          select: () =>
+            Effect.gen(function* () {
+              if (!(yield* Ref.getAndSet(selected, true))) {
+                yield* Deferred.succeed(selecting, undefined);
+                yield* Effect.sleep("25 seconds");
+              }
+
+              return definition;
+            }),
+        }),
+      );
+
+      const receipt = yield* runtime.submit(agent, "first", options("slow-selection", "first"));
+      const worker = yield* runtime.processThreadHead(receipt.threadId).pipe(Effect.forkChild);
+
+      yield* Deferred.await(selecting);
+      yield* TestClock.adjust("25 seconds");
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("6 seconds");
+
+      const competitor = yield* ledger.claim(
+        ClaimRequest.make({
+          threadId: receipt.threadId,
+          producerId: Schema.decodeSync(ProducerId)("competing-worker"),
+        }),
+      );
+
+      try {
+        expect(Option.isNone(competitor)).toBe(true);
+        yield* Deferred.succeed(release, undefined);
+        expect(Option.isSome(yield* Fiber.join(worker))).toBe(true);
+      } finally {
+        yield* Fiber.interrupt(worker);
+      }
     }),
   );
 

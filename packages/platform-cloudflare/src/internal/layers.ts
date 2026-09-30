@@ -952,7 +952,7 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                               }).pipe(
                                 Effect.provide(context),
                                 Effect.mapError(failure),
-                                Effect.as(Option.none<number>()),
+                                Effect.andThen(deadline),
                               ),
                       },
                       {

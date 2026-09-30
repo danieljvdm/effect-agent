@@ -153,6 +153,52 @@ const latch = () => {
 };
 
 describe("durable host publication", () => {
+  // Regression: 405916b0 cleared concurrent publication after the first eight-fact batch.
+  // A single-admission Run cannot expose start progress hidden behind queued readiness facts.
+  it("publishes start progress behind a queued backlog while the provider remains held", () =>
+    withThread(async (thread) => {
+      await submit(thread);
+      await quiesce(thread);
+      lifecycleBatches.delete(thread);
+      const entered = latch();
+      const release = latch();
+
+      modelRequestHolds.set(
+        thread,
+        Effect.sync(entered.resolve).pipe(Effect.andThen(Effect.promise(() => release.promise))),
+      );
+      for (let index = 0; index < 10; index++)
+        await runClient(
+          CloudflareThreadClient.use((client) =>
+            client.submit(
+              { definition: plannerDefinition },
+              { question: "backlog", ref: thread },
+              submitOptions(thread, `backlog-${index}`),
+            ),
+          ),
+          namespace,
+        );
+      const running = alarm(thread);
+
+      try {
+        await entered.promise;
+        await vi.waitFor(
+          () => {
+            const batches = lifecycleBatches.get(thread) ?? [];
+
+            expect(batches.flat().some((p) => p.fact._tag === "RunStarted")).toBe(true);
+            expect(batches.every((batch) => batch.length <= 8)).toBe(true);
+            expect(batches.flat().some((p) => p.fact._tag === "SubmissionSettled")).toBe(false);
+          },
+          { timeout: 2_000 },
+        );
+      } finally {
+        release.resolve();
+        await running;
+      }
+      await quiesce(thread);
+    }, true));
+
   // Regression: #713 deferred the entire start prefix until native execution settled.
   // Final-state publication checks cannot observe this gap while a provider is still running.
   it("publishes ordered start progress during a long native run, then its settlement", () =>
