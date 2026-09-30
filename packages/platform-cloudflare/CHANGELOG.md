@@ -1,5 +1,14 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.159
+
+### Patch Changes
+
+- Updated dependencies [[`4e78cc4`](https://github.com/danieljvdm/effect-agent/commit/4e78cc4c0011b9d60146397fa6e0143c70b8c9ca), [`04889a9`](https://github.com/danieljvdm/effect-agent/commit/04889a95338a4f786bdd7fdf45f23236e4dbb1ef), [`b6d171d`](https://github.com/danieljvdm/effect-agent/commit/b6d171de3d385960a062ce7f8e3415ffe22bbb93), [`8a839e6`](https://github.com/danieljvdm/effect-agent/commit/8a839e685444bff89ba236e0de316adf40ee010f), [`976f337`](https://github.com/danieljvdm/effect-agent/commit/976f3371a63b7a9f1a92b26f88371350042735b3)]:
+  - effect-agent@0.1.0-beta.159
+  - @effect-agent/storage-cloudflare@0.1.0-beta.159
+  - @effect-agent/storage-sql@0.1.0-beta.159
+
 ## 0.1.0-beta.158
 
 ### Patch Changes
