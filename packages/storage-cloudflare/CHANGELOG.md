@@ -1,5 +1,15 @@
 # @effect-agent/storage-cloudflare
 
+## 0.1.0-beta.156
+
+### Patch Changes
+
+- [#713](https://github.com/danieljvdm/effect-agent/pull/713) [`d2d83a2`](https://github.com/danieljvdm/effect-agent/commit/d2d83a2fa815fe11224421e64135145ed58e7bca) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reduce Durable Object SQLite work with shared write-through reads and asynchronous lifecycle batches after native execution, preserving durable receipts across eviction. Use the SQL Memory Layer's `SqlMemoryBatchWriter.changeMany` to commit up to 128 ordered commands atomically and combine their writes.
+
+- Updated dependencies [[`d2d83a2`](https://github.com/danieljvdm/effect-agent/commit/d2d83a2fa815fe11224421e64135145ed58e7bca)]:
+  - effect-agent@0.1.0-beta.156
+  - @effect-agent/storage-sql@0.1.0-beta.156
+
 ## 0.1.0-beta.155
 
 ### Patch Changes

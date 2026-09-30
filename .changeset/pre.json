@@ -249,6 +249,7 @@
     "quiet-recovery-notices",
     "quiet-retained-prompts",
     "quiet-runs-own-scope",
+    "quiet-runtime-sqlite",
     "quiet-start-admission",
     "quiet-stream-tool-bounds",
     "quiet-workers-recover",

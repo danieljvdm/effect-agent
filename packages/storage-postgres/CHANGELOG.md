@@ -1,5 +1,13 @@
 # @effect-agent/storage-postgres
 
+## 0.1.0-beta.156
+
+### Patch Changes
+
+- Updated dependencies [[`d2d83a2`](https://github.com/danieljvdm/effect-agent/commit/d2d83a2fa815fe11224421e64135145ed58e7bca)]:
+  - effect-agent@0.1.0-beta.156
+  - @effect-agent/storage-sql@0.1.0-beta.156
+
 ## 0.1.0-beta.155
 
 ### Patch Changes
