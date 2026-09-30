@@ -1,5 +1,23 @@
 # effect-agent
 
+## 0.1.0-beta.159
+
+### Minor Changes
+
+- [#719](https://github.com/danieljvdm/effect-agent/pull/719) [`976f337`](https://github.com/danieljvdm/effect-agent/commit/976f3371a63b7a9f1a92b26f88371350042735b3) Thanks [@Makisuo](https://github.com/Makisuo)! - Add `AgentPolicy.modelRetries` to retry transient model failures before content streams, honoring provider retry delays and requiring readonly hosted tools.
+
+### Patch Changes
+
+- [#726](https://github.com/danieljvdm/effect-agent/pull/726) [`4e78cc4`](https://github.com/danieljvdm/effect-agent/commit/4e78cc4c0011b9d60146397fa6e0143c70b8c9ca) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Avoid an extra history traversal when starting a durable Attempt on a compacted Thread while preserving canonical compaction and unresolved-tool validation.
+
+- [#725](https://github.com/danieljvdm/effect-agent/pull/725) [`04889a9`](https://github.com/danieljvdm/effect-agent/commit/04889a95338a4f786bdd7fdf45f23236e4dbb1ef) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Consolidate runtime guidance and clarify tool argument failures, resource cleanup, and deployment continuity.
+
+- [#723](https://github.com/danieljvdm/effect-agent/pull/723) [`b6d171d`](https://github.com/danieljvdm/effect-agent/commit/b6d171de3d385960a062ce7f8e3415ffe22bbb93) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Define the runtime's turn, ownership, recovery, and Cloudflare wake rules in one authoritative guide. Clarify joined-input restarts, notification settlement, and platform-specific limits.
+
+- [#724](https://github.com/danieljvdm/effect-agent/pull/724) [`8a839e6`](https://github.com/danieljvdm/effect-agent/commit/8a839e685444bff89ba236e0de316adf40ee010f) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Remove obsolete runtime aliases, frozen context tools, and unused storage failpoint controls. Use indexed canonical reads for selected Thread records instead of decoding a cached full history.
+
+  BEHAVIOR CHANGE: Use `Subagent.make`, `ContextTools.toolkit` with `ContextTools.layer`, and the registered `runResolvedWorker` in place of `Subagent.define`, legacy context tools, and `runWorker`; classify delegation with `DelegationTool` metadata instead of name helpers. Replace the removed `DoStorageFailpointTestControl` and SQLite testing module with the corresponding storage failpoint service Layers.
+
 ## 0.1.0-beta.158
 
 ### Patch Changes
