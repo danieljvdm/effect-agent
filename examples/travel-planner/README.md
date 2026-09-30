@@ -44,8 +44,8 @@ handler starts; approval resumes that retained call and completion notifies the 
 An approval-waiting card stops polling until a decision, a new task or a remount. Each scout
 attempt has a ten-minute execution allowance; paused time does not consume it. The card shows
 the retained worker expiry. After that deadline, decline and ask for a fresh research pass.
-Waiting currently retains native
-host maintenance; the card stopping its reads does not establish that the host has no alarms.
+While the worker waits only for approval, the native host leaves its alarm unarmed;
+the approval decision wakes the retained work.
 
 The current planner and scout keep stable agent IDs and select one current binding per ID.
 Retired planner v2–v15 and scout v1–v3 registrations and their custom report inputs are removed.
