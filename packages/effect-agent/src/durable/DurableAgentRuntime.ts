@@ -1670,7 +1670,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     submissionId: SubmissionId,
   ): boolean => {
     const runId = runIdForSubmission(submissionId);
-    const certificate = makeThreadContextCertificate();
+    const certificate = makeThreadContextCertificate(runId.length);
 
     for (const entry of records) {
       const { payload, recordId } = entry.record;
@@ -1727,7 +1727,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     if (
       state.context !== undefined &&
       submissionId !== undefined &&
-      !submissionId.includes(":") &&
+      submissionId.length === state.submissionId.length &&
       (journalOwner === undefined || journalOwner === runIdForSubmission(submissionId))
     ) {
       const runId = runIdForSubmission(submissionId);
@@ -1890,7 +1890,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
     if (projection === undefined) {
       const source = canonicalRange(ctx.threadId, tail.sequence);
-      const certificate = makeThreadContextCertificate();
+
+      const certificate = makeThreadContextCertificate(
+        runIdForSubmission(submission.submissionId).length,
+      );
+
       const metadata = makeJournalMetadata(undefined);
       const retained: Array<CanonicalRecordEnvelope> = [];
 
