@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
-import { Config, Console, Effect, FileSystem, Schema, Stream } from "effect";
+import { Config, Console, Effect, FileSystem, Schedule, Schema, Stream } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ChildProcess } from "effect/unstable/process";
 
@@ -248,20 +248,22 @@ export const verifyEvidence = Effect.fn("releaseCi.verifyEvidence")(function* (
       run.head_sha === base &&
       run.status === "completed" &&
       run.conclusion === "success" &&
-      run.run_attempt > 0 &&
-      jobs.total_count === jobs.jobs.length &&
-      jobs.total_count <= 100,
+      run.run_attempt > 0,
     "No complete ordinary CI run for the exact base and workflow",
   );
-  yield* verifyJobs(base, run.id, jobs, sourceGates);
+  yield* verifyJobs(base, run, jobs, sourceGates);
 });
 
 const verifyJobs = Effect.fn("releaseCi.verifyJobs")(function* (
   base: string,
-  runId: number,
+  run: typeof Run.Type,
   jobs: typeof Jobs.Type,
   gates: ReadonlyArray<ReadonlyArray<string>>,
 ) {
+  yield* requireProof(
+    jobs.total_count === jobs.jobs.length && jobs.total_count <= 100,
+    `CI ${run.id}, attempt ${run.run_attempt} at ${base}: incomplete jobs listing (total_count=${jobs.total_count}, received=${jobs.jobs.length}, limit=100)`,
+  );
   for (const [name, command] of gates) {
     const matches = jobs.jobs.filter((job) => job.name === name);
     const job = matches[0];
@@ -269,14 +271,22 @@ const verifyJobs = Effect.fn("releaseCi.verifyJobs")(function* (
 
     yield* requireProof(
       matches.length === 1 &&
-        job?.run_id === runId &&
+        job?.run_id === run.id &&
         job.head_sha === base &&
         job.status === "completed" &&
         job.conclusion === "success" &&
         steps.length === 1 &&
         steps[0]?.status === "completed" &&
         steps[0].conclusion === "success",
-      "Missing or unsuccessful ordinary source gate",
+      `CI ${run.id}, attempt ${run.run_attempt} gate "${name}" / "${command}" at ${base}: expected one completed successful job and step; observed ${JSON.stringify(
+        matches.map((job) => ({
+          runId: job.run_id,
+          headSha: job.head_sha,
+          status: job.status,
+          conclusion: job.conclusion,
+          steps: job.steps.filter((step) => step.name === command),
+        })),
+      )}`,
     );
   }
 });
@@ -452,9 +462,7 @@ export const verifyBuildEvidence = Effect.fn("releaseCi.verifyBuildEvidence")(fu
       run.head_sha === sha &&
       run.status === "completed" &&
       run.conclusion === "success" &&
-      run.run_attempt > 0 &&
-      jobs.total_count === jobs.jobs.length &&
-      jobs.total_count <= 100,
+      run.run_attempt > 0,
     "No successful exact-input build run",
   );
 
@@ -469,7 +477,7 @@ export const verifyBuildEvidence = Effect.fn("releaseCi.verifyBuildEvidence")(fu
       : []),
   ];
 
-  yield* verifyJobs(sha, run.id, jobs, gates);
+  yield* verifyJobs(sha, run, jobs, gates);
 });
 
 /** The successful workflow_run event selects a run; later main commits may not change its release line. */
@@ -488,10 +496,22 @@ export const verifyMainBuild = Effect.fn("releaseCi.verifyMainBuild")(function* 
     "Workflow identity",
   );
   const run = yield* get(`actions/runs/${runId}`, Run);
-  const jobs = yield* get(`actions/runs/${runId}/attempts/${attempt}/jobs?per_page=100`, Jobs);
 
   yield* requireProof(run.id === runId && run.run_attempt === attempt, "CI attempt changed");
-  yield* verifyBuildEvidence(sha, workflow.id, run, jobs, "push");
+  // A completed run can temporarily expose incomplete job/step results. Each
+  // retry validates one whole fresh listing; never combine gates across reads.
+  // The unchanged run/attempt is rechecked below before accepting any evidence.
+  yield* Effect.gen(function* () {
+    const jobs = yield* get(`actions/runs/${runId}/attempts/${attempt}/jobs?per_page=100`, Jobs);
+
+    yield* verifyBuildEvidence(sha, workflow.id, run, jobs, "push");
+  }).pipe(
+    Effect.retry({
+      times: 2,
+      schedule: Schedule.spaced("5 seconds"),
+      while: (error) => error._tag === "ProofUnavailable",
+    }),
+  );
   yield* requireProof(
     JSON.stringify(yield* get(`actions/runs/${runId}`, Run)) === JSON.stringify(run),
     "CI attempt changed during artifact verification",
@@ -732,9 +752,11 @@ export const proveGatedRelease = Effect.fn("releaseCi.proveGatedRelease")(functi
   );
 
   yield* verifyBuildEvidence(pull.head.sha, workflow.id, run, jobs, "pull_request");
-  yield* verifyJobs(pull.head.sha, run.id, jobs, [["ready", "Verify release gates passed"]]).pipe(
-    Effect.mapError(() =>
-      ProofUnavailable.make({ message: "The version PR has no passing release gates" }),
+  yield* verifyJobs(pull.head.sha, run, jobs, [["ready", "Verify release gates passed"]]).pipe(
+    Effect.mapError((error) =>
+      ProofUnavailable.make({
+        message: `The version PR has no passing release gates: ${error.message}`,
+      }),
     ),
   );
 });

@@ -243,6 +243,143 @@ it.effect("checks packed identity and every export for both supported npm output
   }),
 );
 
+// Regression: https://github.com/danieljvdm/effect-agent/actions/runs/36727368970
+// Attempts 1/2 failed with an unidentified gate; attempt 3 passed the same CI evidence.
+it.effect("refetches exact-attempt jobs without combining incomplete gate evidence", () =>
+  Effect.gen(function* () {
+    const sha = "8a2b8a698495eb2d1230f0b61b3dcca2c951f910";
+    const mainRun = { ...run, id: 36727102746, head_sha: sha };
+
+    const complete: typeof Jobs.Type = {
+      total_count: 1,
+      jobs: [
+        {
+          name: "Build",
+          run_id: mainRun.id,
+          head_sha: sha,
+          status: "completed",
+          conclusion: "success",
+          steps: [
+            {
+              name: "Build packages, examples, and docs",
+              status: "completed",
+              conclusion: "skipped",
+            },
+            {
+              name: "Validate versioned release packages",
+              status: "completed",
+              conclusion: "success",
+            },
+            { name: "Upload release build", status: "completed", conclusion: "success" },
+          ],
+        },
+      ],
+    };
+
+    const incomplete = (command: string): typeof Jobs.Type => ({
+      ...complete,
+      jobs: complete.jobs.map((job) => ({
+        ...job,
+        steps: job.steps.map((step) =>
+          step.name === command ? { ...step, status: "in_progress", conclusion: null } : step,
+        ),
+      })),
+    });
+
+    let scenario = "transient";
+    let listings = 0;
+    let runReads = 0;
+
+    const client = HttpClient.make((request, url) => {
+      let body: unknown;
+
+      switch (url.pathname) {
+        case `/repos/${repository}/actions/workflows/ci.yml`:
+          body = { id: run.workflow_id, path: run.path, state: "active" };
+          break;
+        case `/repos/${repository}/actions/runs/${mainRun.id}`:
+          runReads += 1;
+          body = {
+            ...mainRun,
+            run_attempt: scenario === "changed-attempt" && runReads > 1 ? 2 : 1,
+          };
+          break;
+        case `/repos/${repository}/actions/runs/${mainRun.id}/attempts/1/jobs`:
+          listings += 1;
+          body =
+            scenario === "persistent"
+              ? incomplete(
+                  listings % 2 === 1
+                    ? "Upload release build"
+                    : "Validate versioned release packages",
+                )
+              : listings === 1
+                ? incomplete("Upload release build")
+                : complete;
+          break;
+        case `/repos/${repository}/git/ref/heads/main`:
+          body = { object: { sha } };
+          break;
+        default:
+          return Effect.die(`Unexpected API request: ${request.method} ${url.pathname}`);
+      }
+
+      return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(body)));
+    });
+
+    const verify = verifyMainBuild("/unused", sha, mainRun.id, 1, "test-secret-token").pipe(
+      Effect.provideService(HttpClient.HttpClient, client),
+      Effect.result,
+    );
+
+    // Web response body reads settle on the native event loop before the
+    // retry timer is registered with TestClock.
+    const advanceRetries = Effect.gen(function* () {
+      for (let retry = 0; retry < 2; retry += 1) {
+        yield* TestClock.withLive(Effect.sleep("1 millis"));
+        yield* TestClock.adjust("5 seconds");
+      }
+    });
+
+    const recovered = yield* verify.pipe(Effect.forkChild);
+
+    yield* advanceRetries;
+    expect(yield* Fiber.join(recovered)).toMatchObject({ _tag: "Success" });
+    expect(listings).toBe(2);
+    scenario = "persistent";
+    listings = 0;
+    runReads = 0;
+    const rejected = yield* verify.pipe(Effect.forkChild);
+
+    yield* advanceRetries;
+    const failure = yield* Fiber.join(rejected);
+
+    expect(listings).toBe(3);
+    expect(failure).toMatchObject({
+      _tag: "Failure",
+      failure: {
+        _tag: "ProofUnavailable",
+        message: expect.stringContaining('gate "Build" / "Upload release build"'),
+      },
+    });
+    expect(JSON.stringify(failure)).toContain(sha);
+    expect(JSON.stringify(failure)).toContain(String(mainRun.id));
+    expect(JSON.stringify(failure)).toContain("in_progress");
+    expect(JSON.stringify(failure)).toContain("null");
+    expect(JSON.stringify(failure)).not.toContain("test-secret-token");
+    scenario = "changed-attempt";
+    listings = 0;
+    runReads = 0;
+    const changed = yield* verify.pipe(Effect.forkChild);
+
+    yield* advanceRetries;
+    expect(yield* Fiber.join(changed)).toMatchObject({
+      _tag: "Failure",
+      failure: { message: "CI attempt changed during artifact verification" },
+    });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
 layer(NodeServices.layer)((it) => {
   it.effect(
     "wires Git objects and read-only attempt-specific API evidence without checking out candidate code",

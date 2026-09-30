@@ -622,6 +622,9 @@ restored build under its own identity after package validation. Documentation an
 are not transferred, but their successful exact-tree build remains required evidence.
 
 Publication accepts only the successful exact revision and CI attempt selected by `workflow_run`.
+It re-fetches an unavailable or unsuccessful jobs listing at most twice, five seconds apart;
+each read must independently prove every required gate for that same run and attempt. A final
+job-proof error names the gate, expected run and revision, and observed job/step states.
 It rechecks that evidence before preparation and after the live gate. Later `main` commits can
 advance during the gate if the tested revision remains an ancestor and public package manifests
 and prerelease configuration have not changed; another version release blocks publication.
