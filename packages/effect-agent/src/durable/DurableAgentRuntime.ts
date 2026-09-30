@@ -159,8 +159,10 @@ import {
   JournalCheckpointSeed,
   RecoveryCheckpointState,
   RecoveryCheckpointContents,
+  ThreadContextCheckpoint,
   RECOVERY_ENGINE_VERSION,
   checkpointSuffixCompatible,
+  makeThreadContextCertificate,
 } from "./internal/journal-checkpoint.ts";
 import { makeJournalMetadata, type JournalMetadata } from "./internal/journal-metadata.ts";
 import { makeMessagingRuntime } from "./internal/messaging-host.ts";
@@ -359,6 +361,8 @@ import {
   LoadCheckpointRequest,
   ThreadCheckpoint,
   SaveRecoveryCheckpointRequest,
+  getRecord,
+  getRunInput,
 } from "./ThreadStore.ts";
 import { PreparedToolCallEvidence, ToolReconciler } from "./ToolReconciler.ts";
 import { WakeScheduler } from "./WakeScheduler.ts";
@@ -1277,6 +1281,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         readonly through: CanonicalSequence;
         readonly runId: RunId;
         readonly seedThrough: CanonicalSequence | undefined;
+        readonly contextThrough: CanonicalSequence | undefined;
         readonly journal: RunJournalProjection;
         readonly boundaries: ReadonlyArray<JournalBoundary>;
       }
@@ -1563,54 +1568,41 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     );
   });
 
-  /** A checkpoint is useful only for its explicitly retained submissions and exact definitions. */
-  const recoveryView = Effect.fn("DurableAgentRuntime.recoveryView")(function* (
+  const loadRecoveryCheckpoint = Effect.fn("DurableAgentRuntime.loadRecoveryCheckpoint")(function* (
     threadId: ThreadId,
     throughSequence: CanonicalSequence,
-    submissionIds: ReadonlyArray<SubmissionId>,
-    journalOwner?: RunId,
-  ): Effect.fn.Return<
-    {
-      readonly canonical: Stream.Stream<
-        CanonicalRecordEnvelope,
-        ThreadStoreError | ThreadNotMaterialized
-      >;
-      readonly seed?: JournalCheckpointSeed;
-    },
-    ThreadStoreError | ThreadNotMaterialized
-  > {
-    const full = { canonical: canonicalRange(threadId, throughSequence) };
-
-    if (store.recoveryCheckpoints === undefined) return full;
+  ) {
+    if (store.recoveryCheckpoints === undefined) return Option.none();
 
     const loaded = yield* store.recoveryCheckpoints
       .load(LoadCheckpointRequest.make({ threadId, atOrBeforeSequence: throughSequence }))
       .pipe(Effect.catchTag("CheckpointRejected", () => Effect.succeed(Option.none())));
 
-    if (Option.isNone(loaded)) return full;
+    if (Option.isNone(loaded)) return Option.none();
     const checkpoint = loaded.value;
 
     if (
       checkpoint.engineVersion !== RECOVERY_ENGINE_VERSION ||
       checkpoint.threadId !== threadId ||
-      checkpoint.throughSequence > throughSequence ||
-      throughSequence - checkpoint.throughSequence > 4_096
+      checkpoint.throughSequence > throughSequence
     )
-      return full;
+      return Option.none();
 
     const decoded = yield* Schema.decodeUnknownEffect(RecoveryCheckpointContents)(
       checkpoint.state,
     ).pipe(Effect.option);
 
-    if (Option.isNone(decoded)) return full;
+    if (Option.isNone(decoded)) return Option.none();
     const { state, digest } = decoded.value;
 
     if (
-      !submissionIds.every((id) => state.submissionIds.includes(id)) ||
-      state.seed.runId !== runIdForSubmission(state.submissionId) ||
-      (journalOwner !== undefined && state.seed.runId !== journalOwner)
+      (state.seed === undefined && state.context === undefined) ||
+      state.records.some(
+        (record) => record.threadId !== threadId || record.sequence > checkpoint.throughSequence,
+      ) ||
+      (state.context !== undefined && state.context.throughSequence !== checkpoint.throughSequence)
     )
-      return full;
+      return Option.none();
 
     const encoded = yield* Schema.encodeEffect(RecoveryCheckpointState)(state).pipe(
       Effect.mapError((cause) =>
@@ -1632,7 +1624,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       ),
     );
 
-    if (digest !== actualDigest) return full;
+    if (digest !== actualDigest) return Option.none();
 
     const owner = yield* ledger
       .lookup(SubmissionLookupById.make({ submissionId: state.submissionId }))
@@ -1653,6 +1645,130 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       owner.value.agentDigests.model !== checkpoint.modelDigest ||
       owner.value.agentDigests.tools !== checkpoint.toolDigest
     )
+      return Option.none();
+
+    return Option.some({ checkpoint, state });
+  });
+
+  const retainThreadIdentity = ({ record }: CanonicalRecordEnvelope): boolean =>
+    record.payload._tag === "ThreadCreated" ||
+    record.payload._tag === "SubagentLineageRecorded" ||
+    record.payload._tag === "WorkerOriginRecorded" ||
+    record.recordId.startsWith("subagent-lineage:");
+
+  /** Late/foreign evidence and new compactions require the original canonical proof. */
+  const contextSuffixCompatible = (
+    records: ReadonlyArray<CanonicalRecordEnvelope>,
+    submissionId: SubmissionId,
+  ): boolean => {
+    const runId = runIdForSubmission(submissionId);
+    const certificate = makeThreadContextCertificate();
+
+    for (const entry of records) {
+      const { payload, recordId } = entry.record;
+
+      if (payload._tag === "CompactionCreated" || retainThreadIdentity(entry)) return false;
+      if ("runId" in payload && payload.runId !== undefined) {
+        if (payload.runId !== runId) return false;
+      } else if (payload._tag === "AbortRequested") {
+        if (
+          payload.submissionId !== submissionId ||
+          recordId !== submissionAbortRecordId(submissionId)
+        )
+          return false;
+      } else if (payload._tag === "SubmissionSettled") {
+        if (
+          payload.submissionId !== submissionId ||
+          recordId !== submissionSettlementRecordId(submissionId)
+        )
+          return false;
+      } else return false;
+      certificate.add(entry);
+    }
+
+    return certificate.isValid();
+  };
+
+  /** Run seeds retain their owner; certified Thread context serves only provably later Runs. */
+  const recoveryView = Effect.fn("DurableAgentRuntime.recoveryView")(function* (
+    threadId: ThreadId,
+    throughSequence: CanonicalSequence,
+    submissionIds: ReadonlyArray<SubmissionId>,
+    journalOwner?: RunId,
+  ): Effect.fn.Return<
+    {
+      readonly canonical: Stream.Stream<
+        CanonicalRecordEnvelope,
+        ThreadStoreError | ThreadNotMaterialized
+      >;
+      readonly seed?: JournalCheckpointSeed;
+      readonly context?: ThreadContextCheckpoint;
+    },
+    ThreadStoreError | ThreadNotMaterialized
+  > {
+    const full = { canonical: canonicalRange(threadId, throughSequence) };
+    const loaded = yield* loadRecoveryCheckpoint(threadId, throughSequence);
+
+    if (Option.isNone(loaded)) return full;
+    const { checkpoint, state } = loaded.value;
+
+    if (throughSequence - checkpoint.throughSequence > 4_096) return full;
+
+    const submissionId = submissionIds.length === 1 ? submissionIds[0] : undefined;
+
+    if (
+      state.context !== undefined &&
+      submissionId !== undefined &&
+      !submissionId.includes(":") &&
+      (journalOwner === undefined || journalOwner === runIdForSubmission(submissionId))
+    ) {
+      const runId = runIdForSubmission(submissionId);
+
+      const input = yield* getRunInput({ threadId, runId }).pipe(
+        Effect.provideService(ThreadStore, store),
+      );
+
+      const controls = yield* Effect.forEach(
+        [
+          submissionInputRecordId(submissionId),
+          submissionAbortRecordId(submissionId),
+          submissionSettlementRecordId(submissionId),
+          runStartedRecordId(runId),
+          runCompletedRecordId(runId),
+        ],
+        (recordId) =>
+          getRecord({ threadId, recordId }).pipe(Effect.provideService(ThreadStore, store)),
+      );
+
+      const fresh = [input, ...controls].every(
+        (record) =>
+          Option.isNone(record) ||
+          (record.value.sequence > checkpoint.throughSequence &&
+            record.value.sequence <= throughSequence),
+      );
+
+      if (fresh) {
+        const suffix = yield* Stream.runCollect(
+          canonicalRange(threadId, throughSequence, checkpoint.throughSequence),
+        );
+
+        if (contextSuffixCompatible(suffix, submissionId))
+          return {
+            canonical: Stream.fromIterable([
+              ...state.records.filter(retainThreadIdentity),
+              ...suffix,
+            ]),
+            context: state.context,
+          };
+      }
+    }
+
+    if (
+      state.seed === undefined ||
+      !submissionIds.every((id) => state.submissionIds.includes(id)) ||
+      state.seed.runId !== runIdForSubmission(state.submissionId) ||
+      (journalOwner !== undefined && state.seed.runId !== journalOwner)
+    )
       return full;
     const replacement = state.seed.compaction;
 
@@ -1663,9 +1779,6 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       replacement.record.payload.kind === "clear-tool-results" ||
       replacement.record.payload.coversThrough < state.seed.throughSequence ||
       replacement.record.payload.coversThrough >= replacement.sequence ||
-      state.records.some(
-        (record) => record.threadId !== threadId || record.sequence > checkpoint.throughSequence,
-      ) ||
       !state.records.some(
         (record) =>
           record.sequence === replacement.sequence &&
@@ -1681,6 +1794,165 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     if (!checkpointSuffixCompatible(state.seed, suffix, state.records)) return full;
 
     return { canonical: Stream.fromIterable([...state.records, ...suffix]), seed: state.seed };
+  });
+
+  const persistRecoveryCheckpoint = Effect.fn("DurableAgentRuntime.persistRecoveryCheckpoint")(
+    function* (
+      ctx: AttemptAppendContext,
+      submission: SubmissionSnapshot,
+      state: RecoveryCheckpointState,
+      tail: { readonly sequence: CanonicalSequence; readonly digest: Digest },
+      createdAt: DateTime.Utc,
+    ): Effect.fn.Return<void, DurableWorkerFailure> {
+      if (store.recoveryCheckpoints === undefined) return;
+
+      const encoded = yield* Schema.encodeEffect(RecoveryCheckpointState)(state).pipe(
+        Effect.option,
+      );
+
+      if (Option.isNone(encoded)) return;
+      const digest = yield* withCrypto(digestJson(encoded.value));
+
+      // Serialization removes shared in-memory references before applying persisted JSON bounds.
+      const contents = yield* Schema.encodeEffect(
+        Schema.fromJsonString(RecoveryCheckpointContents),
+      )(RecoveryCheckpointContents.make({ state, digest })).pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(PersistedJson))),
+        Effect.option,
+      );
+
+      if (Option.isNone(contents)) return;
+
+      const checkpoint = ThreadCheckpoint.make({
+        schemaVersion: 1,
+        threadId: ctx.threadId,
+        throughSequence: tail.sequence,
+        tailDigest: tail.digest,
+        engineVersion: RECOVERY_ENGINE_VERSION,
+        agentDefinitionDigest: submission.agentDigests.agent,
+        modelDigest: submission.agentDigests.model,
+        toolDigest: submission.agentDigests.tools,
+        state: contents.value,
+        createdAt,
+      });
+
+      yield* hit("checkpoint:before-save");
+      yield* store.recoveryCheckpoints
+        .save(SaveRecoveryCheckpointRequest.make({ checkpoint, producerEpoch: ctx.producerEpoch }))
+        .pipe(Effect.catchTag("CheckpointRejected", () => Effect.void));
+      yield* hit("checkpoint:after-save");
+    },
+  );
+
+  /** Refresh before settlement finalization, so completed processing includes the cache's cost. */
+  const saveThreadContext = Effect.fn("DurableAgentRuntime.saveThreadContext")(function* (
+    ctx: AttemptAppendContext,
+    submission: SubmissionSnapshot,
+    priorContext?: ThreadContextCheckpoint,
+  ): Effect.fn.Return<void, DurableWorkerFailure> {
+    if (store.recoveryCheckpoints === undefined) return;
+    const tail = yield* Ref.get(ctx.tailRef);
+    const loaded = yield* loadRecoveryCheckpoint(ctx.threadId, tail.sequence);
+
+    // Start certification only after compaction has produced an eligible runtime checkpoint.
+    if (Option.isNone(loaded)) return;
+    const previous = loaded.value;
+
+    let identities: ReadonlyArray<CanonicalRecordEnvelope> =
+      previous.state.records.filter(retainThreadIdentity);
+
+    let projection: RunJournalProjection | undefined;
+
+    if (priorContext !== undefined && tail.sequence - priorContext.throughSequence <= 4_096) {
+      const suffix = yield* Stream.runCollect(
+        canonicalRange(ctx.threadId, tail.sequence, priorContext.throughSequence),
+      );
+
+      if (contextSuffixCompatible(suffix, submission.submissionId)) {
+        projection = yield* projectRunJournalStream(
+          Stream.fromIterable(suffix),
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          priorContext,
+        ).pipe(Effect.catchTag("RunJournalError", () => Effect.succeed(undefined)));
+      }
+    }
+
+    if (projection === undefined) {
+      const source = canonicalRange(ctx.threadId, tail.sequence);
+      const certificate = makeThreadContextCertificate();
+      const metadata = makeJournalMetadata(undefined);
+      const retained: Array<CanonicalRecordEnvelope> = [];
+
+      yield* Stream.runForEach(source, (entry) =>
+        Effect.sync(() => {
+          certificate.add(entry);
+          metadata.add(entry);
+          if (retainThreadIdentity(entry) && retained.length <= 4_096) retained.push(entry);
+        }),
+      );
+      if (!certificate.isValid() || retained.length > 4_096) return;
+      identities = retained;
+      projection = yield* projectRunJournalStream(
+        source,
+        undefined,
+        undefined,
+        undefined,
+        metadata.snapshot(),
+      ).pipe(Effect.catchTag("RunJournalError", () => Effect.succeed(undefined)));
+    }
+
+    if (projection === undefined) return;
+
+    const prompt = yield* Schema.encodeEffect(Prompt.Prompt)(projection.prompt).pipe(
+      Effect.flatMap(decodePersisted),
+      Effect.option,
+    );
+
+    if (Option.isNone(prompt)) return;
+    let seed: JournalCheckpointSeed | undefined;
+    let records = identities;
+    let submissionIds: ReadonlyArray<SubmissionId> = [submission.submissionId];
+
+    if (
+      previous.state.submissionId === submission.submissionId &&
+      previous.state.seed !== undefined &&
+      tail.sequence - previous.checkpoint.throughSequence + previous.state.records.length <= 4_096
+    ) {
+      const suffix = yield* Stream.runCollect(
+        canonicalRange(ctx.threadId, tail.sequence, previous.checkpoint.throughSequence),
+      );
+
+      if (checkpointSuffixCompatible(previous.state.seed, suffix, previous.state.records)) {
+        seed = previous.state.seed;
+        records = [...previous.state.records, ...suffix];
+        submissionIds = previous.state.submissionIds;
+      }
+    }
+
+    yield* persistRecoveryCheckpoint(
+      ctx,
+      submission,
+      RecoveryCheckpointState.make({
+        schemaVersion: 2,
+        policyAccountingVersion: 1,
+        submissionId: submission.submissionId,
+        submissionIds,
+        ...(seed === undefined ? {} : { seed }),
+        context: ThreadContextCheckpoint.make({
+          throughSequence: tail.sequence,
+          prompt: prompt.value,
+          ...(projection.contextWindowId === undefined
+            ? {}
+            : { contextWindowId: projection.contextWindowId }),
+        }),
+        records,
+      }),
+      tail,
+      yield* DateTime.now,
+    );
   });
 
   const readAllTolerant = Effect.fn("DurableAgentRuntime.readAllTolerant")(
@@ -3353,6 +3625,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     tokenRef: Ref.Ref<OwnershipToken>,
     outcome: AttemptOutcome,
     includeRunId: boolean,
+    afterCanonical?: Effect.Effect<void, DurableWorkerFailure>,
   ): Effect.fn.Return<Settlement, DurableWorkerFailure> {
     const submissionId = submission.submissionId;
     const settlementId = submissionSettlementId(submissionId);
@@ -3420,6 +3693,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     );
     yield* hit("terminalize:after-canonical-append");
     yield* notifyParentOfChildSettlement(submission, reserved.record);
+    if (afterCanonical !== undefined) yield* afterCanonical;
 
     const settlement = yield* ledger.finalizeSettlement(
       SettlementFinalization.make({ submissionId, settlementId }),
@@ -4634,6 +4908,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     canonical: Stream.Stream<CanonicalRecordEnvelope, ThreadStoreError | ThreadNotMaterialized>,
     canonicalThrough: CanonicalSequence,
     journalSeed: JournalCheckpointSeed | undefined,
+    priorContext: ThreadContextCheckpoint | undefined,
     journalMetadata: JournalMetadata | undefined,
     lineage: AttemptLineage,
     approvalDecisions: ReadonlyArray<ApprovalDecisionIntent>,
@@ -4654,7 +4929,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         cached.threadId === ctx.threadId &&
         cached.through === canonicalThrough &&
         cached.runId === runId &&
-        cached.seedThrough === journalSeed?.throughSequence
+        cached.seedThrough === journalSeed?.throughSequence &&
+        cached.contextThrough === priorContext?.throughSequence
           ? (boundaries.push(...cached.boundaries), cached.journal)
           : yield* projectRunJournalStream(
               canonical,
@@ -4662,6 +4938,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               (boundary) => boundaries.push(boundary),
               journalSeed,
               journalMetadata,
+              priorContext,
             );
 
       // Do not retain the metadata snapshot across model or Tool waits, including cache hits.
@@ -4673,6 +4950,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         through: canonicalThrough,
         runId,
         seedThrough: journalSeed?.throughSequence,
+        contextThrough: priorContext?.throughSequence,
         journal,
         boundaries,
       };
@@ -4682,10 +4960,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           if (store.recoveryCheckpoints === undefined) return;
           const tail = yield* Ref.get(ctx.tailRef);
 
-          const source = Stream.concat(
-            canonical,
-            canonicalRange(ctx.threadId, tail.sequence, canonicalThrough),
-          );
+          const source =
+            priorContext === undefined
+              ? Stream.concat(
+                  canonical,
+                  canonicalRange(ctx.threadId, tail.sequence, canonicalThrough),
+                )
+              : canonicalRange(ctx.threadId, tail.sequence);
 
           let compaction: CanonicalRecordEnvelope | undefined;
           let latestResponse: CanonicalSequence | undefined;
@@ -4802,7 +5083,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           const validated = yield* Effect.try({
             try: () =>
               RecoveryCheckpointState.make({
-                schemaVersion: 1,
+                schemaVersion: 2,
                 policyAccountingVersion: 1,
                 submissionId,
                 submissionIds: [...ids],
@@ -4894,44 +5175,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           )
             return;
 
-          const encoded = yield* Schema.encodeEffect(RecoveryCheckpointState)(validated.value).pipe(
-            Effect.option,
+          yield* persistRecoveryCheckpoint(
+            ctx,
+            submission,
+            validated.value,
+            tail,
+            replacement.record.createdAt,
           );
-
-          if (Option.isNone(encoded)) return;
-          const digest = yield* withCrypto(digestJson(encoded.value));
-
-          // JSON serialization duplicates shared in-memory references without weakening the
-          // persisted depth/node/byte guard (which rejects cyclic/shared object graphs).
-          const contents = yield* Schema.encodeEffect(
-            Schema.fromJsonString(RecoveryCheckpointContents),
-          )(RecoveryCheckpointContents.make({ state: validated.value, digest })).pipe(
-            Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(PersistedJson))),
-            Effect.option,
-          );
-
-          if (Option.isNone(contents)) return;
-
-          const checkpoint = ThreadCheckpoint.make({
-            schemaVersion: 1,
-            threadId: ctx.threadId,
-            throughSequence: tail.sequence,
-            tailDigest: tail.digest,
-            engineVersion: RECOVERY_ENGINE_VERSION,
-            agentDefinitionDigest: submission.agentDigests.agent,
-            modelDigest: submission.agentDigests.model,
-            toolDigest: submission.agentDigests.tools,
-            state: contents.value,
-            createdAt: replacement.record.createdAt,
-          });
-
-          yield* hit("checkpoint:before-save");
-          yield* store.recoveryCheckpoints
-            .save(
-              SaveRecoveryCheckpointRequest.make({ checkpoint, producerEpoch: ctx.producerEpoch }),
-            )
-            .pipe(Effect.catchTag("CheckpointRejected", () => Effect.void));
-          yield* hit("checkpoint:after-save");
         },
       );
 
@@ -4980,6 +5230,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               runId,
               undefined,
               journalSeed,
+              undefined,
+              priorContext,
             );
 
       const rolloverOperation =
@@ -5952,19 +6204,25 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             let sourceJournal = journal;
             let sourceBoundaries = boundaries;
 
-            if (commit.kind !== "summarize") {
+            if (commit.kind !== "summarize" || priorContext !== undefined) {
               // Results must be canonical before pruning or rollover can cover them. Newly committed
               // compactions remain overlays on this Attempt's append-only source, so omit those
               // overlays while reconstructing the exact source-to-record mapping.
-              yield* recordHalt(commitPendingTurn);
+              if (commit.kind !== "summarize") yield* recordHalt(commitPendingTurn);
               const tail = yield* Ref.get(ctx.tailRef);
 
               sourceBoundaries = [];
               sourceJournal = yield* recordHalt(
                 projectRunJournalStream(
-                  Stream.concat(
-                    canonical,
-                    canonicalRange(ctx.threadId, tail.sequence, canonicalThrough),
+                  (priorContext === undefined
+                    ? Stream.concat(
+                        canonical,
+                        canonicalRange(ctx.threadId, tail.sequence, canonicalThrough),
+                      )
+                    : canonicalRange(
+                        ctx.threadId,
+                        commit.kind === "summarize" ? canonicalThrough : tail.sequence,
+                      )
                   ).pipe(
                     Stream.filter(
                       (envelope) =>
@@ -8552,14 +8810,21 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       };
 
       let approvalDecisionIntents = snapshot.approvalDecisions;
+      let priorContext = initialView.context;
 
       while (true) {
         const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
 
-        const canonical = Stream.concat(
-          initialView.canonical,
-          canonicalRange(threadId, tail.tailSequence, initialThrough),
-        );
+        // An immediate resume may include a newly committed compaction. Rebuild its canonical
+        // proof rather than carrying the initial Thread context across that boundary.
+        const fullContextReplay = initialView.context !== undefined && priorContext === undefined;
+
+        const canonical = fullContextReplay
+          ? canonicalRange(threadId, tail.tailSequence)
+          : Stream.concat(
+              initialView.canonical,
+              canonicalRange(threadId, tail.tailSequence, initialThrough),
+            );
 
         const currentRecords = yield* refreshControl(tail.tailSequence);
 
@@ -8573,13 +8838,16 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           canonical,
           tail.tailSequence,
           initialView.seed,
-          takeJournalMetadata(),
+          priorContext,
+          fullContextReplay ? undefined : takeJournalMetadata(),
           lineage,
           approvalDecisionIntents,
           currentContracts,
           runTiming,
           yieldAfter,
         );
+
+        priorContext = undefined;
 
         if (outcome._tag === "yielded") {
           if (outcome.nextSubmissionId !== undefined) onHandoff(outcome.nextSubmissionId);
@@ -8736,7 +9004,18 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           return Option.none<Settlement>();
         }
 
-        return Option.some(yield* terminalize(ctx, submission, tokenRef, outcome, true));
+        return Option.some(
+          yield* terminalize(
+            ctx,
+            submission,
+            tokenRef,
+            outcome,
+            true,
+            outcome._tag === "completed"
+              ? saveThreadContext(ctx, submission, initialView.context)
+              : undefined,
+          ),
+        );
       }
     }).pipe(Effect.scoped);
 

@@ -37,15 +37,25 @@ export class JournalCheckpointSeed extends Schema.Class<JournalCheckpointSeed>(
   compaction: CanonicalRecordEnvelope,
 }) {}
 
+/** Canonical historical context for a later Run, without the previous Run's authority or usage. */
+export class ThreadContextCheckpoint extends Schema.Class<ThreadContextCheckpoint>(
+  "@effect-agent/thread/internal/ThreadContextCheckpoint",
+)({
+  throughSequence: CanonicalSequence,
+  prompt: PersistedJson,
+  contextWindowId: Schema.optionalKey(Schema.String),
+}) {}
+
 /** A bounded sparse projection, never a canonical log or a submission-ownership record. */
 export class RecoveryCheckpointState extends Schema.Class<RecoveryCheckpointState>(
   "@effect-agent/thread/internal/RecoveryCheckpointState",
 )({
-  schemaVersion: Schema.Literal(1),
+  schemaVersion: Schema.Literal(2),
   policyAccountingVersion: Schema.Literal(1),
   submissionId: SubmissionId,
   submissionIds: Schema.Array(SubmissionId).check(Schema.isMaxLength(4_096)),
-  seed: JournalCheckpointSeed,
+  seed: Schema.optionalKey(JournalCheckpointSeed),
+  context: Schema.optionalKey(ThreadContextCheckpoint),
   records: Schema.Array(CanonicalRecordEnvelope).check(Schema.isMaxLength(4_096)),
 }) {}
 
@@ -56,7 +66,51 @@ export class RecoveryCheckpointContents extends Schema.Class<RecoveryCheckpointC
   digest: Digest,
 }) {}
 
-export const RECOVERY_ENGINE_VERSION = "effect-agent/recovery@2";
+export const RECOVERY_ENGINE_VERSION = "effect-agent/recovery@3";
+
+/**
+ * Prove that indexed original-input absence also means absent prefix Run/control evidence.
+ * Only cache consumers with colon-free Submission IDs use this certificate. For those IDs,
+ * every possible control marker is exactly :run:<submission-id>:. Parsing here can only decline
+ * caching; it never supplies an execution identity. Separator-bearing identities use full replay.
+ * The temporary anchor set is discarded after certification, not persisted with the context.
+ */
+export const makeThreadContextCertificate = () => {
+  const anchored = new Set<string>();
+  let valid = true;
+
+  return {
+    add: ({ record }: CanonicalRecordEnvelope): void => {
+      if (!valid) return;
+      const payload = record.payload;
+
+      if ("runId" in payload && payload.runId !== undefined) {
+        const originalInput = payload._tag === "UserInputRecorded" && payload.kind === "user";
+
+        if (originalInput ? anchored.has(payload.runId) : !anchored.has(payload.runId)) {
+          valid = false;
+
+          return;
+        }
+        if (originalInput) anchored.add(payload.runId);
+      }
+      for (
+        let start = record.recordId.indexOf(":run:");
+        start !== -1;
+        start = record.recordId.indexOf(":run:", start + 1)
+      ) {
+        const end = record.recordId.indexOf(":", start + 5);
+
+        if (end !== -1 && !anchored.has(record.recordId.slice(start + 1, end))) {
+          valid = false;
+
+          return;
+        }
+      }
+    },
+    isValid: (): boolean => valid,
+  };
+};
 
 /**
  * Late evidence can invalidate an old compaction. Such histories use full canonical replay;
