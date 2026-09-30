@@ -893,7 +893,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
         }),
       });
 
-      const delegation = Subagent.define("delegate_research", {
+      const delegation = Subagent.make("delegate_research", {
         description:
           "Investigate one unresolved, falsifiable question whose answer could change the review. Ask neutrally for supporting or refuting evidence within 1–3 distinct admitted changed paths (at most 32,000 patch characters). The host supplies exact patches; the child records findings directly. At most two children share the review's spending cap when configured. Delegate independent scopes and check review_status before recording overlapping findings.",
         target: researcher,

@@ -244,7 +244,7 @@ export class NodeDurableHost extends Context.Service<
     ) => Effect.Effect<ObligationReport, DurableObligationFailure>;
     /**
      * Run `workerConcurrency` copies of the given worker effect (typically
-     * `DurableAgentRuntime.runWorker(agent)`) until the caller's Scope interrupts them. The
+     * `DurableAgentRuntime.runResolvedWorker`) until the caller's Scope interrupts them. The
      * same Scope drives pending message admission and settlement observation independently
      * of Submission liveness. The host never forks daemon fibers.
      */

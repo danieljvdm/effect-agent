@@ -1018,10 +1018,6 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
           ),
           Effect.mapError((error) => storeError("native thread tail", error)),
         ),
-      records: (threadId) =>
-        journal
-          .cachedRecords(threadId)
-          .pipe(Effect.mapError((error) => storeError("native journal view", error))),
     }),
   );
 

@@ -642,7 +642,7 @@ export interface ProjectionGate {
  * stale-parent fencing row can replace the parent while its join is still pending.
  */
 export const makeCrashDelegation = (projectionGate?: ProjectionGate) =>
-  Subagent.define("delegate_research", {
+  Subagent.make("delegate_research", {
     description: "Research one bounded question and return findings.",
     target: researcherDefinition,
     parameters: Schema.Struct({ topic: Schema.String }),

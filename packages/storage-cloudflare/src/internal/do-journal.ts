@@ -2244,16 +2244,6 @@ const makeJournal = (
 
     return {
       state,
-      cachedRecords: (threadId: string) =>
-        state.read(
-          Effect.gen(function* () {
-            const thread = (yield* getThread(threadId))[0];
-
-            return thread === undefined
-              ? undefined
-              : recordCache.prefix(threadId, thread.tail_sequence);
-          }),
-        ),
       threads,
       lifecycle: ownedLifecycle,
       initializeLifecycleSource,

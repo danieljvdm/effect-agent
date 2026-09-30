@@ -14,7 +14,6 @@ export default defineConfig({
       "src/SqliteSubmissionLedger.ts",
       "src/SqliteSubscriptionStore.ts",
       "src/SqliteThreadStore.ts",
-      "src/SqliteStorageFailpointTesting.ts",
     ],
     dts: true,
     sourcemap: true,

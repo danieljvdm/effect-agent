@@ -222,7 +222,7 @@ export const destinationResearchPolicy = SubagentPolicy.make({
   maxDuration: "10 seconds",
 });
 
-export const destinationResearchDelegation = Subagent.define("delegate_destination_research", {
+export const destinationResearchDelegation = Subagent.make("delegate_destination_research", {
   description:
     "Research one candidate destination with the deterministic travel guide and return a bounded finding.",
   target: DestinationResearcher,

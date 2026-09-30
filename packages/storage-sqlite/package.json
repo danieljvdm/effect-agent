@@ -25,7 +25,6 @@
     "./sqlite-submission-ledger": "./src/SqliteSubmissionLedger.ts",
     "./sqlite-subscription-store": "./src/SqliteSubscriptionStore.ts",
     "./sqlite-thread-store": "./src/SqliteThreadStore.ts",
-    "./testing/sqlite-storage-failpoint-testing": "./src/SqliteStorageFailpointTesting.ts",
     "./sqlite-message-delivery-store": "./src/SqliteMessageDeliveryStore.ts"
   },
   "publishConfig": {

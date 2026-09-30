@@ -346,7 +346,6 @@ them with `Layer.effect(ThreadStore, ...)` and `Layer.effect(SubmissionLedger, .
 Stores thread history and pending work in one Node SQLite database.
 Upgrades supported predecessor formats atomically and rejects incompatible stored versions.
 `CurrentSqliteStorageVersion` identifies the supported version.
-Test failpoints are in `@effect-agent/storage-sqlite/testing/sqlite-storage-failpoint-testing`.
 See the [SQLite storage guide](../storage/sqlite) for installation and agent wiring.
 
 The independent `memoryStoreLayer` from `effect-agent/sql-memory-store` supplies optional `MemoryReader`, `MemoryWriter`, and `SqlMemoryBatchWriter` ports

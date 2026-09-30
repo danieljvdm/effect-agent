@@ -820,9 +820,6 @@ function make<
 
 export { make };
 
-/** @deprecated Use `Subagent.make`. */
-export const define: typeof make = make;
-
 type InstructionResultOf<Instructions, Input> = Instructions extends (input: Input) => infer Result
   ? Result
   : Instructions;

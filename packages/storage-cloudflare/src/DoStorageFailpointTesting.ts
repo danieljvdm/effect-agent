@@ -1,40 +1,7 @@
-import { Context, Effect, Layer, Ref } from "effect";
+import { Effect } from "effect";
 
 import type { DoStorageFailpointLocation } from "./DoStorageError.ts";
-import { DoStorageFailpoint, type DoStorageFailpointHandler } from "./DoStorageFailpoint.ts";
-
-const noFailpoint: DoStorageFailpointHandler = () => Effect.void;
-
-/** Test-only control for replacing the active Durable Object failpoint handler. */
-export class DoStorageFailpointTestControl extends Context.Service<
-  DoStorageFailpointTestControl,
-  {
-    readonly clear: Effect.Effect<void>;
-    readonly setHandler: (handler: DoStorageFailpointHandler) => Effect.Effect<void>;
-  }
->()("@effect-agent/storage-cloudflare/DoStorageFailpointTestControl") {
-  /** Reusable test Layer with a control service backed by the same handler Ref. */
-  static readonly layer = Layer.effectContext(
-    Effect.gen(function* () {
-      const handler = yield* Ref.make<DoStorageFailpointHandler>(noFailpoint);
-
-      return Context.make(
-        DoStorageFailpoint,
-        DoStorageFailpoint.of({
-          hit: (location) => Ref.get(handler).pipe(Effect.flatMap((current) => current(location))),
-        }),
-      ).pipe(
-        Context.add(
-          DoStorageFailpointTestControl,
-          DoStorageFailpointTestControl.of({
-            clear: Ref.set(handler, noFailpoint),
-            setHandler: (next) => Ref.set(handler, next),
-          }),
-        ),
-      );
-    }),
-  );
-}
+import type { DoStorageFailpointHandler } from "./DoStorageFailpoint.ts";
 
 /**
  * The DC-specific eviction failpoint mode: instead of failing typed, an armed hit evicts the

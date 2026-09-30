@@ -77,13 +77,6 @@ export type SubagentBudgetReservation = typeof SubagentBudgetReservation.Type;
 export const DelegationDepth = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1));
 export type DelegationDepth = typeof DelegationDepth.Type;
 
-/** @deprecated Names are application-owned; use DelegationTool metadata for classification. */
-export const delegationToolPrefix = "delegate_";
-
-/** @deprecated Checks a legacy spelling only, never execution, nesting or recovery semantics. */
-export const isDelegationToolName = (toolName: string): boolean =>
-  toolName.startsWith(delegationToolPrefix);
-
 /** Marks a Tool implementing the idempotent Subagent establishment protocol. */
 export const DelegationTool = Context.Reference<boolean>("@effect-agent/core/DelegationTool", {
   defaultValue: () => false,

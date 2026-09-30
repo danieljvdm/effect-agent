@@ -417,7 +417,7 @@ class CertifyDelegationFailed extends Schema.TaggedError<CertifyDelegationFailed
   { childErrorTag: Schema.String },
 ) {}
 
-const researchDelegation = Subagent.define("delegate_research", {
+const researchDelegation = Subagent.make("delegate_research", {
   description: "Research one bounded question and return findings.",
   target: childDefinition,
   parameters: Schema.Struct({ topic: Schema.String }),

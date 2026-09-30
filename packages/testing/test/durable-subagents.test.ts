@@ -192,7 +192,7 @@ class ResearchDelegationFailed extends Schema.TaggedError<ResearchDelegationFail
   { childErrorTag: Schema.String },
 ) {}
 
-const researchDelegation = Subagent.define("delegate_research", {
+const researchDelegation = Subagent.make("delegate_research", {
   description: "Research one bounded question and return findings.",
   target: childDefinition,
   parameters: Schema.Struct({ topic: Schema.String }),
@@ -245,7 +245,7 @@ const mapChildFailure = (failure: { readonly _tag: string }) =>
   ResearchDelegationFailed.make({ childErrorTag: failure._tag });
 
 /** SUB-033 fixture: the same delegation under first-party containment. */
-const containedResearchDelegation = Subagent.define("delegate_research_contained", {
+const containedResearchDelegation = Subagent.make("delegate_research_contained", {
   description: "Research one bounded question; failures are contained result data.",
   target: childDefinition,
   parameters: Schema.Struct({ topic: Schema.String }),
@@ -639,7 +639,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       if (selected === undefined || alternative === undefined)
         return yield* Effect.die("Missing fixture registration");
 
-      const delegation = Subagent.define("delegate_shared", {
+      const delegation = Subagent.make("delegate_shared", {
         target: child,
         description: "Look up one answer.",
         parameters: Schema.Struct({ topic: Schema.String }),

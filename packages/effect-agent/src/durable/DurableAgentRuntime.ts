@@ -11147,55 +11147,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     return ObligationReport.make({ thresholds, entries, generatedAt });
   });
 
-  const runWorkerImpl = <
-    InputSchema extends Schema.Top,
-    OutputSchema extends Schema.Top,
-    Instructions,
-    Tools extends Record<string, Tool.Any>,
-    Provider,
-    ModelProvides,
-    ModelRequires,
-    InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
-    InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
-    RunDispositionValue extends
-      | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
-      | undefined = undefined,
-    InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
-      undefined,
-    UpdatesSchema extends Schema.Top | undefined = undefined,
-  >(
-    agent: RuntimeBinding<
-      InputSchema,
-      OutputSchema,
-      Instructions,
-      Tools,
-      Provider,
-      ModelProvides,
-      ModelRequires,
-      InstructionError,
-      InstructionRequirements,
-      RunDispositionValue,
-      InputPromptValue,
-      UpdatesSchema
-    >,
-  ) =>
-    Effect.gen(function* () {
-      // Wake subscriptions may drop hints, so a ledger scan seeds the worklist (persistence §14).
-      const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
-      const seen = new Set<ThreadId>();
-
-      for (const submission of nonterminal) {
-        if (seen.has(submission.threadId)) continue;
-        seen.add(submission.threadId);
-        yield* processThreadImpl(agent, submission.threadId);
-      }
-      yield* Stream.runForEach(wake.wakes, (threadId) => processThreadImpl(agent, threadId));
-    });
-
   const runResolvedWorkerImpl = Effect.gen(function* () {
-    // The multi-binding worker (plan §1.7): every claimed head resolves its exact stored
-    // Binding from the explicit registration array, so one worker pool serves parent and child
-    // lanes (spec §12's smallest-pool wakeup proof runs over this loop).
+    // Each claimed head selects a current Binding by stable Agent ID and optional host routing.
+    // Original per-operation replay contracts still govern unfinished handlers, while one worker
+    // pool serves both parent and child lanes.
     const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
     const seen = new Set<ThreadId>();
 
@@ -11289,7 +11244,6 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     processThread: processThreadImpl,
     processThreadResolved: processThreadResolvedImpl,
     processThreadHead: processThreadHeadImpl,
-    runWorker: runWorkerImpl,
     runResolvedWorker: runResolvedWorkerImpl,
     runRecovery,
     recoverSubmission,
@@ -11331,11 +11285,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
  *   seam (Joining/Joined, plan §2.5): the queued input becomes canonical (`input:{sid}`) before
  *   the next model request, reattaches through the prompt-coverage rule after a crash, and the
  *   joined Submissions settle with the host outcome (DUR-002/DUR-016).
- * - `runWorker(agent)` — scan-seeded, wake-driven worker loop over every lane (WP4's host driver),
- *   over a singleton current Binding: a claimed head belonging to a different Agent never
- *   runs against this binding. Missing bindings leave accepted roots and children owed.
- * - `processThreadResolved(threadId)` / `runResolvedWorker` — the
- *   equivalents over registrations owned by the runtime Layer: each stable `agentId` selects
+ * - `processThreadResolved(threadId)` / `runResolvedWorker` — drain or continuously process
+ *   lanes using registrations owned by the runtime Layer: each stable `agentId` selects
  *   one current Binding. Unfinished operation contracts gate handler execution independently
  *   of immutable admission evidence; missing bindings release the claim with a typed refusal.
  * - `runRecovery()` — classify every nonterminal Submission with the pure `classifyRecovery` and
@@ -11538,59 +11489,6 @@ export class DurableAgentRuntime extends Context.Service<
       threadId: ThreadId,
       options?: { readonly yieldAfter?: DateTime.Utc },
     ) => Effect.Effect<Option.Option<Settlement>, DurableWorkerFailure | DurableBindingFailure>;
-    readonly runWorker: <
-      InputSchema extends Schema.Top,
-      OutputSchema extends Schema.Top,
-      Instructions,
-      Tools extends Record<string, Tool.Any>,
-      Provider,
-      ModelProvides,
-      ModelRequires,
-      InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
-      InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
-      RunDispositionValue extends
-        | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
-        | undefined = undefined,
-      InputPromptValue extends
-        | InputPromptSource<InputSchema["Type"], unknown, unknown>
-        | undefined = undefined,
-      UpdatesSchema extends Schema.Top | undefined = undefined,
-    >(
-      agent: RuntimeBinding<
-        InputSchema,
-        OutputSchema,
-        Instructions,
-        Tools,
-        Provider,
-        ModelProvides,
-        ModelRequires,
-        InstructionError,
-        InstructionRequirements,
-        RunDispositionValue,
-        InputPromptValue,
-        UpdatesSchema
-      >,
-    ) => Effect.Effect<
-      void,
-      DurableWorkerFailure | DurableBindingFailure,
-      DurableWorkerRequirements<
-        RuntimeBinding<
-          InputSchema,
-          OutputSchema,
-          Instructions,
-          Tools,
-          Provider,
-          ModelProvides,
-          ModelRequires,
-          InstructionError,
-          InstructionRequirements,
-          RunDispositionValue,
-          InputPromptValue,
-          UpdatesSchema
-        >,
-        InstructionRequirements
-      >
-    >;
     readonly runResolvedWorker: Effect.Effect<void, DurableWorkerFailure | DurableBindingFailure>;
     /**
      * Recover each pending Thread independently. History/child failures, defects and the
