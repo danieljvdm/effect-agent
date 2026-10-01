@@ -105,8 +105,11 @@
         "@streamparser/json": "catalog:",
         "@tanstack/react-router": "catalog:",
         "@tanstack/react-start": "catalog:",
-        "@yielded/auth": "0.1.0-beta.7",
-        "@yielded/auth-persistence": "0.1.0-beta.7",
+        "@yielded/auth": "0.1.0-beta.11",
+        "@yielded/auth-crypto": "0.1.0-beta.1",
+        "@yielded/auth-openid-client": "0.1.0-beta.1",
+        "@yielded/auth-persistence": "0.1.0-beta.11",
+        "@yielded/auth-persistence-drizzle": "0.1.0-beta.1",
         "class-variance-authority": "catalog:",
         "clsx": "catalog:",
         "drizzle-orm": "1.0.0-rc.5-ab785fc",
@@ -527,17 +530,15 @@
     },
   },
   "patchedDependencies": {
-    "@yielded/auth@0.1.0-beta.7": "patches/@yielded%2Fauth@0.1.0-beta.7.patch",
     "@distilled.cloud/core@1.0.0-rc.9": "patches/@distilled.cloud%2Fcore@1.0.0-rc.9.patch",
     "@distilled.cloud/railway@1.0.0-rc.9": "patches/@distilled.cloud%2Frailway@1.0.0-rc.9.patch",
     "alchemy@2.0.0-beta.77": "patches/alchemy@2.0.0-beta.77.patch",
-    "@alchemy.run/cloudflare-runtime@2.0.0-beta.77": "patches/@alchemy.run%2Fcloudflare-runtime@2.0.0-beta.77.patch",
-    "@distilled.cloud/cloudflare@1.0.0-rc.9": "patches/@distilled.cloud%2Fcloudflare@1.0.0-rc.9.patch",
     "@distilled.cloud/aws@1.0.0-rc.9": "patches/@distilled.cloud%2Faws@1.0.0-rc.9.patch",
     "@distilled.cloud/fly-io@1.0.0-rc.9": "patches/@distilled.cloud%2Ffly-io@1.0.0-rc.9.patch",
     "@distilled.cloud/hetzner@1.0.0-rc.9": "patches/@distilled.cloud%2Fhetzner@1.0.0-rc.9.patch",
-    "@yielded/auth-persistence@0.1.0-beta.7": "patches/@yielded%2Fauth-persistence@0.1.0-beta.7.patch",
     "@distilled.cloud/axiom@1.0.0-rc.9": "patches/@distilled.cloud%2Faxiom@1.0.0-rc.9.patch",
+    "@alchemy.run/cloudflare-runtime@2.0.0-beta.77": "patches/@alchemy.run%2Fcloudflare-runtime@2.0.0-beta.77.patch",
+    "@distilled.cloud/cloudflare@1.0.0-rc.9": "patches/@distilled.cloud%2Fcloudflare@1.0.0-rc.9.patch",
     "@distilled.cloud/neon@1.0.0-rc.9": "patches/@distilled.cloud%2Fneon@1.0.0-rc.9.patch",
     "@distilled.cloud/planetscale@1.0.0-rc.9": "patches/@distilled.cloud%2Fplanetscale@1.0.0-rc.9.patch",
   },
@@ -1818,9 +1819,15 @@
 
     "@vue/shared": ["@vue/shared@3.5.40", "", {}, "sha512-WxnBtruIqOoV3rA4jeKDWzrYI5h7Cp4+pjwDi8kWGHz+IslhiN+wguLVVhtv2l8VoU02rzDCVfDjgCl1lNpZVg=="],
 
-    "@yielded/auth": ["@yielded/auth@0.1.0-beta.7", "", { "dependencies": { "@noble/ciphers": "2.1.1", "@noble/hashes": "2.3.0" }, "peerDependencies": { "@simplewebauthn/browser": ">=14.0.0 <15", "@simplewebauthn/server": ">=14.0.1 <15", "effect": "^4.0.0-rc.112", "effect-cf": "^0.40.0", "openid-client": ">=6.8.8 <7", "tldts": ">=7.4.11 <8" }, "optionalPeers": ["@simplewebauthn/browser", "@simplewebauthn/server", "effect-cf", "openid-client", "tldts"] }, "sha512-cf/Bx9VAkz++h+pUT+LbtMCLHtFdqHuG5DApHbq1WwLyytiiZEExt3lBys7Y0XXpYo8HOi02qshZAdJDhO4owA=="],
+    "@yielded/auth": ["@yielded/auth@0.1.0-beta.11", "", { "peerDependencies": { "effect": "^4.0.0" } }, "sha512-B8U3mD00OtjeF6iMsqWS5HehEYGuz6ziD0mF5OkQYtHPUQMngndIH38myYUo/WWUcH/STj+P5Lt2Mx54kKoGbw=="],
 
-    "@yielded/auth-persistence": ["@yielded/auth-persistence@0.1.0-beta.7", "", { "dependencies": { "@noble/hashes": "2.3.0", "@yielded/auth": "0.1.0-beta.7" }, "peerDependencies": { "@effect/sql-d1": ">=4.0.0-rc.112", "@effect/sql-libsql": ">=4.0.0-rc.112", "@effect/sql-mysql2": ">=4.0.0-rc.112", "@effect/sql-pg": ">=4.0.0-rc.112", "@effect/sql-pglite": ">=4.0.0-rc.112", "@effect/sql-sqlite-bun": ">=4.0.0-rc.112", "@effect/sql-sqlite-do": ">=4.0.0-rc.112", "@effect/sql-sqlite-node": ">=4.0.0-rc.112", "@effect/sql-sqlite-wasm": ">=4.0.0-rc.112", "drizzle-orm": ">=1.0.0-rc.5-ab785fc", "effect": "^4.0.0-rc.112" }, "optionalPeers": ["@effect/sql-d1", "@effect/sql-libsql", "@effect/sql-mysql2", "@effect/sql-pg", "@effect/sql-pglite", "@effect/sql-sqlite-bun", "@effect/sql-sqlite-do", "@effect/sql-sqlite-node", "@effect/sql-sqlite-wasm", "drizzle-orm"] }, "sha512-Ze6HOtnpWflHhKSnxNY6K6ZnUK+4xd4e1zE5pOTDivio6XsoZ3lrdGo6kFX2NlECji9WHA1avx3Yos6YBmZ8VA=="],
+    "@yielded/auth-crypto": ["@yielded/auth-crypto@0.1.0-beta.1", "", { "dependencies": { "@noble/ciphers": "2.1.1", "@noble/hashes": "2.3.0", "@yielded/auth": "0.1.0-beta.11" }, "peerDependencies": { "effect": "^4.0.0" } }, "sha512-HA9zNKc+wuRVzj7ughHHIXIahIiD0T6FxdBH2cL6gZ8rwFffetDBVfDQ2eRDYp8PKCi1dgopcdwt7NduhfygIQ=="],
+
+    "@yielded/auth-openid-client": ["@yielded/auth-openid-client@0.1.0-beta.1", "", { "dependencies": { "@yielded/auth": "0.1.0-beta.11" }, "peerDependencies": { "effect": "^4.0.0", "openid-client": ">=6.8.8 <7" } }, "sha512-sDV5JBEUk17YYBRvXw7NUUKL9SYzjAuobAUV2F7R2wpB6g3ovACsmLCCswstN61TeHWT25ERmkPmUzFgOpd69w=="],
+
+    "@yielded/auth-persistence": ["@yielded/auth-persistence@0.1.0-beta.11", "", { "dependencies": { "@noble/hashes": "2.3.0", "@yielded/auth": "0.1.0-beta.11", "@yielded/auth-crypto": "0.1.0-beta.1" }, "peerDependencies": { "effect": "^4.0.0" } }, "sha512-ED0PcwQN3FSIbxZ//xfZBHe7Xg1atT5HHY3CvH0FocZ7EHLixb3jDLCRaWTiDCHA6LY+f8rpQdeNQrq89xfoQQ=="],
+
+    "@yielded/auth-persistence-drizzle": ["@yielded/auth-persistence-drizzle@0.1.0-beta.1", "", { "dependencies": { "@noble/hashes": "2.3.0", "@yielded/auth": "0.1.0-beta.11", "@yielded/auth-crypto": "0.1.0-beta.1", "@yielded/auth-persistence": "0.1.0-beta.11" }, "peerDependencies": { "@effect/sql-d1": ">=4.0.0", "@effect/sql-libsql": ">=4.0.0", "@effect/sql-mysql2": ">=4.0.0", "@effect/sql-pg": ">=4.0.0", "@effect/sql-pglite": ">=4.0.0", "@effect/sql-sqlite-bun": ">=4.0.0", "@effect/sql-sqlite-do": ">=4.0.0", "@effect/sql-sqlite-node": ">=4.0.0", "@effect/sql-sqlite-wasm": ">=4.0.0", "drizzle-orm": ">=1.0.0-rc.4", "effect": "^4.0.0" }, "optionalPeers": ["@effect/sql-d1", "@effect/sql-libsql", "@effect/sql-mysql2", "@effect/sql-pg", "@effect/sql-pglite", "@effect/sql-sqlite-bun", "@effect/sql-sqlite-do", "@effect/sql-sqlite-node", "@effect/sql-sqlite-wasm"] }, "sha512-gsc2f+fFlJ3oWqoJvqupbl+CP/4sT4FRzTpB4czVMWv+TeW8Uy2zgm4tcJyfmqHGRXGZVycX/s4dQLsjgzDYPA=="],
 
     "@yielded/starlight-theme": ["@yielded/starlight-theme@0.1.3", "", { "dependencies": { "@fontsource-variable/ibm-plex-sans": "^5.3.0", "@fontsource/ibm-plex-mono": "^5.3.0", "github-slugger": "^2.0.0", "mdast-util-from-markdown": "^2.0.3", "mdast-util-gfm": "^3.1.0", "mermaid": "^12.0.0", "micromark-extension-gfm": "^3.0.0" }, "peerDependencies": { "@astrojs/starlight": ">=0.42.0", "astro": ">=7.2.10" } }, "sha512-vL59qk3aXCLeZ1fPesEAs39DzbQIPsjlDKN68jxqR6dL/XvhbCNtKbZn2VtPNDfPd8MrKyMBgi6d3LKMNNioJA=="],
 

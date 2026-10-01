@@ -1,4 +1,4 @@
-import * as Drizzle from "@yielded/auth-persistence/drizzle/sqlite-do";
+import * as Drizzle from "@yielded/auth-persistence-drizzle/SqliteDo";
 import { EmailSignInTargets, EmailUnavailable } from "@yielded/auth/Email";
 import {
   OAuthSignInPersistence,
@@ -74,18 +74,16 @@ export const persistenceLayer = (AppAuth: AppAuth) =>
           AppAuth.strategies.emailRegistration.RegistrationAuthority,
           emailRegistration.registrationAuthority,
         ),
-        Layer.succeed(AppAuth.strategies.email.ClaimsForEmail, {
-          resolve: (credential) =>
-            claims(credential.revision.subjectId).pipe(
-              Effect.mapError(() => EmailUnavailable.make({})),
-            ),
+        Layer.succeed(AppAuth.strategies.email.SessionClaims, {
+          resolve: ({ subjectId }) =>
+            claims(subjectId).pipe(Effect.mapError(() => EmailUnavailable.make({}))),
         }),
-        Layer.succeed(AppAuth.strategies.github.ClaimsForOAuth, {
-          resolve: (credential, verified) =>
-            claims(credential.revision.subjectId).pipe(
+        Layer.succeed(AppAuth.strategies.github.SessionClaims, {
+          resolve: ({ subjectId, identity }) =>
+            claims(subjectId).pipe(
               Effect.map((local) => ({
                 ...local,
-                displayName: verified.profile?.displayName ?? local.displayName,
+                displayName: identity.profile?.displayName ?? local.displayName,
               })),
               Effect.mapError(() => OAuthUnavailable.make({})),
             ),

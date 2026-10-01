@@ -59,10 +59,9 @@ declares `mime` because the Cloudflare runtime
 imports it without declaring the dependency. Keep these corrections until a published upgrade
 includes them; verify that upgrade with a frozen install and `vp run check:deploy`.
 
-Auth beta.7 and its matching persistence package also need version-specific Bun patches
-for stable Effect namespaces, encoding helpers, schema filters, and concrete brand declarations.
-The demo retains their public contracts and verifies authentication through its existing
-integration checks. Remove these patches when a compatible published release is adopted.
+The demo uses Auth beta.11 and its compatible Drizzle, GitHub, and crypto companions,
+which support stable Effect directly. Verify auth upgrades with the existing integration checks
+and review their changelogs for API and stored-format changes.
 
 ## Current workspace
 
