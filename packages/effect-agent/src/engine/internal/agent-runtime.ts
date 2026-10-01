@@ -995,12 +995,10 @@ const ownModelResponsePartGeneral = Effect.fnUntraced(function* <
   }
   const codec = modelResponseCodecFor(toolkit);
 
-  const encodingFailure = ModelProtocolError.make({
-    message: "Model response part failed canonical encoding",
-  });
-
   const encoded = yield* Schema.encodeUnknownEffect(codec)(part).pipe(
-    Effect.mapError(() => encodingFailure),
+    Effect.mapError(() =>
+      ModelProtocolError.make({ message: "Model response part failed canonical encoding" }),
+    ),
   );
 
   const retainedBytes = yield* inspectModelResponsePartCapacity(usage, encoded, limits);
@@ -1020,12 +1018,10 @@ const ownModelResponsePartGeneral = Effect.fnUntraced(function* <
       }),
   });
 
-  const decodingFailure = ModelProtocolError.make({
-    message: "Model response part failed canonical decoding",
-  });
-
   const ownedPart = yield* Schema.decodeUnknownEffect(codec)(ownedEncoded).pipe(
-    Effect.mapError(() => decodingFailure),
+    Effect.mapError(() =>
+      ModelProtocolError.make({ message: "Model response part failed canonical decoding" }),
+    ),
   );
 
   return { ownedPart, retainedBytes };
