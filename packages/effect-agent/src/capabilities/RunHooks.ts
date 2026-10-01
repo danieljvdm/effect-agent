@@ -6,6 +6,7 @@ import {
   type ThreadHistoryDiverged,
   type ThreadLimitExceeded,
   type ThreadNotFound,
+  type ThreadOwnershipError,
   toPrompt,
   Store as ConversationStore,
 } from "../core/Thread.ts";
@@ -215,7 +216,8 @@ export type ThreadAdapterError =
   | ThreadNotFound
   | ThreadLimitExceeded
   | ThreadEncodingError
-  | ThreadHistoryDiverged;
+  | ThreadHistoryDiverged
+  | ThreadOwnershipError;
 
 /**
  * Advanced integration for an existing Thread.Store snapshot. Ordinary Runs automatically
@@ -224,7 +226,8 @@ export type ThreadAdapterError =
  * The snapshot is explicit initial Prompt data. Each inline onHistory call immediately records
  * its append-only suffix, including updates from Runs that later fail or are interrupted. Writes
  * already made remain in the snapshot. Callback errors stop the Run as ThreadAdapterError;
- * snapshot lookup can fail with ThreadNotFound before execution.
+ * snapshot lookup can fail with ThreadNotFound or ThreadOwnershipError before execution.
+ * Construct scoped hooks inside InMemory.scoped; captured callbacks retain that owner.
  * Native Effect AI parts and provider options are preserved without a role/text projection.
  * For retaining only successful Runs, provide ThreadHistory through PersistentHistory.layer
  * with a memory or SQLite store instead. This adapter does not provide durable recovery.
@@ -234,7 +237,7 @@ export const toRunThreadOptions = Effect.fn("toRunThreadOptions")(function* (
   runId: import("../core/Identifiers.ts").RunId,
 ): Effect.fn.Return<
   Pick<RunOptions<ThreadAdapterError>, "threadId" | "history" | "onHistory">,
-  ThreadNotFound,
+  ThreadNotFound | ThreadOwnershipError,
   ConversationStore
 > {
   const threads = yield* ConversationStore;

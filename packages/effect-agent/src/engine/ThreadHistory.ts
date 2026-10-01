@@ -57,6 +57,8 @@ export class ThreadHistory extends Context.Service<
   ThreadHistory,
   {
     readonly retention: "incremental" | "on-success";
+    /** Present only for the in-memory adapter; identifies its exact Store ownership view. */
+    readonly memoryStore?: ConversationStore["Service"];
     readonly open: (request: {
       readonly threadId: ThreadId;
       readonly runId: RunId;
@@ -64,12 +66,8 @@ export class ThreadHistory extends Context.Service<
     readonly load: (threadId: ThreadId) => Effect.Effect<Prompt.Prompt, ThreadHistoryError>;
   }
 >()("@effect-agent/engine/ThreadHistory") {
-  /**
-   * Retain bounded in-memory history across Runs. Provide once around the application so
-   * all Runs share the same store. The underlying Thread.Store service is exposed for
-   * snapshots and interactive hooks; separate Layer builds own separate stores.
-   */
-  static readonly layer = Layer.effect(
+  /** Bind incremental history to the supplied Thread.Store, including scoped ownership views. */
+  static readonly layerFromStore = Layer.effect(
     ThreadHistory,
     Effect.gen(function* () {
       const threads = yield* ConversationStore;
@@ -84,7 +82,11 @@ export class ThreadHistory extends Context.Service<
                 ? "limit"
                 : cause._tag === "ThreadHistoryDiverged"
                   ? "conflict"
-                  : "encoding",
+                  : cause._tag === "ThreadOwnershipError"
+                    ? cause.reason === "closed"
+                      ? "fenced"
+                      : "conflict"
+                    : "encoding",
           message:
             cause._tag === "ThreadNotFound"
               ? "Thread history is not present in this application Scope"
@@ -96,6 +98,7 @@ export class ThreadHistory extends Context.Service<
 
       return ThreadHistory.of({
         retention: "incremental",
+        memoryStore: threads,
         load: (threadId) =>
           threads.snapshot(threadId).pipe(Effect.map(toPrompt), Effect.mapError(historyError)),
         open: Effect.fn("ThreadHistory.open")(function* ({ threadId, runId }) {
@@ -108,12 +111,16 @@ export class ThreadHistory extends Context.Service<
               threads
                 .recordHistory(threadId, runId, history)
                 .pipe(Effect.asVoid, Effect.mapError(historyError)),
-            commit: () => Effect.void,
+            commit: () =>
+              threads.snapshot(threadId).pipe(Effect.asVoid, Effect.mapError(historyError)),
           };
         }),
       });
     }),
-  ).pipe(Layer.provideMerge(layerMemory));
+  );
+
+  /** Retain bounded history for the application Scope. Separate Layer builds own separate stores. */
+  static readonly layer = ThreadHistory.layerFromStore.pipe(Layer.provideMerge(layerMemory));
 }
 
 /** Retain in-memory conversation history for the application Scope. */
