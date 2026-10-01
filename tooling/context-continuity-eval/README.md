@@ -258,7 +258,8 @@ The first cycle is **initial after seed**, not a guaranteed cold isolate. The se
 IDs do not establish JIT tier, physical host, placement or cache state. Objects can share an
 isolate, so phases and Objects are not independent deployment samples. Twenty raw provider
 prompts are retained per Object until its final audit; both cycles use this same bounded
-retention policy. Warmed measurements consequently include the retained first-cycle captures.
+retention policy. The warmed cycle also includes the first cycle's canonical records and
+retained captures, so it does not isolate JIT warm-up from that accumulated state.
 
 No archive exports, prompt encoding, hashes or checkpoint inspections run between measured
 operations. The final audit verifies canonical append digests, retained context, exact finite

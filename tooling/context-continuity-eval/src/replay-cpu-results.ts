@@ -116,9 +116,9 @@ const median = (values: ReadonlyArray<number>) => {
   const middle = Math.floor(sorted.length / 2);
 
   return sorted.length % 2 === 1
-    ? Schema.decodeUnknownSync(Schema.Number)(sorted[middle])
-    : (Schema.decodeUnknownSync(Schema.Number)(sorted[middle - 1]) +
-        Schema.decodeUnknownSync(Schema.Number)(sorted[middle])) /
+    ? Schema.decodeSync(Schema.Number)(sorted[middle])
+    : (Schema.decodeSync(Schema.Number)(sorted[middle - 1]) +
+        Schema.decodeSync(Schema.Number)(sorted[middle])) /
         2;
 };
 
@@ -166,10 +166,8 @@ export const summarizeReplayCpu = (samples: ReadonlyArray<typeof ReplayCpuSample
 
         return {
           block,
-          candidateRatio: median(
-            c.map((n, i) => n / Schema.decodeUnknownSync(Schema.Number)(b[i])),
-          ),
-          controlRatio: median(a.map((n, i) => n / Schema.decodeUnknownSync(Schema.Number)(b[i]))),
+          candidateRatio: median(c.map((n, i) => n / Schema.decodeSync(Schema.Number)(b[i]))),
+          controlRatio: median(a.map((n, i) => n / Schema.decodeSync(Schema.Number)(b[i]))),
         };
       });
 
@@ -180,10 +178,10 @@ export const summarizeReplayCpu = (samples: ReadonlyArray<typeof ReplayCpuSample
         candidate: stats(candidate),
         control: stats(control),
         pairedCandidateRatios: stats(
-          candidate.map((n, i) => n / Schema.decodeUnknownSync(Schema.Number)(baseline[i])),
+          candidate.map((n, i) => n / Schema.decodeSync(Schema.Number)(baseline[i])),
         ),
         pairedControlRatios: stats(
-          control.map((n, i) => n / Schema.decodeUnknownSync(Schema.Number)(baseline[i])),
+          control.map((n, i) => n / Schema.decodeSync(Schema.Number)(baseline[i])),
         ),
         blocks,
         comparisonCriterionMet: blocks.every(
