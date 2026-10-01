@@ -161,6 +161,7 @@ export const makeSqlJournal = Effect.fn("SqlJournal.make")(function* <
   const failpoint = options.hitFailpoint;
   const { withReadTransaction, withWriteTransaction } = options.transactions;
   const { decodeRows, decodeSingleRow } = makeRowDecoder(options.errors.corruption);
+  const decodeRecordJson = Schema.decodeEffect(Schema.fromJsonString(CanonicalRecord));
 
   const storageError =
     (operation: string) =>
@@ -464,9 +465,7 @@ export const makeSqlJournal = Effect.fn("SqlJournal.make")(function* <
           request.records,
           (record, index) =>
             Effect.gen(function* () {
-              const canonical = yield* Schema.decodeEffect(Schema.fromJsonString(CanonicalRecord))(
-                record.recordJson,
-              ).pipe(
+              const canonical = yield* decodeRecordJson(record.recordJson).pipe(
                 Effect.mapError((error) =>
                   options.errors.corruption({
                     table: "effect_agent_canonical_records",
