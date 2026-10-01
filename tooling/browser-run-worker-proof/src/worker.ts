@@ -481,6 +481,7 @@ export class CheckoutRun extends DurableObject<Env> {
 
     const model = OpenAiLanguageModel.model(this.env.CHECKOUT_MODEL, {
       max_output_tokens: 2048,
+      service_tier: "priority",
     }).pipe(
       Layer.provide(
         OpenAiClient.layer({ apiKey: Redacted.make(this.env.OPENAI_API_KEY) }).pipe(
