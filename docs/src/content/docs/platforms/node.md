@@ -29,6 +29,10 @@ The version declarations identify the agent, model, and tools used by accepted w
 
 Use a persistent database path with one live host per SQLite file. Give each replacement host
 incarnation a distinct `producerId`.
+The automatic host holds SQLite's exclusive connection lock for its entire Scope. Another host
+fails startup, and independent readers cannot access the database while that connection is alive.
+Use a local filesystem with working SQLite locks; do not replace or unlink a live database file.
+New files are initialized in WAL mode; existing files must already use WAL mode.
 `workerConcurrency` limits worker loops and defaults to one.
 Active workers share one periodic ledger scan.
 The scan stops when the last subscriber leaves and restarts when another subscribes.
@@ -83,6 +87,10 @@ constructors remain available for manually managed hosts. Import the class from
 `@effect-agent/platform-node/node-durable-host` when using these APIs; their workers start only
 when you run `host.runResolvedWorkers`. The module-level `NodeDurableHost.layer` shown above
 owns worker startup and is the default for an application.
+
+These manual assemblies retain lease-based recovery and do not acquire the automatic host's
+exclusive authority or retire claims on startup. They remain suitable for explicit runtime
+composition; a producer name alone never permits reclaiming a live lease.
 
 Registrations carry application version declarations. Update them when behavior changes,
 including tool implementations that JSON cannot represent. Register one current binding per
@@ -141,10 +149,17 @@ with an admission conflict.
 ## Shutdown and recovery
 
 Closing the host's Scope stops admission, releases ownership, and closes SQLite.
-After a crash, replacement workers reclaim work when its lease expires.
+After abrupt process death, including `SIGKILL`, the operating system releases the automatic
+host's connection lock. Its replacement acquires that lock, checks storage compatibility, and
+atomically fences and retires retained claims before ordinary recovery. It does not wait for
+the old ownership lease. Startup, history validation, and provider work still take time.
+Lease, renewal, and wake-scan defaults remain 30 seconds, 10 seconds, and 1 second.
 Unconfirmed external tool outcomes require reconciliation or authorized resolution before replay.
 Startup recovery must succeed for every Thread before admission or workers open. A retained-history
 fault or recovery timeout fails host construction with `RecoveryBlocked`; accepted work stays pending.
 
 Inspect `host.startupRecovery`, `host.explain`, `host.verify`, and `host.scanObligations`
-for recovery status. See [operations](/guide/operations/) for approvals, schedules, and backups.
+for recovery status while the host is running. Additional adapters and administrative SQL must
+share the host's exposed `SqlClient`; do not open a second connection. Stop the host before using
+the standalone `admin:durable` CLI or another database reader. See [operations](/guide/operations/)
+for approvals, schedules, and backups.

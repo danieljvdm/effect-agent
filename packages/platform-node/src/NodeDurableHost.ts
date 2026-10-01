@@ -45,6 +45,7 @@ import {
 } from "effect-agent/submission-ledger";
 import { type ThreadNotMaterialized, type ThreadStoreError } from "effect-agent/thread-store";
 
+import { ExclusiveSqliteHost } from "./internal/exclusive-host.ts";
 import { runNodeMessageDeliveries } from "./internal/message-delivery.ts";
 import { makeNodePreparedInputAdmission, NodeAdmission } from "./internal/prepared-admission.ts";
 import {
@@ -326,6 +327,9 @@ export class NodeDurableHost extends Context.Service<
 
 /**
  * Acquire a complete Node host and start one bounded, scoped worker pool after recovery.
+ * Own the SQLite file exclusively until the host and its storage close. A second connection
+ * fails construction; after process death the replacement retires abandoned claims before
+ * recovery, without waiting for their leases. Use this host's services for live inspection.
  * Provide model, tool, instruction, and schema dependencies to this Layer. Reusing the Layer
  * shares the same pool. A worker failure closes admission; observe it with `run` at the process
  * boundary so the application exits and releases the host instead of remaining idle.
@@ -350,7 +354,11 @@ export const layer = <
   >,
 ) =>
   Layer.effect(NodeDurableHost)(makeHost(true)).pipe(
-    Layer.provideMerge(NodeDurableAgentRuntime.layerRegistered(registrations, options)),
+    Layer.provideMerge(
+      NodeDurableAgentRuntime.layerRegistered(registrations, options).pipe(
+        Layer.provide(Layer.succeed(ExclusiveSqliteHost, true)),
+      ),
+    ),
   );
 
 /**

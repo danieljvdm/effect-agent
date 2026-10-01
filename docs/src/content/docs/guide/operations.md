@@ -28,6 +28,8 @@ administration contract applies to Node and SQLite class `DN` and Cloudflare Dur
 
 `NodeDurableHost` exposes all five. Use
 `vp run admin:durable <explain|verify|retry|wake|obligations> --database <file>` on Node.
+Stop an automatically managed Node host before opening this separate CLI connection; use the
+live host's methods for administration while its exclusive database lock is held.
 Cloudflare Thread Objects expose encoded administration methods through the application's
 Worker.
 
@@ -227,6 +229,8 @@ finalizers provide no exactly-once delivery guarantee.
 Use a file-consistent SQLite snapshot. Copy the database, WAL, and SHM files while no process owns
 the database, or use `VACUUM INTO` or SQLite's online backup API. The supported `DN` shape has one
 process owner per database file.
+With an automatically managed host, run online backup through its shared connection; another
+connection cannot read the live database. Stop the host before using an external backup tool.
 
 A restore has four rules:
 
