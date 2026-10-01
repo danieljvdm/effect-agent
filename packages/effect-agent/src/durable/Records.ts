@@ -110,6 +110,8 @@ export const MAX_PERSISTED_JSON_BYTES = 1024 * 1024;
  * Schema.Json still owns the accepted value shape after this resource preflight succeeds.
  */
 const isJson = Schema.is(Schema.Json);
+// No Unicode flag: match surrogate code units so astral characters take the UTF-8 path too.
+const nonAscii = /[\u0080-\uFFFF]/;
 
 const isPersistedJson = (input: unknown): input is Schema.Json => {
   const pending: Array<
@@ -167,7 +169,13 @@ const isPersistedJson = (input: unknown): input is Schema.Json => {
     if (!isJson(input)) return false;
     const encoded = JSON.stringify(input);
 
-    return encoded !== undefined && utf8ByteLength(encoded) <= MAX_PERSISTED_JSON_BYTES;
+    // Escaping is already reflected in the serialized text. ASCII uses one byte per code unit;
+    // Unicode retains the exact UTF-8 count, and cannot use fewer bytes than code units.
+    return (
+      encoded !== undefined &&
+      encoded.length <= MAX_PERSISTED_JSON_BYTES &&
+      (!nonAscii.test(encoded) || utf8ByteLength(encoded) <= MAX_PERSISTED_JSON_BYTES)
+    );
   } catch {
     return false;
   }
