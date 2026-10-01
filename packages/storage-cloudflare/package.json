@@ -52,7 +52,7 @@
     "effect": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:",
-    "vitest": "4.1.11"
+    "vitest": "catalog:"
   },
   "peerDependencies": {
     "effect": "^4.0.0"

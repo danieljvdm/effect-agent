@@ -1,5 +1,5 @@
 diff --git a/lib/credentials.js b/lib/credentials.js
-index dbbbf5910f857b50a2d10954eca55676b42ff6f3..8516d91d6ea42d4a7ba67e1d6e7134b468feb2d2 100644
+index dbbbf59..8516d91 100644
 --- a/lib/credentials.js
 +++ b/lib/credentials.js
 @@ -48,8 +48,8 @@ export const normalizeApiBaseUrl = (hostname) => {
@@ -13,8 +13,38 @@ index dbbbf5910f857b50a2d10954eca55676b42ff6f3..8516d91d6ea42d4a7ba67e1d6e7134b4
  });
  export const CredentialsFromEnv = Layer.succeed(Credentials, envConfig.pipe(Effect.mapError(() => new ConfigError({
      message: "FLY_API_TOKEN (or FLY_IO_API_KEY) environment variable is required",
+diff --git a/lib/protocol.d.ts b/lib/protocol.d.ts
+index ec4bd22..3741aef 100644
+--- a/lib/protocol.d.ts
++++ b/lib/protocol.d.ts
+@@ -20,8 +20,8 @@
+  */
+ import * as Context from "effect/Context";
+ import * as Layer from "effect/Layer";
+-import * as HttpClient from "effect/unstable/http/HttpClient";
+-import type * as HttpClientError from "effect/unstable/http/HttpClientError";
++import * as HttpClient from "effect/http/HttpClient";
++import type * as HttpClientError from "effect/http/HttpClientError";
+ import * as API from "@distilled.cloud/core/api";
+ import { type ConfigError } from "@distilled.cloud/core/errors";
+ import { Credentials } from "./credentials.ts";
+diff --git a/lib/protocol.js b/lib/protocol.js
+index 8d6382d..76dda1f 100644
+--- a/lib/protocol.js
++++ b/lib/protocol.js
+@@ -24,8 +24,8 @@ import * as Layer from "effect/Layer";
+ import * as Option from "effect/Option";
+ import * as Redacted from "effect/Redacted";
+ import * as Schema from "effect/Schema";
+-import * as HttpClient from "effect/unstable/http/HttpClient";
+-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
++import * as HttpClient from "effect/http/HttpClient";
++import * as HttpClientRequest from "effect/http/HttpClientRequest";
+ import * as API from "@distilled.cloud/core/api";
+ import { makeRestProtocol, unwrapRedactedDeep, wrapSensitive, } from "@distilled.cloud/core/protocol-rest";
+ import { buildRequest, getAnn, mapKeys, matchTypedError, } from "@distilled.cloud/core/protocol-http";
 diff --git a/src/credentials.ts b/src/credentials.ts
-index 568f1a01766d6cbb277eb1e13eb407fd3bb33d46..0374868ed6c0b56cf8ecbb9c9312f8566e300bfa 100644
+index 568f1a0..0374868 100644
 --- a/src/credentials.ts
 +++ b/src/credentials.ts
 @@ -59,10 +59,10 @@ export class Credentials extends Context.Service<
@@ -31,3 +61,22 @@ index 568f1a01766d6cbb277eb1e13eb407fd3bb33d46..0374868ed6c0b56cf8ecbb9c9312f856
      EffectConfig.withDefault(""),
    ),
  });
+diff --git a/src/protocol.ts b/src/protocol.ts
+index 211e916..3daeb8c 100644
+--- a/src/protocol.ts
++++ b/src/protocol.ts
+@@ -25,10 +25,10 @@ import * as Option from "effect/Option";
+ import * as Redacted from "effect/Redacted";
+ import * as Schema from "effect/Schema";
+ import type * as AST from "effect/SchemaAST";
+-import * as HttpClient from "effect/unstable/http/HttpClient";
+-import type * as HttpClientError from "effect/unstable/http/HttpClientError";
+-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+-import type * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
++import * as HttpClient from "effect/http/HttpClient";
++import type * as HttpClientError from "effect/http/HttpClientError";
++import * as HttpClientRequest from "effect/http/HttpClientRequest";
++import type * as HttpClientResponse from "effect/http/HttpClientResponse";
+ import * as API from "@distilled.cloud/core/api";
+ import {
+   makeRestProtocol,

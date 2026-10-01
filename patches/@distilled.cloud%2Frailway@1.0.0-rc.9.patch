@@ -1,5 +1,5 @@
 diff --git a/lib/credentials.js b/lib/credentials.js
-index 3c801225b366c1eced942effba0950acd3cc2f3f..dfecff442d23ad01f4cf4db2efba7b528c95f54d 100644
+index 3c80122..dfecff4 100644
 --- a/lib/credentials.js
 +++ b/lib/credentials.js
 @@ -43,10 +43,10 @@ export const CredentialsFromToken = (config) => Layer.succeed(Credentials, Effec
@@ -17,8 +17,34 @@ index 3c801225b366c1eced942effba0950acd3cc2f3f..dfecff442d23ad01f4cf4db2efba7b52
  });
  const MISSING_TOKEN = "RAILWAY_API_TOKEN (or RAILWAY_TOKEN / RAILWAY_PROJECT_TOKEN) environment variable is required";
  /**
+diff --git a/lib/protocol.d.ts b/lib/protocol.d.ts
+index 2fadd98..535b85e 100644
+--- a/lib/protocol.d.ts
++++ b/lib/protocol.d.ts
+@@ -1,6 +1,6 @@
+ import * as Layer from "effect/Layer";
+-import type * as HttpClient from "effect/unstable/http/HttpClient";
+-import type * as HttpClientError from "effect/unstable/http/HttpClientError";
++import type * as HttpClient from "effect/http/HttpClient";
++import type * as HttpClientError from "effect/http/HttpClientError";
+ import * as API from "@distilled.cloud/core/api";
+ import { Credentials } from "./credentials.ts";
+ import { type DefaultErrors } from "./errors.ts";
+diff --git a/lib/protocol.js b/lib/protocol.js
+index 21a2b79..e849075 100644
+--- a/lib/protocol.js
++++ b/lib/protocol.js
+@@ -29,7 +29,7 @@ import * as Effect from "effect/Effect";
+ import * as Layer from "effect/Layer";
+ import * as Redacted from "effect/Redacted";
+ import * as Schema from "effect/Schema";
+-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
++import * as HttpClientRequest from "effect/http/HttpClientRequest";
+ import * as API from "@distilled.cloud/core/api";
+ import { getAnn } from "@distilled.cloud/core/protocol-http";
+ import { HTTP_STATUS_MAP } from "@distilled.cloud/core/errors";
 diff --git a/src/credentials.ts b/src/credentials.ts
-index ad884711525fd0f9fe52c6965f44a34cc91a3880..2bd9d28a45f7ad1d5eea0802a22fdbf538248eb0 100644
+index ad88471..2bd9d28 100644
 --- a/src/credentials.ts
 +++ b/src/credentials.ts
 @@ -81,12 +81,12 @@ export const CredentialsFromToken = (config: {
@@ -38,3 +64,22 @@ index ad884711525fd0f9fe52c6965f44a34cc91a3880..2bd9d28a45f7ad1d5eea0802a22fdbf5
      EffectConfig.withDefault(DEFAULT_API_BASE_URL),
    ),
  });
+diff --git a/src/protocol.ts b/src/protocol.ts
+index a0f3bce..c7603c9 100644
+--- a/src/protocol.ts
++++ b/src/protocol.ts
+@@ -30,10 +30,10 @@ import * as Layer from "effect/Layer";
+ import * as Redacted from "effect/Redacted";
+ import * as Schema from "effect/Schema";
+ import type * as AST from "effect/SchemaAST";
+-import type * as HttpClient from "effect/unstable/http/HttpClient";
+-import type * as HttpClientError from "effect/unstable/http/HttpClientError";
+-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+-import type * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
++import type * as HttpClient from "effect/http/HttpClient";
++import type * as HttpClientError from "effect/http/HttpClientError";
++import * as HttpClientRequest from "effect/http/HttpClientRequest";
++import type * as HttpClientResponse from "effect/http/HttpClientResponse";
+ import * as API from "@distilled.cloud/core/api";
+ import { getAnn } from "@distilled.cloud/core/protocol-http";
+ import { HTTP_STATUS_MAP } from "@distilled.cloud/core/errors";

@@ -188,18 +188,16 @@ export default defineConfig({
       },
       "action:build": {
         command: "bun scripts/build-action.ts",
-        cache: {
-          input: [
-            { auto: true },
-            "!action/dist",
-            "!action/dist/**",
-            "bun.lock",
-            "!**/node_modules",
-            "!**/node_modules/.vite*",
-            "!**/node_modules/.vite*/**",
-          ],
-          output: ["action/dist/index.mjs"],
-        },
+        input: [
+          { auto: true },
+          "!action/dist",
+          "!action/dist/**",
+          "bun.lock",
+          "!**/node_modules",
+          "!**/node_modules/.vite*",
+          "!**/node_modules/.vite*/**",
+        ],
+        output: ["action/dist/index.mjs"],
       },
       "perf:compare": {
         cache: false,

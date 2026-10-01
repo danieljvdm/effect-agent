@@ -48,51 +48,45 @@ export default defineConfig({
       },
       build: {
         command: "vp build",
-        cache: {
-          input: [
-            { auto: true },
-            // Track root inputs individually so a missing generated dist
-            // directory does not invalidate the package directory listing.
-            "*",
-            { pattern: "!examples/travel-planner", base: "workspace" },
-            "!dist",
-            "!dist/**",
-            { pattern: "bun.lock", base: "workspace" },
-            { pattern: "!**/node_modules", base: "workspace" },
-            { pattern: "!**/node_modules/.vite*", base: "workspace" },
-            { pattern: "!**/node_modules/.vite*/**", base: "workspace" },
-          ],
-        },
+        input: [
+          { auto: true },
+          // Track root inputs individually so a missing generated dist
+          // directory does not invalidate the package directory listing.
+          "*",
+          { pattern: "!examples/travel-planner", base: "workspace" },
+          "!dist",
+          "!dist/**",
+          { pattern: "bun.lock", base: "workspace" },
+          { pattern: "!**/node_modules", base: "workspace" },
+          { pattern: "!**/node_modules/.vite*", base: "workspace" },
+          { pattern: "!**/node_modules/.vite*/**", base: "workspace" },
+        ],
       },
       test: {
         command: "vp test",
         // Fresh runners do not have Vite's generated directories. Keep
         // dependency file hashes and the lockfile, but ignore directory listings.
-        cache: {
-          input: [
-            { auto: true },
-            { pattern: "bun.lock", base: "workspace" },
-            { pattern: "!**/node_modules", base: "workspace" },
-            { pattern: "!**/node_modules/.vite*", base: "workspace" },
-            { pattern: "!**/node_modules/.vite*/**", base: "workspace" },
-          ],
-          output: [],
-        },
+        input: [
+          { auto: true },
+          { pattern: "bun.lock", base: "workspace" },
+          { pattern: "!**/node_modules", base: "workspace" },
+          { pattern: "!**/node_modules/.vite*", base: "workspace" },
+          { pattern: "!**/node_modules/.vite*/**", base: "workspace" },
+        ],
+        output: [],
       },
       check: {
         command: "tsc --noEmit",
-        cache: {
-          input: [
-            { auto: true },
-            "src/**",
-            "test/**",
-            "preview/**",
-            "tsconfig.json",
-            "alchemy.run.ts",
-            "!*.tsbuildinfo",
-          ],
-          output: [{ auto: true }, "!*.tsbuildinfo"],
-        },
+        input: [
+          { auto: true },
+          "src/**",
+          "test/**",
+          "preview/**",
+          "tsconfig.json",
+          "alchemy.run.ts",
+          "!*.tsbuildinfo",
+        ],
+        output: [{ auto: true }, "!*.tsbuildinfo"],
       },
     },
   },

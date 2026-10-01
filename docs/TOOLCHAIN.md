@@ -16,7 +16,7 @@ Commit the Bun lockfile; CI installs with `--frozen-lockfile`.
 | Tool                                                    | Repository version                                  |
 | ------------------------------------------------------- | --------------------------------------------------- |
 | Bun                                                     | `1.4.2`                                             |
-| Vite+                                                   | `1.0.0`                                             |
+| Vite+                                                   | `0.3.3`                                             |
 | Alchemy and its Cloudflare runtime                      | `2.0.0-beta.77` with upstream compatibility patches |
 | Effect and its provider/platform/SQL/Atom/test packages | `4.0.0`                                             |
 | `effect-cf`                                             | `0.44.1`                                            |
@@ -38,19 +38,24 @@ on the catalog versions, including dependencies of published consumers. Publishe
 packages still importing `effect/unstable/*` cannot run on stable Effect.
 The root also installs Alchemy's optional `@effect/platform-bun` peer at the shared Effect
 version so its Bun entry points remain available.
-Vite+ supplies Vitest 5. The two Cloudflare packages retain a direct Vitest 4.1.11 dependency
-because the published Workers pool supports Vitest 4 only. Their test integration must advance
-to Vitest 5 before the stable Effect migration can pass the full handoff gate. Run tasks through `vp run`.
+Vite+ supplies Vitest except in the two Cloudflare packages, whose Workers pool requires a
+direct catalog-pinned Vitest dependency and a Vite task. Run those tasks through `vp run`.
+The repository retains Vitest 4.1.11 for the Workers pool despite `@effect/vitest` declaring
+a Vitest 5 peer minimum, as it did on Effect rc.117. Verify this compatibility with the
+existing suites when either dependency changes.
 Operational harnesses under `tooling/*` also use Vite tasks for Miniflare tests.
 
 VitePress uses its own Vite dependency. Keep the root Vite+ core alias required by Vite+;
 do not add a global Vite override.
 
+Alchemy is deployment tooling; framework packages do not depend on it at runtime.
 Alchemy and its Cloudflare runtime advance together. Their published beta.77 packages and
 Distilled rc.9 clients still use Effect APIs renamed in rc.113. The version-specific Bun
 patches backport [Alchemy's compatibility fix](https://github.com/alchemy-run/alchemy/pull/1562)
 and [Distilled's matching fix](https://github.com/alchemy-run/distilled/pull/575), including the
-published JavaScript entry points. The root declares `mime` because the Cloudflare runtime
+published JavaScript entry points. The patches also update the removed Effect import paths
+and URL-safe Base64 encoding for Effect 4.0.0, including Alchemy's Neon client. The root
+declares `mime` because the Cloudflare runtime
 imports it without declaring the dependency. Keep these corrections until a published upgrade
 includes them; verify that upgrade with a frozen install and `vp run check:deploy`.
 
