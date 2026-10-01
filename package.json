@@ -163,6 +163,8 @@
     "@distilled.cloud/hetzner@1.0.0-rc.9": "patches/@distilled.cloud%2Fhetzner@1.0.0-rc.9.patch",
     "@distilled.cloud/planetscale@1.0.0-rc.9": "patches/@distilled.cloud%2Fplanetscale@1.0.0-rc.9.patch",
     "@distilled.cloud/railway@1.0.0-rc.9": "patches/@distilled.cloud%2Frailway@1.0.0-rc.9.patch",
-    "@distilled.cloud/neon@1.0.0-rc.9": "patches/@distilled.cloud%2Fneon@1.0.0-rc.9.patch"
+    "@distilled.cloud/neon@1.0.0-rc.9": "patches/@distilled.cloud%2Fneon@1.0.0-rc.9.patch",
+    "@yielded/auth@0.1.0-beta.7": "patches/@yielded%2Fauth@0.1.0-beta.7.patch",
+    "@yielded/auth-persistence@0.1.0-beta.7": "patches/@yielded%2Fauth-persistence@0.1.0-beta.7.patch"
   }
 }

@@ -13,7 +13,7 @@ It uses Cloudflare:
   **Dynamic Workers** to serve them.
 - **Email Sending** for email sign-in, alongside GitHub OAuth.
 
-The app consumes published Effect Agent packages and uses Effect Atom for client state.
+The app consumes the repository's Effect Agent workspace packages and uses Effect Atom for client state.
 [alchemy.run.ts](alchemy.run.ts) defines the Cloudflare resources and required configuration.
 
 New trip sites fork an immutable starter identified by its source contents. Updating the
@@ -116,8 +116,7 @@ active work on the worker; an older pending delivery is not reconstructed as a n
 Activity is a recent window, not a complete audit log. Reads never admit, recover, or replay
 work. Diagnostics retain the existing redaction boundary.
 
-These queries use the exact published framework dependencies in this example. They do not
+These queries use the framework workspace dependencies in this example. They do not
 change the framework's general `Subagent.inspect` or `Subagent.observe` contracts. Any future
-framework optimization belongs in a separate library PR, followed by publication and an exact
-consumer dependency upgrade before integration. Local Miniflare checks establish behavior and
+framework optimization belongs in a separate library PR. Local Miniflare checks establish behavior and
 work budgets; deployed latency requires a separately authorized deployment and measurement.

@@ -7,8 +7,8 @@ Framework packages live in `packages/*`; runnable examples live in `examples/*`.
 
 The root [package.json](../package.json) owns shared dependency versions.
 Workspace manifests use `catalog:` for those dependencies and `workspace:*` for internal packages.
-The travel planner is a release consumer: its Effect Agent dependencies and compatible
-`effect-cf` version pin exact npm versions and advance together after publication.
+The travel planner consumes explicit Effect Agent workspace dependencies and the shared
+Effect and `effect-cf` catalog versions, so it validates the current framework.
 `bunfig.toml` disables implicit workspace linking, so only explicit `workspace:` dependencies
 use local source; registry dependencies, including transitive ones, stay on published packages.
 Commit the Bun lockfile; CI installs with `--frozen-lockfile`.
@@ -58,6 +58,11 @@ and URL-safe Base64 encoding for Effect 4.0.0, including Alchemy's Neon client. 
 declares `mime` because the Cloudflare runtime
 imports it without declaring the dependency. Keep these corrections until a published upgrade
 includes them; verify that upgrade with a frozen install and `vp run check:deploy`.
+
+Auth beta.7 and its matching persistence package also need version-specific Bun patches
+for stable Effect namespaces, encoding helpers, schema filters, and concrete brand declarations.
+The demo retains their public contracts and verifies authentication through its existing
+integration checks. Remove these patches when a compatible published release is adopted.
 
 ## Current workspace
 
@@ -229,7 +234,7 @@ The travel planner is a private application with no package version. It does not
 changesets, version bumps, changelogs, package tags, or npm releases. Private-package versioning
 and tagging remain disabled in the Changesets configuration.
 Changesets updates internal dependency ranges only when they use `workspace:`. Exact registry
-pins, including the travel planner's published Effect Agent dependencies, stay unchanged during
+pins stay unchanged during
 versioning. Upgrade those consumers and their import paths separately after publication; otherwise the version task's
 install would request packages that have not been published yet.
 The project is in prerelease mode. Leaving it requires an explicit release decision and
@@ -439,6 +444,8 @@ lockfile. The comparison uses the PR's esbuild version and the same fixture sour
 Disposable comparison manifests alias historical PascalCase subpaths to their kebab-case names;
 staged modules also expose the former `Ephemeral` assembly as `InMemory`. The published packages
 retain only their canonical exports. Renamed modules remain comparable.
+For Effect prerelease baselines, the analyzer resolves the fixtures' `effect/ai`
+import to that checkout's original `effect/unstable/ai` implementation.
 
 The fixtures in `scripts/bundle` cover agent construction, importing the runtime's `run` function,
 the in-memory assembly, and loading the runtime on demand, through both root and direct module imports. The
