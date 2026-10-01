@@ -169,12 +169,14 @@ const isPersistedJson = (input: unknown): input is Schema.Json => {
     if (!isJson(input)) return false;
     const encoded = JSON.stringify(input);
 
-    // Escaping is already reflected in the serialized text. ASCII uses one byte per code unit;
-    // Unicode retains the exact UTF-8 count, and cannot use fewer bytes than code units.
+    // Escaping is already reflected in the serialized text. UTF-8 uses one to three bytes per
+    // UTF-16 code unit; ASCII uses exactly one. Only ambiguous Unicode needs the exact count.
     return (
       encoded !== undefined &&
       encoded.length <= MAX_PERSISTED_JSON_BYTES &&
-      (!nonAscii.test(encoded) || utf8ByteLength(encoded) <= MAX_PERSISTED_JSON_BYTES)
+      (encoded.length <= MAX_PERSISTED_JSON_BYTES / 3 ||
+        !nonAscii.test(encoded) ||
+        utf8ByteLength(encoded) <= MAX_PERSISTED_JSON_BYTES)
     );
   } catch {
     return false;
