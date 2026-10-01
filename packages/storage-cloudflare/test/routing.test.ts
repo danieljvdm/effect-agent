@@ -241,9 +241,9 @@ describe("cross-DO port routing", () => {
               ),
             ),
             Layer.provide(transportLayer(state)),
+            Layer.provideMerge(BrowserCrypto.layer),
           ),
         ),
-        Effect.provide(BrowserCrypto.layer),
         Effect.scoped,
       ),
     );

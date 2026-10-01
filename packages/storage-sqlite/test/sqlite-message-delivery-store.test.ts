@@ -1,11 +1,16 @@
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Option } from "effect";
+import { DateTime, Effect, FileSystem, Layer, Option } from "effect";
+import { ThreadId } from "effect-agent/identifiers";
 import {
   drainLifecyclePublications,
   lifecyclePublicationLayer,
+  LifecyclePublication,
+  type LifecyclePublicationBatch,
+  LifecyclePublicationError,
   LifecyclePublicationHandler,
+  type LifecyclePublicationStorage,
 } from "effect-agent/lifecycle-publication";
 import { MessageDeliveryStore, readPending } from "effect-agent/message-delivery";
 import {
@@ -179,8 +184,81 @@ it.effect("rolls back a lifecycle acknowledgement wave with a conflicting owner"
   ).pipe(Effect.provide([NodeCrypto.layer, NodeFileSystem.layer])),
 );
 
-// Requested wave seam: cancellation during a later dispatch must still acknowledge
-// the earlier committed batch, while retaining the interrupted owner's exact debt.
+// Custom ports may return more owners than SQL's limit. Preserve the documented
+// acknowledgement bound and completed-batch cleanup for those larger drains.
+it.effect("bounds custom acknowledgement waves after success and interruption", () =>
+  Effect.gen(function* () {
+    const record = yield* makeMessageDeliveryFixture();
+
+    const batches = Array.from({ length: 102 }, (_, index): LifecyclePublicationBatch => {
+      const ownerThreadId = ThreadId.make(`owner-${index}`);
+
+      return [
+        LifecyclePublication.make({
+          id: `publication-${index}`,
+          ownerThreadId,
+          ordinal: 1,
+          createdAt: DateTime.makeUnsafe(0),
+          fact: {
+            _tag: "DeliveryRetained",
+            key: { ...record.key, ownerThreadId },
+            envelope: record.envelope,
+            createdAtMillis: 0,
+          },
+        }),
+      ];
+    });
+
+    for (const interrupted of [false, true]) {
+      const acknowledged: Array<ReadonlyArray<LifecyclePublicationBatch>> = [];
+      const published: Array<string> = [];
+
+      const storage: LifecyclePublicationStorage = {
+        pending: (_, limit) => Effect.succeed(batches.slice(0, limit)),
+        claim: () => Effect.succeed(true),
+        acknowledge: () => Effect.die("Expected bounded wave acknowledgement"),
+        acknowledgeMany: (wave) =>
+          wave.length > 100
+            ? Effect.fail(LifecyclePublicationError.make({ reason: "capacity" }))
+            : Effect.sync(() => {
+                acknowledged.push(wave);
+              }),
+        pendingDeadline: Effect.succeed(Option.none()),
+        retryParked: () => Effect.void,
+      };
+
+      const exit = yield* drainLifecyclePublications(storage, 10_000, interrupted ? 102 : 101).pipe(
+        Effect.provideService(LifecyclePublicationHandler, {
+          publish: (batch) =>
+            batch[0].id === "publication-101"
+              ? Effect.interrupt
+              : Effect.sync(() => {
+                  published.push(batch[0].id);
+                }),
+        }),
+        Effect.exit,
+      );
+
+      expect(acknowledged.map((wave) => wave.length)).toEqual([100, 1]);
+      expect(acknowledged.flat().map((batch) => batch[0].id)).toEqual(published);
+      expect(exit._tag).toBe(interrupted ? "Failure" : "Success");
+    }
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(threadStoreLayer, submissionLedgerLayer).pipe(
+        Layer.provide([
+          SqliteClient.layer({ filename: ":memory:" }),
+          storageConfigLayer({ filename: ":memory:" }),
+          SqliteStorageFailpoint.layer,
+        ]),
+        Layer.provideMerge(NodeCrypto.layer),
+      ),
+    ),
+  ),
+);
+
+// Cancellation during a later dispatch must still acknowledge the earlier committed
+// batch, while retaining the interrupted owner's exact debt.
 it.effect("acknowledges completed lifecycle batches when a later owner interrupts", () =>
   Effect.scoped(
     Effect.gen(function* () {

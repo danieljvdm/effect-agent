@@ -39,7 +39,7 @@ import {
 import { digestDefinitions, digestJson, DigestError } from "../Digest.ts";
 import type { DurableWorkerFailure, DurableWorkerRequirements } from "../DurableAgentRuntime.ts";
 import {
-  DefinitionDigestInput,
+  type DefinitionDigestInput,
   type PersistedJson,
   DefinitionDigests,
   ReplayContract,
@@ -132,7 +132,11 @@ const replaySnapshot = Schema.fromJsonString(
   }),
 );
 
-const definitionSnapshot = Schema.fromJsonString(DefinitionDigestInput);
+// Registration adds generated metadata to admitted declarations. These values are hashed,
+// not persisted, so preserve their JSON shape without reapplying persisted-field limits.
+const definitionSnapshot = Schema.fromJsonString(
+  Schema.Struct({ agent: Schema.Json, model: Schema.Json, tools: Schema.Json }),
+);
 
 /** Hash current operation contracts; retain only static metadata, never executable authority. */
 export const toolReplayContracts = Effect.fn("AgentRegistration.toolReplayContracts")(function* (

@@ -16,16 +16,64 @@ import { Tool, Toolkit } from "effect/unstable/ai";
 import * as Agent from "../../src/core/Agent.ts";
 import { AttemptId, SubmissionId, ThreadId } from "../../src/core/Identifiers.ts";
 import { DurableWorkerBinding } from "../../src/durable/AgentRegistration.ts";
-import { DigestError } from "../../src/durable/Digest.ts";
+import { digestDefinitions, DigestError } from "../../src/durable/Digest.ts";
 import {
   compileBindingContracts,
+  compileRegistrations,
   toolReplayContracts,
 } from "../../src/durable/internal/agent-registration.ts";
-import { DefinitionDigests, Digest, ProducerEpoch } from "../../src/durable/Records.ts";
+import {
+  DefinitionDigestInput,
+  DefinitionDigests,
+  Digest,
+  MAX_PERSISTED_JSON_DEPTH,
+  ProducerEpoch,
+} from "../../src/durable/Records.ts";
 import { Claim, OwnershipToken } from "../../src/durable/SubmissionLedger.ts";
 import { ToolExecutionClass } from "../../src/engine/DurableStep.ts";
 
 class Dependency extends Context.Service<Dependency, string>()("test/registered-dependency") {}
+
+it.effect("preserves admitted declarations when generated metadata exceeds persisted depth", () =>
+  Effect.gen(function* () {
+    let declaration: Schema.Json = "leaf";
+
+    for (let depth = 0; depth < MAX_PERSISTED_JSON_DEPTH; depth++)
+      declaration = { nested: declaration };
+    const definitions = DefinitionDigestInput.make({ agent: declaration, model: "v1", tools: [] });
+
+    const definition = Agent.make("deep-registration", {
+      input: Schema.String,
+      output: Schema.String,
+      updates: Schema.String,
+      instructions: "Answer",
+      toolkit: Toolkit.empty,
+    });
+
+    const expected = yield* digestDefinitions({
+      ...definitions,
+      agent: {
+        declaration,
+        updates: Schema.decodeUnknownSync(Schema.Json)(Tool.getJsonSchemaFromSchema(Schema.String)),
+        updateProtocol: { schemaVersion: 1, tool: "emit_update" },
+      },
+    });
+
+    const entry = {
+      agent: definition,
+      model: Layer.effectContext<Agent.ModelServices, never, never>(
+        Effect.die("No model is invoked"),
+      ),
+      definitions,
+    };
+
+    for (let rebuild = 0; rebuild < 2; rebuild++) {
+      const compiled = yield* compileRegistrations([entry]);
+
+      expect(compiled[0]?.digests.agent).toBe(expected.agent);
+    }
+  }).pipe(Effect.provide(NodeCrypto.layer)),
+);
 
 // Explicit failure-first request: stable-identity invalidation and reuse across runtime rebuilds.
 // Final output cannot reveal repeated contract hashing, so count the real Crypto operations here.

@@ -274,7 +274,7 @@ const withSource = Effect.fn("LifecyclePublication.withSource")(
  * before dispatch, so interruption and process loss retain the same facts without another timer.
  * Finish independent owner batches before surfacing failures; interruption stops the wave.
  * Acknowledgements are exact and idempotent. An optional storage wave acknowledgement commits
- * completed batches together, including when a later dispatch is interrupted. No producer or
+ * completed batches in groups of up to 100, including when a later dispatch is interrupted. No producer or
  * external Tool is re-executed here.
  */
 export const drainLifecyclePublications = Effect.fn("LifecyclePublication.drain")(function* (
@@ -325,7 +325,10 @@ export const drainLifecyclePublications = Effect.fn("LifecyclePublication.drain"
     Effect.onExit(() =>
       acknowledgeMany === undefined || published.length === 0
         ? Effect.void
-        : acknowledgeMany(published),
+        : Effect.gen(function* () {
+            for (let offset = 0; offset < published.length; offset += 100)
+              yield* acknowledgeMany(published.slice(offset, offset + 100));
+          }),
     ),
   );
 });
