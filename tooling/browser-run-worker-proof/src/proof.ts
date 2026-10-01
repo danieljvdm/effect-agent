@@ -18,8 +18,10 @@ export const WorkerFailure = Schema.Literals([
   "InteractiveBrowserCapacityError",
   "InteractiveBrowserPolicyDeniedError",
   "BrowserRunCleanupError",
-  "AgentModelError",
-  "AgentBudgetExceeded",
+  "AiError",
+  "AgentPolicyError",
+  "AgentOutputError",
+  "ModelProtocolError",
   "worker-failure",
 ]);
 

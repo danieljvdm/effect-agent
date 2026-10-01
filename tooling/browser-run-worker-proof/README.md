@@ -32,10 +32,11 @@ success alone cannot pass the gate.
 
 Before dispatch, the runner waits for authenticated evidence from a pristine
 Durable Object, retrying fresh-route 404 and transient 5xx/transport failures every
-two seconds for up to one minute. Static health alone does not prove the receiver is ready.
+two seconds for up to one minute.
 Authentication failures, invalid evidence, and nonpristine owners fail immediately.
 
-A read-only scrape preflight runs before browser creation. Transient 5xx/reset
+A read-only scrape of inline fixture HTML runs before browser creation, avoiding
+propagation of a new public route to the Quick Actions browser. Transient 5xx/reset
 failures of that preflight may retry, at most twice. Read-only browser observations
 also retry an attached-session read failure twice, using public execution evidence.
 The runner never retries `POST /run`

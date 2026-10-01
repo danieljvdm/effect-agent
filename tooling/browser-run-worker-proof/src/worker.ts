@@ -24,7 +24,7 @@ import {
   PageCapture,
   PageCaptureLimits,
   PageCaptureRequest,
-  PageUrlTarget,
+  PageHtmlTarget,
 } from "effect-agent/page-capture";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
@@ -180,13 +180,13 @@ export class CheckoutRun extends DurableObject<Env> {
       Layer.provide(BrowserQuickActionBrowserBinding.layer({ browser: this.env.BROWSER })),
     );
 
-    // This owned page has no scripts or side effects. Only its pre-checkout scrape may retry.
+    // Inline fixture HTML avoids fresh-route propagation and has no scripts or side effects.
     const scraped = yield* Effect.gen({ self: this }, function* () {
       this.ctx.storage.kv.put("scrapeAttempts", this.evidence().scrapeAttempts + 1);
 
       return yield* (yield* PageCapture).capture(
         PageCaptureRequest.make({
-          target: PageUrlTarget.make({ url: `${origin}/health` }),
+          target: PageHtmlTarget.make({ html: "<h1>checkout-proof-v2</h1>" }),
           action: CapturePageScrape.make({ selectors: ["h1"] }),
           engine: "chromium",
           limits: PageCaptureLimits.make({ maxOutputBytes: 4096 }),
@@ -636,10 +636,7 @@ export class CheckoutRun extends DurableObject<Env> {
 }
 
 export default {
-  fetch(request: Request, env: Env): Promise<Response> | Response {
-    if (new URL(request.url).pathname === "/health" && request.method === "GET")
-      return html("<h1>checkout-proof-v2</h1>");
-
+  fetch(request: Request, env: Env): Promise<Response> {
     return env.CHECKOUTS.getByName("buyer").fetch(request);
   },
 };

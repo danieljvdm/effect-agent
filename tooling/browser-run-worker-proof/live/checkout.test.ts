@@ -319,7 +319,7 @@ const proof = Effect.gen(function* () {
 
     if (deployed.workerName !== workerName || deployed.url !== origin)
       return yield* fail("deployment:origin-mismatch");
-    // Static health bypasses the fresh namespace; wait for its authenticated receiver.
+    // Wait for the fresh namespace's authenticated receiver before the one-shot dispatch.
     yield* request("evidence").pipe(
       Effect.filterOrFail(
         ({ evidence }) =>
