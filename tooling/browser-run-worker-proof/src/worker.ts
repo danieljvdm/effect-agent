@@ -133,6 +133,9 @@ export class CheckoutRun extends DurableObject<Env> {
     schema: S,
     fallback: S["Type"],
   ) => Schema.decodeUnknownSync(schema)(this.ctx.storage.kv.get(key) ?? fallback);
+  private get stopped() {
+    return this.read("stopped", Schema.Boolean, false);
+  }
   private evidence() {
     return Evidence.make({
       started: this.read("started", Schema.Boolean, false),
@@ -151,6 +154,8 @@ export class CheckoutRun extends DurableObject<Env> {
     }).pipe(Layer.provide(FetchHttpClient.layer));
   }
   private close = Effect.fnUntraced(function* (this: CheckoutRun) {
+    // Fence the suspended run before acknowledging closure, including its preflight.
+    this.ctx.storage.kv.put("stopped", true);
     const id = this.read("session", Schema.NullOr(Schema.String), null);
 
     if (id === null && !this.evidence().closed)
@@ -167,7 +172,7 @@ export class CheckoutRun extends DurableObject<Env> {
     return this.evidence();
   });
   private run = Effect.fnUntraced(function* (this: CheckoutRun, origin: string) {
-    if (this.evidence().started)
+    if (this.evidence().started || this.stopped)
       return new Response("Attempt already started; never replay it", { status: 409 });
     this.ctx.storage.kv.put("started", true);
 
@@ -205,11 +210,24 @@ export class CheckoutRun extends DurableObject<Env> {
       )
     )
       return yield* CheckoutError.make({ stage: "scrape", message: "Fixture assertion failed" });
+    if (this.stopped)
+      return yield* CheckoutError.make({
+        stage: "authority",
+        message: "Run was closed during preflight",
+      });
     const host = yield* BrowserRunInteractiveHost;
 
     // A lost acquisition reply is not proof that no browser was allocated.
     this.ctx.storage.kv.put("closed", false);
     yield* Effect.promise(() => this.ctx.storage.setAlarm(Date.now() + 300_000));
+    if (this.stopped) {
+      this.ctx.storage.kv.put("closed", true);
+
+      return yield* CheckoutError.make({
+        stage: "authority",
+        message: "Run was closed before acquisition",
+      });
+    }
 
     const acquired = yield* host.acquire(
       InteractiveBrowserPolicy.make({
@@ -222,16 +240,24 @@ export class CheckoutRun extends DurableObject<Env> {
 
     // Persist before connection so a lost request can close this exact browser, never replace it.
     this.ctx.storage.kv.put("session", Redacted.value(acquired.sessionId));
+    if (this.stopped) {
+      yield* this.close();
+
+      return yield* CheckoutError.make({
+        stage: "authority",
+        message: "Run was closed during acquisition",
+      });
+    }
     const session = yield* acquired.connect;
     const handle = session.handle;
-    let url = `${origin}/shop/login`;
 
-    yield* handle.navigate(BrowserNavigateRequest.make({ url }));
+    yield* handle.navigate(BrowserNavigateRequest.make({ url: `${origin}/shop/login` }));
     let raw: typeof BrowserRunPageObservation.Type | undefined;
     const refs = new Map<string, (typeof BrowserRunPageObservation.Type.controls)[number]>();
     let sequence = 0;
     let blocked = false;
     let submitted = false;
+    const isStopped = () => this.stopped;
 
     const invalid = () =>
       BrowserUse.BrowserUseError.make({
@@ -246,7 +272,16 @@ export class CheckoutRun extends DurableObject<Env> {
       });
 
     const observe = Effect.gen({ self: this }, function* () {
-      const result = yield* handle.readText(BrowserReadTextRequest.make({}));
+      const result = yield* handle.readText(BrowserReadTextRequest.make({})).pipe(
+        Effect.retry({
+          times: 2,
+          schedule: Schedule.exponential("1 second"),
+          while: (error) =>
+            error._tag === "InteractiveBrowserActionError" &&
+            error.operation === "read-text" &&
+            error.evidence?.session === "attached",
+        }),
+      );
 
       raw = yield* Schema.decodeEffect(BrowserRunPageObservation)(result.text);
       refs.clear();
@@ -284,14 +319,7 @@ export class CheckoutRun extends DurableObject<Env> {
         text: raw.pageText.replaceAll(this.env.CHECKOUT_PASSWORD, "[redacted]"),
         controls,
       });
-    }).pipe(
-      Effect.retry({
-        times: 2,
-        schedule: Schedule.exponential("1 second"),
-        while: (error) => "cause" in error && transient(error.cause),
-      }),
-      Effect.mapError(safeError),
-    );
+    }).pipe(Effect.mapError(safeError));
 
     const actions = BrowserUse.BrowserActions.of({
       observe,
@@ -302,6 +330,7 @@ export class CheckoutRun extends DurableObject<Env> {
           const control = refs.get(action.ref);
 
           if (
+            isStopped() ||
             blocked ||
             submitted ||
             control === undefined ||
@@ -351,7 +380,6 @@ export class CheckoutRun extends DurableObject<Env> {
             };
           }
           completed++;
-          url = result.value.url;
         }
 
         return yield* observe.pipe(
@@ -370,12 +398,13 @@ export class CheckoutRun extends DurableObject<Env> {
     const helpers = hostTools.toLayer({
       fill_credential: () =>
         Effect.gen({ self: this }, function* () {
-          if (blocked || submitted || url !== `${origin}/shop/login`) return yield* invalid();
-          for (const [kind, value] of [
-            ["email", buyer],
-            ["password", Redacted.value(password)],
+          if (this.stopped || blocked || submitted) return yield* invalid();
+          for (const { kind, value } of [
+            { kind: "email", value: buyer },
+            { kind: "password", value: Redacted.value(password) },
           ]) {
             yield* observe;
+            if (this.stopped) return yield* invalid();
 
             const control = raw?.controls.find(
               (control) => control.inputType === kind && control.kind.startsWith("input:"),
@@ -386,7 +415,7 @@ export class CheckoutRun extends DurableObject<Env> {
               .fill(
                 BrowserFillRequest.make({
                   selector: control.selector,
-                  value: value!,
+                  value,
                   expectedTarget: {
                     documentId: raw.documentId,
                     nodeId: control.nodeId,
@@ -409,8 +438,9 @@ export class CheckoutRun extends DurableObject<Env> {
         }),
       submit: () =>
         Effect.gen({ self: this }, function* () {
-          if (blocked || submitted || url !== `${origin}/shop/review`) return yield* invalid();
+          if (this.stopped || blocked || submitted) return yield* invalid();
           yield* observe;
+          if (this.stopped) return yield* invalid();
 
           const control = raw?.controls.find(
             (control) => control.kind === "button" && control.label === "Place order · $42.12 USD",
@@ -426,6 +456,7 @@ export class CheckoutRun extends DurableObject<Env> {
                   documentId: raw.documentId,
                   nodeId: control.nodeId,
                   state: Schema.decodeSync(BrowserExpectedTargetState)(control),
+                  scopeSelector: "#review",
                 },
               }),
             )
@@ -522,7 +553,7 @@ export class CheckoutRun extends DurableObject<Env> {
     }
     if (path === "/shop/review" && request.method === "GET")
       return html(
-        `<h1>Review order</h1><p>One blue medium Everyday Shirt. Standard shipping to ${address}. Subtotal $34.00, shipping $5.00, tax $3.12. Total $42.12 USD. Saved test payment; no real funds.</p><form method="post" action="/shop/pay"><button>Place order · $42.12 USD</button></form>`,
+        `<h1>Review order</h1><p>One blue medium Everyday Shirt. Standard shipping to ${address}. Subtotal $34.00, shipping $5.00, tax $3.12. Total $42.12 USD. Saved test payment; no real funds.</p><form id="review" method="post" action="/shop/pay"><button>Place order · $42.12 USD</button></form>`,
       );
     if (path === "/shop/pay" && request.method === "POST") {
       const attempts = this.evidence().attempts + 1;

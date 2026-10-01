@@ -30,10 +30,13 @@ browser actions cannot submit payment. The runner requires exactly one payment a
 and an independently fetched matching receipt. A model completion message or an HTTP
 success alone cannot pass the gate.
 
-A read-only scrape preflight runs before browser creation. Only transient 5xx/reset
-failures of that preflight may retry, at most twice. The runner never retries `POST /run`
+A read-only scrape preflight runs before browser creation. Transient 5xx/reset
+failures of that preflight may retry, at most twice. Read-only browser observations
+also retry an attached-session read failure twice, using public execution evidence.
+The runner never retries `POST /run`
 or a purchase. Lost responses remain unresolved, and the Durable Object's persisted
-started fence refuses a replacement run.
+started fence refuses a replacement run. Closure persists a stop fence before
+acknowledgement so a suspended preflight cannot allocate a browser afterward.
 
 The host injects `CHECKOUT_PASSWORD` through guarded credential input. It is a
 redacted Worker binding, not model input. This is host-owned credential injection,
