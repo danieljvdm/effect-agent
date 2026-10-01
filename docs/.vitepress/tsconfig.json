@@ -1,9 +1,0 @@
-{
-  "extends": "../../tsconfig.base.json",
-  "compilerOptions": {
-    "paths": {
-      "typescript": ["../../node_modules/typescript-twoslash"]
-    }
-  },
-  "include": ["**/*.ts"]
-}

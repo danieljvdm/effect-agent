@@ -1,0 +1,22 @@
+{
+  "name": "@effect-agent/docs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "NODE_OPTIONS=--max-old-space-size=8192 astro build",
+    "preview": "astro preview",
+    "check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "catalog:",
+    "@yielded/starlight-theme": "catalog:",
+    "astro": "catalog:",
+    "expressive-code-twoslash": "catalog:",
+    "satteri": "catalog:",
+    "starlight-links-validator": "catalog:",
+    "typescript": "catalog:docs",
+    "typescript-twoslash": "catalog:"
+  }
+}

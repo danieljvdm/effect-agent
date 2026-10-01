@@ -41,7 +41,7 @@ Vite+ supplies Vitest except in the two Cloudflare packages, whose Workers pool 
 direct catalog-pinned Vitest dependency and a Vite task. Run those tasks through `vp run`.
 Operational harnesses under `tooling/*` also use Vite tasks for Miniflare tests.
 
-VitePress uses its own Vite dependency. Keep the root Vite+ core alias required by Vite+;
+Astro uses its own Vite dependency. Keep the root Vite+ core alias required by Vite+;
 do not add a global Vite override.
 
 Alchemy and its Cloudflare runtime advance together. Their published beta.77 packages and
@@ -54,7 +54,7 @@ includes them; verify that upgrade with a frozen install and `vp run check:deplo
 
 ## Current workspace
 
-See the [package map](reference/packages.md) for public packages and capabilities.
+See the [package map](src/content/docs/reference/packages.md) for public packages and capabilities.
 
 | Directory                          | Purpose                                                   |
 | ---------------------------------- | --------------------------------------------------------- |
@@ -68,6 +68,7 @@ See the [package map](reference/packages.md) for public packages and capabilitie
 | `tooling/pr-review-eval`           | Opt-in live review evaluation                             |
 | `tooling/semantic-memory-eval`     | Semantic-memory quality evaluation                        |
 | `action/`                          | PR-review Action contract and ignored build output        |
+| `docs/`                            | Astro Starlight site using `@yielded/starlight-theme`     |
 
 Framework code stays in `packages/*`. The canonical app and operational harnesses are leaf workspaces.
 Provider integrations come from upstream Effect AI Layers, including `@effect/ai-typesafe`.
@@ -176,13 +177,15 @@ sentence. Explain behavior after the code it describes. Keep complete setup avai
 type-check examples through their runnable entry points; move advanced contracts and recovery
 details into linked reference pages instead of front-loading them in walkthroughs.
 
-The homepage imports `docs/snippets/travel-planner/*.ts`.
+Public pages live in `docs/src/content/docs`; contributor material stays outside that collection.
+The homepage loads `docs/snippets/travel-planner/*.ts` through source-backed code fences.
 Edit those files to change its examples. A `twoslash` fence enables type hovers and compiler
 validation during `vp run docs:build`. Relative imports resolve from that snippet directory.
 
-Twoslash uses the pinned `typescript-twoslash` JavaScript compiler API; repository checks use
-TypeScript 7. Production builds share successful snippet checks between client and server
-rendering and reuse compiler and filesystem state within the process. Each build starts empty;
+Twoslash uses the pinned `typescript-twoslash` JavaScript compiler API. The docs workspace uses
+the compatible TypeScript 6 compiler from the root `docs` catalog; library checks use
+TypeScript 7. Expressive Code runs Twoslash before highlighting each marked block. Production builds
+reuse compiler and filesystem state within the process. Each build starts empty;
 the dev server disables these caches so imported snippet edits remain visible.
 Keep compiler validation enabled. Do not suppress errors with `noErrors` or
 `noErrorValidation`.
@@ -194,9 +197,9 @@ Outside a generator, the formatter parses `*` as multiplication and inserts spac
 
 The docs config adds Open Graph and Twitter metadata to the built HTML. Each page uses its
 resolved title and description, a canonical URL on `https://effect-agent.com`, and its own
-1200 × 630 PNG. `docs/.vitepress/social-images.ts` renders the page title, description, and URL
+1200 × 630 PNG. `docs/integrations/social-renderer.ts` renders the page title, description, and URL
 using the installed IBM Plex fonts and `docs/public/mark.svg`. The build writes images under
-`docs/.vitepress/dist/social/`; no browser, remote font request, or manual screenshot is needed.
+`docs/dist/social/`; no browser, remote font request, or manual screenshot is needed.
 Preview crawlers read the metadata and images without JavaScript.
 
 Edit the renderer to change the artwork, or the page's frontmatter to change its title and
@@ -207,7 +210,7 @@ Link to `guide/workflows` for the Effect Workflows preview. The old `platforms/n
 anchor points readers to that guide.
 
 Run `vp run docs:build` and inspect the generated HTML for the homepage, a guide, and a directory
-index such as `platforms/index.html`. Open their generated PNGs to check the layout. Image URLs
+index such as `docs/dist/platforms/index.html`. Open their generated PNGs to check the layout. Image URLs
 must be absolute, and canonical URLs must match the site's clean routes. Existing messages may
 retain a cached preview after a deployment.
 
@@ -401,7 +404,7 @@ PascalCase; public import subpaths use kebab-case. `import { Agent } from "effec
   is needed. Pack preserves paths relative to `src`, and the publisher maps them to `dist`.
   Do not publish wildcard, `internal`, or `index` subpaths.
 
-See the [package map](reference/packages.md#public-imports) for API ownership and import changes.
+See the [package map](src/content/docs/reference/packages.md#public-imports) for API ownership and import changes.
 
 Oxlint enforces export-only root and group indexes, prevents self-barrel imports, and rejects
 re-export-only internal files during `vp lint`, `vp check`, and the pre-commit hook. Indexes may

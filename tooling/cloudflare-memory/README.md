@@ -1,6 +1,6 @@
 # Cloudflare shared memory benchmark
 
-See the [Cloudflare memory guide](../../docs/platforms/cloudflare.md#shared-memory) for application setup.
+See the [Cloudflare memory guide](../../docs/src/content/docs/platforms/cloudflare.md#shared-memory) for application setup.
 This leaf example hosts real Thread Objects and separate Memory Objects. It registers no model and
 stores only synthetic source text. The Worker refuses every HTTP call until `BENCH_TOKEN` is set.
 
