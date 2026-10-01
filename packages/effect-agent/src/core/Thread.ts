@@ -188,6 +188,7 @@ const belongsTo = (owner: Owner, ancestor: Owner): boolean => {
   for (let current: Owner | undefined = owner; current !== undefined; current = current.parent) {
     if (current === ancestor) return true;
   }
+
   return false;
 };
 
@@ -204,6 +205,7 @@ const access = (state: State, owner: Owner, threadId: ThreadId) => {
     }
   }
   const entry = state.threads.get(threadId);
+
   return entry !== undefined && entry.owner !== owner
     ? Effect.fail(
         ThreadOwnershipError.make({
@@ -217,6 +219,7 @@ const access = (state: State, owner: Owner, threadId: ThreadId) => {
 
 const findSnapshot = Effect.fnUntraced(function* (state: State, owner: Owner, threadId: ThreadId) {
   const snapshot = yield* access(state, owner, threadId);
+
   return snapshot === undefined ? yield* ThreadNotFound.make({ threadId }) : snapshot;
 });
 
@@ -294,19 +297,23 @@ export const layerMemory = Layer.effect(
   Effect.gen(function* () {
     const state = yield* SynchronizedRef.make<State>({ threads: new Map(), contentBytes: 0 });
     const root: Owner = { closed: false };
+
     const release = (owner: Owner) =>
       SynchronizedRef.update(state, (current) => {
         owner.closed = true;
         const threads = new Map(current.threads);
         let contentBytes = current.contentBytes;
+
         for (const [id, entry] of threads) {
           if (belongsTo(entry.owner, owner)) {
             threads.delete(id);
             contentBytes -= entry.snapshot.contentBytes;
           }
         }
+
         return { threads, contentBytes };
       });
+
     yield* Effect.addFinalizer(() => release(root));
 
     const view = (owner: Owner): StoreService => ({
@@ -462,6 +469,7 @@ export const layerMemory = Layer.effect(
           });
         }),
     });
+
     return view(root);
   }),
 );

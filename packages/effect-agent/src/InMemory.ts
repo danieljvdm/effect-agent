@@ -50,6 +50,7 @@ export const scoped = <A, E, R>(
     Effect.gen(function* () {
       const store = yield* Store;
       const history = yield* ThreadHistory;
+
       if (
         store.scoped === undefined ||
         history.retention !== "incremental" ||
@@ -60,11 +61,14 @@ export const scoped = <A, E, R>(
         });
       }
       const owned = yield* store.scoped;
+
       // The enclosing Layer memo map may already contain the application adapter.
       const services = Layer.fresh(ThreadHistory.layerFromStore).pipe(
         Layer.provideMerge(Layer.succeed(Store, owned)),
       );
+
       const fiber = yield* effect.pipe(Effect.provide(services), Effect.forkScoped);
+
       return yield* Fiber.join(fiber);
     }),
   );
