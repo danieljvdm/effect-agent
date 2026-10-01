@@ -1,7 +1,6 @@
 import type { PlatformError } from "effect";
-import { Crypto, Effect, Encoding, Schema } from "effect";
+import { Array, Crypto, Effect, Encoding, Schema } from "effect";
 
-import { canonicalJson } from "./internal/canonical-json.ts";
 import type { DefinitionDigestInput } from "./Records.ts";
 import { CanonicalBatch, DefinitionDigests, Digest } from "./Records.ts";
 
@@ -11,6 +10,28 @@ export class DigestError extends Schema.TaggedError<DigestError>()("DigestError"
 }) {}
 
 const utf8 = new TextEncoder();
+
+const canonicalJson = (value: Schema.Json): string => {
+  if (
+    value === null ||
+    typeof value === "boolean" ||
+    typeof value === "number" ||
+    typeof value === "string"
+  ) {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray<Schema.Json>(value)) {
+    return `[${globalThis.Array.from(value, canonicalJson).join(",")}]`;
+  }
+
+  const entries = Object.entries(value).sort(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+
+  return `{${entries
+    .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
+    .join(",")}}`;
+};
 
 /** Digest a JSON value using a stable, locale-independent object-key ordering (UTF-16 code units, RFC 8785 style). */
 export const digestJson = Effect.fnUntraced(function* (

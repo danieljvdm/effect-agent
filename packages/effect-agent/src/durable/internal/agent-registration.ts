@@ -19,7 +19,6 @@ import {
   type RunDispositionDeclaration,
 } from "../../core/Agent.ts";
 import { type ThreadId, AgentId } from "../../core/Identifiers.ts";
-import { utf8ByteLength } from "../../core/internal/utf8.ts";
 import { getToolExecutionKind } from "../../core/SubagentContract.ts";
 import {
   AdditionalToolCatalog,
@@ -38,15 +37,9 @@ import {
 } from "../../engine/SubagentHost.ts";
 import { digestDefinitions, digestJson, DigestError } from "../Digest.ts";
 import type { DurableWorkerFailure, DurableWorkerRequirements } from "../DurableAgentRuntime.ts";
-import {
-  type DefinitionDigestInput,
-  type PersistedJson,
-  DefinitionDigests,
-  ReplayContract,
-  type Digest,
-} from "../Records.ts";
+import type { DefinitionDigestInput, PersistedJson } from "../Records.ts";
+import { DefinitionDigests, ReplayContract } from "../Records.ts";
 import type { Claim, Settlement, SubmissionSnapshot } from "../SubmissionLedger.ts";
-import { canonicalJson } from "./canonical-json.ts";
 
 /** No unique current executable is registered for the stable Agent identity. */
 export class BindingUnavailable extends Schema.TaggedError<BindingUnavailable>()(
@@ -94,59 +87,17 @@ export interface ReplayVersions {
   readonly tools: Readonly<Record<string, PersistedJson>>;
 }
 
-// Definitions and Schemas are immutable declarations. Weak ownership lets their pure derived
-// metadata survive Layer rebuilds without retaining definitions, captured services or resources.
-// Keep one current entry per live definition and one content entry for reconstructed definitions.
-// Each of the two strong content slots accepts at most 256 KiB of serialized input. Oversized
-// declarations use weak metadata only; declarations impose no universal schema-size bound.
-// There is no Tool authority-generation API: selection, visibility and authorization stay fresh.
-const schemaContracts = new WeakMap<Schema.Top, Schema.Json>();
-
-const jsonSchema = (schema: Schema.Top): Schema.Json => {
-  const cached = schemaContracts.get(schema);
-
-  if (cached !== undefined) return cached;
-  const rendered = Schema.decodeUnknownSync(Schema.Json)(Tool.getJsonSchemaFromSchema(schema));
-
-  schemaContracts.set(schema, rendered);
-
-  return rendered;
-};
-
-interface CachedContracts<A> {
-  readonly key: string;
-  readonly value: A;
-}
-
-type ToolContracts = Readonly<Record<string, Digest>>;
-
-const replayContracts = new WeakMap<Agent.AnyDefinition, CachedContracts<ToolContracts>>();
-let latestReplayContracts: CachedContracts<ToolContracts> | undefined;
-const definitionContracts = new WeakMap<Agent.AnyDefinition, CachedContracts<DefinitionDigests>>();
-let latestDefinitionContracts: CachedContracts<DefinitionDigests> | undefined;
-const maxContentKeyBytes = 262_144;
-
-const replaySnapshot = Schema.fromJsonString(
-  Schema.Struct({
-    declarations: Schema.Array(Schema.Struct({ name: Schema.String, contract: Schema.Json })),
-  }),
-);
-
-// Registration adds generated metadata to admitted declarations. These values are hashed,
-// not persisted, so preserve their JSON shape without reapplying persisted-field limits.
-const definitionSnapshot = Schema.fromJsonString(
-  Schema.Struct({ agent: Schema.Json, model: Schema.Json, tools: Schema.Json }),
-);
-
-/** Hash current operation contracts; retain only static metadata, never executable authority. */
+/** Hash current operation contracts; no historical definitions or schemas are retained. */
 export const toolReplayContracts = Effect.fn("AgentRegistration.toolReplayContracts")(function* (
   definition: Agent.AnyDefinition,
   versions?: ReplayVersions,
   fallbackVersion: PersistedJson = null,
-  digests?: Pick<DefinitionDigests, "agent" | "tools">,
 ) {
   const declarations = yield* Effect.try({
     try: () => {
+      const jsonSchema = (schema: Schema.Top) =>
+        Schema.decodeUnknownSync(Schema.Json)(Tool.getJsonSchemaFromSchema(schema));
+
       return Object.values(definition.toolkit.tools).map((tool) => {
         const version = versions === undefined ? fallbackVersion : versions.tools[tool.name];
 
@@ -195,56 +146,11 @@ export const toolReplayContracts = Effect.fn("AgentRegistration.toolReplayContra
       }),
   });
 
-  // Snapshot serialized values on every lookup, including mutable provider arguments/version
-  // objects. Schema replacement renders a new wire contract; object identity alone is no key.
-  const key = yield* Effect.try({
-    try: () =>
-      canonicalJson({
-        agentId: definition.id,
-        agent: digests?.agent ?? null,
-        tools: digests?.tools ?? null,
-        declarations,
-      }),
-    catch: () => DigestError.make({ message: "Operation contracts are not serializable" }),
-  });
-
-  const cached = replayContracts.get(definition);
-
-  const hit =
-    cached?.key === key
-      ? cached
-      : latestReplayContracts?.key === key
-        ? latestReplayContracts
-        : undefined;
-
-  if (hit !== undefined) {
-    replayContracts.set(definition, hit);
-
-    return hit.value;
-  }
-
-  // Crypto can yield between tools. Hash the same immutable JSON snapshot as the key,
-  // even if a caller changes a version or provider argument while compilation runs.
-  const snapshot = yield* Schema.decodeEffect(replaySnapshot)(key).pipe(
-    Effect.mapError(() =>
-      DigestError.make({ message: "Operation contracts are not serializable" }),
+  return Object.fromEntries(
+    yield* Effect.forEach(declarations, ({ name, contract }) =>
+      digestJson(contract).pipe(Effect.map((digest) => [name, digest] as const)),
     ),
   );
-
-  const value = Object.freeze(
-    Object.fromEntries(
-      yield* Effect.forEach(snapshot.declarations, ({ name, contract }) =>
-        digestJson(contract).pipe(Effect.map((digest) => [name, digest] as const)),
-      ),
-    ),
-  );
-
-  const entry = { key, value };
-
-  replayContracts.set(definition, entry);
-  latestReplayContracts = utf8ByteLength(key) <= maxContentKeyBytes ? entry : undefined;
-
-  return value;
 });
 
 /** Compile current metadata without acquiring executable services. */
@@ -254,43 +160,8 @@ export const compileBindingContracts = Effect.fn("AgentRegistration.compileBindi
     definitions: DefinitionDigestInput,
     versions?: ReplayVersions,
   ): Effect.fn.Return<Pick<ResolvedBinding, "digests">, DigestError, Crypto.Crypto> {
-    const key = yield* Effect.try({
-      try: () =>
-        canonicalJson({
-          agent: definitions.agent,
-          model: definitions.model,
-          tools: definitions.tools,
-        }),
-      catch: () => DigestError.make({ message: "Agent definitions are not serializable" }),
-    });
-
-    const cached = definitionContracts.get(definition);
-
-    const previous =
-      cached?.key === key
-        ? cached
-        : latestDefinitionContracts?.key === key
-          ? latestDefinitionContracts
-          : undefined;
-
-    const snapshot =
-      previous === undefined
-        ? yield* Schema.decodeEffect(definitionSnapshot)(key).pipe(
-            Effect.mapError(() =>
-              DigestError.make({ message: "Agent definitions are not serializable" }),
-            ),
-          )
-        : definitions;
-
-    const digests = previous?.value ?? (yield* digestDefinitions(snapshot));
-    // Always verify current replay inputs: unchanged admission versions cannot conceal a
-    // changed Tool schema, execution annotation, completion role or explicit semantic version.
-    const tools = yield* toolReplayContracts(definition, versions, snapshot.tools, digests);
-
-    const entry = { key, value: Object.freeze(digests) };
-
-    definitionContracts.set(definition, entry);
-    latestDefinitionContracts = utf8ByteLength(key) <= maxContentKeyBytes ? entry : undefined;
+    const digests = yield* digestDefinitions(definitions);
+    const tools = yield* toolReplayContracts(definition, versions, definitions.tools);
 
     return {
       digests: DefinitionDigests.make({
@@ -633,7 +504,9 @@ const registrationDefinitions = (entry: AgentRegistration): DefinitionDigestInpu
           ...entry.definitions,
           agent: {
             declaration: entry.definitions.agent,
-            updates: jsonSchema(definition.updates),
+            updates: Schema.decodeUnknownSync(Schema.Json)(
+              Tool.getJsonSchemaFromSchema(definition.updates),
+            ),
             updateProtocol: { schemaVersion: 1, tool: "emit_update" },
           },
         };
