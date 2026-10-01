@@ -2,11 +2,16 @@ import { createHash } from "node:crypto";
 import { arch, cpus, platform, release, totalmem } from "node:os";
 
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
-import { Cause, Clock, Console, Effect, Exit, FileSystem, Path, Schema } from "effect";
+import { Cause, Clock, Console, Effect, Exit, FileSystem, Option, Path, Schema } from "effect";
 import { Command, Flag } from "effect/unstable/cli";
 import { build, version as esbuildVersion } from "esbuild";
 
-import { BenchmarkError, check, summary } from "../tooling/runtime-benchmark/src/contracts.ts";
+import {
+  BenchmarkError,
+  check,
+  selectCaseNames,
+  summary,
+} from "../tooling/runtime-benchmark/src/contracts.ts";
 import { diagnosticCases } from "../tooling/runtime-benchmark/src/diagnostic-cases.ts";
 import {
   completeDiagnosticBatch,
@@ -39,6 +44,7 @@ const Batch = Schema.Struct({
   subprocessMs: Schema.Finite,
   exitCode: Schema.Int,
   complete: Schema.Boolean,
+  cpuProfile: Schema.optionalKey(Schema.String),
   report: Schema.NullOr(DiagnosticWorkerReport),
   failure: Schema.NullOr(Schema.String),
 });
@@ -47,6 +53,7 @@ export const DiagnosticReport = Schema.Struct({
   fixture: Schema.Literal(DIAGNOSTIC_VERSION),
   fixtureSha256: Schema.NullOr(Hash),
   transpiler: Schema.String,
+  mode: DiagnosticWorkerOptions.fields.mode,
   environment: Schema.Struct({
     node: Schema.String,
     platform: Schema.String,
@@ -62,7 +69,7 @@ export const DiagnosticReport = Schema.Struct({
     samples: Schema.Literal(5),
     production: Schema.Literal(true),
     execution: Schema.Literal("unbundled published ESM"),
-    timingGate: Schema.Literal("informational elapsed wall time"),
+    timingGate: Schema.Literals(["informational elapsed wall time", "profiling only"]),
   }),
   cases: Schema.Array(DiagnosticCase).check(Schema.isMaxLength(64)),
   revisions: Schema.Array(Revision).check(Schema.isMaxLength(2)),
@@ -75,6 +82,28 @@ export const DiagnosticReport = Schema.Struct({
 export type DiagnosticReport = typeof DiagnosticReport.Type;
 
 export const renderDiagnosticReport = (report: DiagnosticReport): string => {
+  if (report.mode === "cpu-profile" || report.settings.timingGate === "profiling only")
+    return [
+      "CPU profiling mode. Profiles cover each whole Node child: startup, imports, setup, warmups, operations, verification, reporting, and shutdown.",
+      "Instrumented elapsed timings remain in raw JSON for diagnosis only; they are not before/after acceptance measurements. No comparison timing table is produced.",
+      `Selected cases: ${report.cases.map(({ name }) => name).join(", ")}.`,
+      `Status: ${report.phase}; ${report.batches.filter((batch) => batch.complete && batch.exitCode === 0).length}/4 complete batches.`,
+      ...report.batches.map(
+        (batch) =>
+          `${batch.role}/${batch.cohort}: ${batch.cpuProfile ?? "missing profile"}${batch.failure === null ? "" : `; ${batch.failure.split("\n")[0]}`}`,
+      ),
+      ...(report.activeBatch === null
+        ? []
+        : [`Interrupted active batch: ${report.activeBatch.role}/${report.activeBatch.cohort}.`]),
+      ...(report.failure === null ? [] : [`Profiling failure: ${report.failure.split("\n")[0]}`]),
+      `Fixture ${report.fixture} (${report.fixtureSha256}); Node ${report.environment.node}.`,
+      ...report.revisions.map(
+        (revision) =>
+          `${revision.role}: ${revision.revision}; artifacts ${revision.builtArtifactsSha256}; lock ${revision.lockfileSha256}`,
+      ),
+      "",
+    ].join("\n");
+
   const lines = [
     "Manual public-package diagnostics. Elapsed wall milliseconds, median [Q1–Q3]; marks are inclusive. No CPU or provider latency claim.",
     "",
@@ -133,11 +162,18 @@ export const compareDiagnostics = Effect.fn("diagnostic.compare")(function* (opt
   base: string;
   output: string;
   requireClean: boolean;
+  cases?: ReadonlyArray<string>;
+  cpuProfile?: boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const root = path.resolve(options.root);
   const output = path.resolve(options.output);
+
+  const cases = yield* selectCaseNames(
+    diagnosticCases.map(({ name }) => name),
+    options.cases,
+  );
 
   yield* fs.makeDirectory(output, { recursive: true });
   yield* check(
@@ -147,6 +183,7 @@ export const compareDiagnostics = Effect.fn("diagnostic.compare")(function* (opt
 
   const report: { -readonly [K in keyof DiagnosticReport]: DiagnosticReport[K] } = {
     fixture: DIAGNOSTIC_VERSION,
+    mode: options.cpuProfile ? "cpu-profile" : "comparison",
     fixtureSha256: null,
     transpiler: `esbuild ${esbuildVersion} (fixture syntax only; no bundling)`,
     environment: {
@@ -162,9 +199,9 @@ export const compareDiagnostics = Effect.fn("diagnostic.compare")(function* (opt
       ...DIAGNOSTIC_SIZES,
       production: true,
       execution: "unbundled published ESM",
-      timingGate: "informational elapsed wall time",
+      timingGate: options.cpuProfile ? "profiling only" : "informational elapsed wall time",
     },
-    cases: diagnosticCases,
+    cases: diagnosticCases.filter(({ name }) => cases.includes(name)),
     revisions: [],
     batches: [],
     activeBatch: null,
@@ -253,9 +290,18 @@ export const compareDiagnostics = Effect.fn("diagnostic.compare")(function* (opt
           const role = yield* Schema.decodeEffect(Role)(stage.revision.role);
           const name = `${cohort}-${role}`;
           const filename = path.join(output, `${name}.json`);
+          const cpuProfile = options.cpuProfile ? `${name}.cpuprofile` : undefined;
+
+          if (cpuProfile !== undefined)
+            yield* check(
+              !(yield* fs.exists(path.join(output, cpuProfile))),
+              `CPU profile already exists: ${cpuProfile}`,
+            );
 
           const workerOptions: DiagnosticWorkerOptions = {
             output: filename,
+            mode: options.cpuProfile ? "cpu-profile" : "comparison",
+            cases,
             warmups: DIAGNOSTIC_SIZES.warmups,
             samples: DIAGNOSTIC_SIZES.samples,
             timeoutMs: 120_000,
@@ -263,7 +309,9 @@ export const compareDiagnostics = Effect.fn("diagnostic.compare")(function* (opt
 
           report.activeBatch = { cohort, role };
           yield* persist;
-          yield* Console.error(`Measuring diagnostics ${name}`);
+          yield* Console.error(
+            `${options.cpuProfile ? "Profiling" : "Measuring"} diagnostics ${name}`,
+          );
           yield* Effect.uninterruptibleMask((restore) =>
             Effect.gen(function* () {
               const started = yield* Clock.monotonicTimeNanos;
@@ -271,7 +319,16 @@ export const compareDiagnostics = Effect.fn("diagnostic.compare")(function* (opt
               const child = yield* restore(
                 subprocess(
                   "node",
-                  [path.join(stage.stage, "fixture/diagnostic-worker.js")],
+                  [
+                    ...(cpuProfile === undefined
+                      ? []
+                      : [
+                          "--cpu-prof",
+                          `--cpu-prof-dir=${output}`,
+                          `--cpu-prof-name=${cpuProfile}`,
+                        ]),
+                    path.join(stage.stage, "fixture/diagnostic-worker.js"),
+                  ],
                   stage.stage,
                   {
                     NODE_ENV: "production",
@@ -307,12 +364,16 @@ export const compareDiagnostics = Effect.fn("diagnostic.compare")(function* (opt
               const worker = Exit.isSuccess(decoded) ? decoded.value : null;
               const exitCode = Exit.isSuccess(child) ? child.value.exitCode : -1;
 
+              const profileExists =
+                cpuProfile === undefined || (yield* fs.exists(path.join(output, cpuProfile)));
+
               const complete =
                 worker !== null &&
                 completeDiagnosticBatch(worker, workerOptions, report.cases) &&
                 worker.runtime === report.environment.node &&
                 worker.platform === report.environment.platform &&
-                worker.architecture === report.environment.architecture;
+                worker.architecture === report.environment.architecture &&
+                profileExists;
 
               report.batches = [
                 ...report.batches,
@@ -322,6 +383,7 @@ export const compareDiagnostics = Effect.fn("diagnostic.compare")(function* (opt
                   subprocessMs,
                   exitCode,
                   complete,
+                  ...(cpuProfile === undefined ? {} : { cpuProfile }),
                   report: worker,
                   failure: Exit.isFailure(child)
                     ? Cause.pretty(child.cause).slice(0, 8_192)
@@ -329,9 +391,11 @@ export const compareDiagnostics = Effect.fn("diagnostic.compare")(function* (opt
                       ? Cause.pretty(decoded.cause).slice(0, 8_192)
                       : exitCode !== 0
                         ? child.value.stderr.slice(0, 8_192)
-                        : !complete
-                          ? "Incomplete work or mismatched worker environment"
-                          : null,
+                        : !profileExists
+                          ? "Requested CPU profile was not written"
+                          : !complete
+                            ? "Incomplete work or mismatched worker environment"
+                            : null,
                 },
               ];
               report.activeBatch = null;
@@ -370,6 +434,7 @@ export const command = Command.make(
       Flag.withDescription(
         "Clean exact base checkout with its own installed lockfile and public packages built.",
       ),
+      Flag.optional,
     ),
     output: Flag.String("out-dir").pipe(
       Flag.withDefault(".performance-report"),
@@ -379,8 +444,34 @@ export const command = Command.make(
       Flag.withDefault(true),
       Flag.withDescription("Required: diagnostics reject modified checkouts."),
     ),
+    cases: Flag.String("case").pipe(
+      Flag.atLeast(0),
+      Flag.withDescription(
+        "Exact case ID; repeat to select multiple cases. Omit for the full matrix.",
+      ),
+    ),
+    listCases: Flag.Boolean("list-cases").pipe(
+      Flag.withDefault(false),
+      Flag.withDescription("List exact case IDs without building or requiring --base-dir."),
+    ),
+    cpuProfile: Flag.Boolean("cpu-profile").pipe(
+      Flag.withDefault(false),
+      Flag.withDescription(
+        "Write whole-child Node CPU profiles; instrumented timings are diagnostic only.",
+      ),
+    ),
   },
-  Effect.fn(function* ({ base, output, requireClean }) {
+  Effect.fn(function* ({ base, output, requireClean, cases, listCases, cpuProfile }) {
+    const selected = yield* selectCaseNames(
+      diagnosticCases.map(({ name }) => name),
+      cases,
+    );
+
+    if (listCases) return yield* Console.log(selected.join("\n"));
+    if (Option.isNone(base))
+      return yield* BenchmarkError.make({
+        message: "--base-dir is required unless --list-cases is used",
+      });
     const path = yield* Path.Path;
 
     const root = path.resolve(
@@ -388,7 +479,14 @@ export const command = Command.make(
       "..",
     );
 
-    yield* compareDiagnostics({ root, base, output, requireClean });
+    yield* compareDiagnostics({
+      root,
+      base: base.value,
+      output,
+      requireClean,
+      cases: selected,
+      cpuProfile,
+    });
   }),
 ).pipe(
   Command.withDescription(

@@ -1,22 +1,32 @@
 name: Runtime performance
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
+      base_ref:
+        description: Baseline commit, branch or tag (blank uses the latest published release)
+        type: string
+        default: ""
+      head_ref:
+        description: Candidate commit, branch or tag (also supplies the shared benchmark fixture)
+        type: string
+        default: main
       profile:
-        description: Latest published release versus main (diagnostic runs phase probes)
+        description: Workload profile (diagnostic runs phase probes)
         type: choice
         options: [pr, extended, archive, diagnostic]
         default: pr
+      cases:
+        description: Comma-separated exact case names (blank runs the whole profile)
+        type: string
+        default: ""
+      cpu_profile:
+        description: Capture whole-child Node CPU profiles; timings become diagnostic only
+        type: boolean
+        default: false
 
 permissions:
   contents: read
-
-concurrency:
-  group: runtime-performance-main
-  cancel-in-progress: true
 
 env:
   CI: "true"
@@ -26,33 +36,37 @@ jobs:
   compare:
     name: Compare scripted runtime
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ (github.event_name == 'push' || inputs.profile == 'pr' || inputs.profile == 'diagnostic') && 30 || 180 }}
+    timeout-minutes: ${{ (inputs.profile == 'pr' || inputs.profile == 'diagnostic') && 30 || 180 }}
     steps:
-      - name: Resolve latest published release and main
+      - name: Resolve exact comparison commits
         id: comparison
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        env:
+          BASE_REF: ${{ inputs.base_ref }}
+          HEAD_REF: ${{ inputs.head_ref }}
         with:
           script: |
-            if (context.ref !== 'refs/heads/main') throw new Error('Run this comparison on main');
-            // /releases/latest excludes prereleases. Use the umbrella package's
-            // publication timestamp, not tag creation order or a sibling package.
-            const releases = await github.paginate(github.rest.repos.listReleases, { ...context.repo, per_page: 100 });
-            const latest = releases.filter(release => !release.draft && release.published_at &&
-              /^effect-agent@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(release.tag_name))
-              .sort((a, b) => b.published_at.localeCompare(a.published_at) || b.id - a.id)[0];
-            if (!latest) throw new Error('No published effect-agent release found');
-            const { data: tag } = await github.rest.git.getRef({ ...context.repo, ref: `tags/${latest.tag_name}` });
-            let object = tag.object;
-            for (let depth = 0; object.type === 'tag' && depth < 10; depth++) {
-              const { data } = await github.rest.git.getTag({ ...context.repo, tag_sha: object.sha });
-              object = data.object;
+            let baseRef = process.env.BASE_REF.trim();
+            let baseTag = '';
+            if (!baseRef) {
+              // /releases/latest excludes prereleases. Use the umbrella package's
+              // publication timestamp, not tag creation order or a sibling package.
+              const releases = await github.paginate(github.rest.repos.listReleases, { ...context.repo, per_page: 100 });
+              const latest = releases.filter(release => !release.draft && release.published_at &&
+                /^effect-agent@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(release.tag_name))
+                .sort((a, b) => b.published_at.localeCompare(a.published_at) || b.id - a.id)[0];
+              if (!latest) throw new Error('No published effect-agent release found');
+              baseRef = baseTag = latest.tag_name;
             }
-            if (object.type !== 'commit' || !/^[a-f0-9]{40}$/.test(object.sha) ||
-                !/^[a-f0-9]{40}$/.test(context.sha)) throw new Error('Invalid comparison commit');
-            core.setOutput('base_sha', object.sha);
-            core.setOutput('base_tag', latest.tag_name);
-            core.setOutput('head_sha', context.sha);
-            core.info(`Comparing ${latest.tag_name} (${object.sha}) to main (${context.sha})`);
+            const headRef = process.env.HEAD_REF.trim() || 'main';
+            const { data: base } = await github.rest.repos.getCommit({ ...context.repo, ref: baseRef });
+            const { data: head } = await github.rest.repos.getCommit({ ...context.repo, ref: headRef });
+            if (!/^[a-f0-9]{40}$/.test(base.sha) || !/^[a-f0-9]{40}$/.test(head.sha))
+              throw new Error('Invalid comparison commit');
+            core.setOutput('base_sha', base.sha);
+            core.setOutput('base_tag', baseTag);
+            core.setOutput('head_sha', head.sha);
+            core.info(`Comparing ${base.sha} to ${head.sha}`);
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -94,32 +108,46 @@ jobs:
           ./node_modules/.bin/vp run --no-cache -F './packages/*' build
 
       - name: Compare sequential cohorts
-        timeout-minutes: ${{ (github.event_name == 'push' || inputs.profile == 'pr' || inputs.profile == 'diagnostic') && 20 || 165 }}
-        # The controller stops at 19m (PR) / 160m (larger profiles), leaving time
+        timeout-minutes: ${{ (inputs.profile == 'pr' || inputs.profile == 'diagnostic') && 20 || 165 }}
+        # The controller stops at 19m (bounded) / 160m (larger profiles), leaving time
         # for bounded child termination and atomic failure evidence before this outer limit.
         # Older releases do not ignore these known declaration artifacts emitted
         # by their package build. Remove only those generated scratch files.
         # The subsequent --require-clean check rejects every other modification.
         shell: bash
         env:
-          PROFILE: ${{ github.event_name == 'push' && 'pr' || inputs.profile }}
+          PROFILE: ${{ inputs.profile }}
           BASE_TAG: ${{ steps.comparison.outputs.base_tag }}
+          CASES: ${{ inputs.cases }}
+          CPU_PROFILE: ${{ inputs.cpu_profile }}
         run: |
           rm -f .performance-base/test/fixtures/checkpoints.d.ts .performance-base/test/fixtures/storage-upgrade.d.ts .performance-base/test/fixtures/storage-v2.d.ts
+          args=(--base-dir .performance-base --require-clean)
+          if [ -n "$CASES" ]; then
+            while IFS= read -r name; do
+              name="${name#"${name%%[![:space:]]*}"}"
+              name="${name%"${name##*[![:space:]]}"}"
+              if [ -z "$name" ]; then printf '%s\n' 'Empty case selector' >&2; exit 1; fi
+              args+=(--case "$name")
+            done <<< "${CASES//,/$'\n'}"
+          fi
+          if [ "$CPU_PROFILE" = true ]; then args+=(--cpu-profile); fi
           if [ "$PROFILE" = diagnostic ]; then
-            ./node_modules/.bin/vp run --no-cache perf:diagnose --base-dir .performance-base --require-clean
+            ./node_modules/.bin/vp run --no-cache perf:diagnose "${args[@]}"
           else
-            ./node_modules/.bin/vp run --no-cache perf:compare --base-dir .performance-base --base-tag "$BASE_TAG" --profile "$PROFILE" --require-clean
+            if [ -n "$BASE_TAG" ]; then args+=(--base-tag "$BASE_TAG"); fi
+            ./node_modules/.bin/vp run --no-cache perf:compare --profile "$PROFILE" "${args[@]}"
           fi
 
       - name: Preserve run identity and readable evidence
         if: always()
         env:
           BASE_TAG: ${{ steps.comparison.outputs.base_tag }}
-          MAIN_SHA: ${{ steps.comparison.outputs.head_sha }}
+          BASE_SHA: ${{ steps.comparison.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.comparison.outputs.head_sha }}
         run: |
           mkdir -p .performance-report
-          printf 'Latest published release: %s. Main: %s.\n\n' "$BASE_TAG" "$MAIN_SHA" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Baseline: %s %s. Candidate: %s.\n\n' "$BASE_TAG" "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_STEP_SUMMARY"
           if test -f .performance-report/report.md; then cat .performance-report/report.md >> "$GITHUB_STEP_SUMMARY"; fi
 
       - name: Upload all samples and failures

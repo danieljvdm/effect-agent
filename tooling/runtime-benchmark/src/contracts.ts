@@ -11,6 +11,19 @@ export const check = Effect.fn("benchmark.check")(function* (condition: boolean,
   if (!condition) return yield* BenchmarkError.make({ message });
 });
 
+/** Exact selectors retain fixture order; omission selects the unchanged full matrix. */
+export const selectCaseNames = Effect.fn("benchmark.selectCaseNames")(function* (
+  available: ReadonlyArray<string>,
+  requested: ReadonlyArray<string> = [],
+) {
+  yield* check(new Set(requested).size === requested.length, "Duplicate --case selectors");
+  const unknown = requested.filter((name) => !available.includes(name));
+
+  yield* check(unknown.length === 0, `Unknown --case: ${unknown.join(", ")}; use --list-cases`);
+
+  return requested.length === 0 ? available : available.filter((name) => requested.includes(name));
+});
+
 export const Profile = Schema.Literals(["smoke", "pr", "extended", "archive"]);
 export type Profile = typeof Profile.Type;
 
@@ -68,6 +81,8 @@ export const casesFor = (profile: Profile): ReadonlyArray<Case> => [
 export const WorkerOptions = Schema.Struct({
   cold: Schema.Boolean,
   profile: Profile,
+  mode: Schema.optionalKey(Schema.Literals(["comparison", "cpu-profile"])),
+  cases: Schema.optionalKey(Schema.Array(Schema.String).check(Schema.isMinLength(1))),
   warmups: Schema.Natural.check(Schema.isLessThanOrEqualTo(20)),
   samples: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })),
   output: Schema.String,
@@ -110,6 +125,8 @@ export type Sample = typeof Sample.Type;
 export const WorkerReport = Schema.Struct({
   fixture: Schema.Literal(FIXTURE_VERSION),
   profile: Profile,
+  mode: WorkerOptions.fields.mode,
+  cases: WorkerOptions.fields.cases,
   runtime: Schema.String,
   platform: Schema.String,
   architecture: Schema.String,
@@ -124,9 +141,22 @@ export const completeBatch = (
   report: WorkerReport,
   options: typeof WorkerOptions.Type,
 ): boolean => {
-  const workloads = options.cold
+  const available = options.cold
     ? casesFor(options.profile).slice(0, 1)
     : casesFor(options.profile);
+
+  const names = options.cases ?? available.map(({ name }) => name);
+  const workloads = available.filter(({ name }) => names.includes(name));
+
+  if (
+    workloads.length === 0 ||
+    names.length !== workloads.length ||
+    (options.mode !== undefined && report.mode !== options.mode) ||
+    (options.cases !== undefined &&
+      (report.cases?.length !== names.length ||
+        !names.every((name, index) => report.cases?.[index] === name)))
+  )
+    return false;
 
   const expected = new Set(
     workloads.flatMap((workload) =>
