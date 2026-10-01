@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.164
+
+### Patch Changes
+
+- [#746](https://github.com/danieljvdm/effect-agent/pull/746) [`d3ef7ea`](https://github.com/danieljvdm/effect-agent/commit/d3ef7ea8d24e6d7a5d4d057d497badfc72d3f5de) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Keep user inputs with their replies during summary compaction so durable chats continue successfully.
+
 ## 0.1.0-beta.163
 
 ### Patch Changes
