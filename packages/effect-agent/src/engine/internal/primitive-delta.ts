@@ -65,8 +65,10 @@ export const ownPrimitiveTextPart = (part: unknown, maxBytes: number) => {
     const typeDescriptor = Object.getOwnPropertyDescriptor(part, "type");
 
     if (typeDescriptor === undefined || !("value" in typeDescriptor)) return undefined;
+
     const isDelta =
       typeDescriptor.value === "text-delta" || typeDescriptor.value === "reasoning-delta";
+
     const selectedKeys = isDelta ? keys : boundaryKeys;
 
     if (Reflect.ownKeys(part).length !== selectedKeys.length) return undefined;
