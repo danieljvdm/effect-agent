@@ -1128,7 +1128,6 @@ export class ThreadMaintenance extends Context.Service<
             DueQueue.Messages,
             DueQueue.RecoveryEvents,
             DueQueue.Lifecycle,
-            DueQueue.LifecycleStart,
           ].includes(row.id)
             ? row.id.slice("effect-agent:".length)
             : "host";
@@ -1144,15 +1143,28 @@ export class ThreadMaintenance extends Context.Service<
         }
       }).pipe(Effect.catchCause((cause) => ErrorReporter.report(cause)));
 
-      yield* runTransaction("register native maintenance lanes", async () => {
-        for (const id of [
-          DueQueue.Publication,
-          DueQueue.Projection,
-          DueQueue.Messages,
-          ...framework.lanes.map((lane) => lane.id),
-        ])
-          dueQueue.register(id);
-      });
+      yield* runTransaction("register native maintenance lanes", () =>
+        dueQueue.transaction(async () => {
+          for (const id of [
+            DueQueue.Publication,
+            DueQueue.Projection,
+            DueQueue.Messages,
+            ...framework.lanes.map((lane) => lane.id),
+          ])
+            dueQueue.register(id);
+
+          // Earlier releases split this one outbox across start and after-native lanes.
+          // Retire only scheduling metadata, retaining revision fencing and domain retries.
+          if (framework.lanes.some((lane) => lane.id === DueQueue.Lifecycle)) {
+            const start = dueQueue.read().find((row) => row.id === "effect-agent:lifecycle-start");
+
+            if (start !== undefined && start.dueAt !== null) {
+              dueQueue.dirty(DueQueue.Lifecycle, start.dueAt);
+              dueQueue.complete(start, null);
+            }
+          }
+        }),
+      );
 
       const runQueued = <E, R>(
         selected: DueQueue.DueLane,
@@ -2709,11 +2721,6 @@ export class ThreadMaintenance extends Context.Service<
                 current.some(
                   (row) =>
                     !afterNativeIds.has(row.id) &&
-                    // Both phases drain the same lifecycle queue. Lazy retention during
-                    // this wave must not interrupt its own publication before acknowledgement.
-                    !(
-                      row.id === DueQueue.LifecycleStart && afterNativeIds.has(DueQueue.Lifecycle)
-                    ) &&
                     !active.has(row.id) &&
                     row.dueAt !== null &&
                     row.dueAt <= now &&
