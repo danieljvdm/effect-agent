@@ -1,5 +1,17 @@
 # effect-agent
 
+## 0.1.0-beta.165
+
+### Patch Changes
+
+- [#754](https://github.com/danieljvdm/effect-agent/pull/754) [`c426ed7`](https://github.com/danieljvdm/effect-agent/commit/c426ed78de30b9b186b4967e2e42bd19870ddc84) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reduce unbundled startup work when using direct Agent, AgentRuntime, and InMemory imports.
+
+- [#751](https://github.com/danieljvdm/effect-agent/pull/751) [`4ac924a`](https://github.com/danieljvdm/effect-agent/commit/4ac924aa14e3cfbfdac9ffaa7026164115943f11) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Log successful tool executions at Debug while retaining Warning logs for failures and existing span attributes. Enable Debug logging to continue seeing successful tool execution logs.
+
+- [#755](https://github.com/danieljvdm/effect-agent/pull/755) [`656f964`](https://github.com/danieljvdm/effect-agent/commit/656f9643beecce1b6233e02672987ba413b5c5fc) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reduce per-turn overhead for text and reasoning response boundaries without provider metadata. Reduce warm tool-round overhead.
+
+- [#756](https://github.com/danieljvdm/effect-agent/pull/756) [`de31c1e`](https://github.com/danieljvdm/effect-agent/commit/de31c1ece882beed14880628636c6bbd04f2ba52) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add `InMemory.scoped` to release disposable conversation history and attached-child history after a workflow while sharing the application's count and byte limits. Preserve default retention and multi-run continuation outside disposable workflows.
+
 ## 0.1.0-beta.164
 
 ### Patch Changes
