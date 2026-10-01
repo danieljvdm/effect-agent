@@ -143,7 +143,7 @@ import { ThreadHistory, ThreadHistoryError } from "../ThreadHistory.ts";
 import { CurrentToolCatalog, RunToolVisibility, type CatalogEntry } from "../ToolExposure.ts";
 import { boundedValueFootprint } from "./bounded-value.ts";
 import { isTextOutput, outputSchemaContract, prepareModelPrompt } from "./output-contract.ts";
-import { ownPrimitiveDelta } from "./primitive-delta.ts";
+import { ownPrimitiveTextPart } from "./primitive-delta.ts";
 import {
   boundedCanonicalJsonSnapshot,
   boundedJsonSnapshot,
@@ -1040,7 +1040,7 @@ const ownModelResponsePart = <Tools extends Record<string, Tool.Any>>(
   Effect.suspend((): ReturnType<typeof ownModelResponsePartGeneral> => {
     const primitive =
       usage.responsePartCount < limits.maxModelResponseParts
-        ? ownPrimitiveDelta(part, limits.maxModelResponseBytes - usage.responsePartBytes)
+        ? ownPrimitiveTextPart(part, limits.maxModelResponseBytes - usage.responsePartBytes)
         : undefined;
 
     return primitive === undefined
