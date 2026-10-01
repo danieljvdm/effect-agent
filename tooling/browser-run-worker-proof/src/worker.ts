@@ -147,6 +147,7 @@ export class CheckoutRun extends DurableObject<Env> {
       receipt: this.read("receipt", Schema.NullOr(Receipt), null),
       closed: this.read("closed", Schema.Boolean, true),
       scrapeAttempts: this.read("scrapeAttempts", Schema.Natural, 0),
+      loginRequests: this.read("loginRequests", Schema.Natural, 0),
       failure: this.read("failure", Schema.NullOr(Schema.String), null),
     });
   }
@@ -539,10 +540,18 @@ export class CheckoutRun extends DurableObject<Env> {
       new Response(null, { status: 303, headers: { location, ...headers } });
 
     if (path === "/shop/login") {
-      if (request.method === "GET")
+      if (request.method === "GET") {
+        // Regression #752: the browser's fresh route can still serve a startup error
+        // after the runner can reach /evidence. Exercise that path on every hosted proof.
+        const requests = this.read("loginRequests", Schema.Natural, 0) + 1;
+
+        this.ctx.storage.kv.put("loginRequests", requests);
+        if (requests === 1) return html("<h1>Store starting</h1>", 503);
+
         return html(
           '<h1>Sign in</h1><form id="login" method="post" action="/shop/login"><label>Email<input name="email" type="email" required></label><label>Password<input name="password" type="password" required></label><button>Sign in</button></form>',
         );
+      }
       const form = yield* Effect.promise(() => request.formData());
 
       if (

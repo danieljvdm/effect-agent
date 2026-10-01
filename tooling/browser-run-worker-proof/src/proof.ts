@@ -76,6 +76,7 @@ export const Evidence = Schema.Struct({
   receipt: Schema.NullOr(Receipt),
   closed: Schema.Boolean,
   scrapeAttempts: Schema.Natural,
+  loginRequests: Schema.Natural,
   failure: Schema.NullOr(Schema.String),
 });
 

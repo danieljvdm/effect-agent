@@ -84,6 +84,7 @@ const publicEvidence = (evidence: typeof Evidence.Type): typeof Evidence.Type =>
   receipt: receiptMatches(evidence) ? evidence.receipt : null,
   closed: evidence.closed,
   scrapeAttempts: evidence.scrapeAttempts,
+  loginRequests: evidence.loginRequests,
   failure:
     evidence.failure === null
       ? null
@@ -329,6 +330,7 @@ const proof = Effect.gen(function* () {
           evidence.receipt === null &&
           evidence.closed &&
           evidence.scrapeAttempts === 0 &&
+          evidence.loginRequests === 0 &&
           evidence.failure === null,
         () => fail("readiness:owner-not-pristine"),
       ),
@@ -373,6 +375,7 @@ const proof = Effect.gen(function* () {
       return yield* fail("receipt:mismatch");
     if (evidence.scrapeAttempts < 1 || evidence.scrapeAttempts > 3 || evidence.failure !== null)
       return yield* fail("checkout:worker-failure");
+    if (evidence.loginRequests < 2) return yield* fail("readiness:login-not-recovered");
   });
 
   yield* checkout.pipe(
