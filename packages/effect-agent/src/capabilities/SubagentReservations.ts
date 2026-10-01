@@ -1,4 +1,10 @@
-import { Context, Effect, Layer, Ref, Schema, type Scope, Semaphore } from "effect";
+import type { Scope } from "effect";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 
 import { RunId, ToolCallId } from "../core/Identifiers.ts";
 import { SubagentDelegationCaps, SubagentReservationAmounts } from "../core/SubagentContract.ts";

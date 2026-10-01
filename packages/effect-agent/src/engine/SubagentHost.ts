@@ -1,5 +1,7 @@
 import type { Effect, Option } from "effect";
-import { Context, Schema, Stream } from "effect";
+import * as Context from "effect/Context";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import type * as Agent from "../core/Agent.ts";
 import type { AgentPolicy } from "../core/AgentPolicy.ts";

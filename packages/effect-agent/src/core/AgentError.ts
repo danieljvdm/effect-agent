@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 
 import * as FailureDiagnostic from "./FailureDiagnostic.ts";
 import { ToolCallId } from "./Identifiers.ts";

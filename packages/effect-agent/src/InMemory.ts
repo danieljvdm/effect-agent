@@ -1,4 +1,4 @@
-import { Layer } from "effect";
+import * as Layer from "effect/Layer";
 
 import { SubagentReservationsMemoryLive } from "./capabilities/SubagentReservations.ts";
 import { layer as historyLayer } from "./engine/ThreadHistory.ts";

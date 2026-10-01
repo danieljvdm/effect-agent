@@ -1,4 +1,7 @@
-import { Context, Effect, Layer, Schema } from "effect";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import type { Prompt } from "effect/unstable/ai";
 
 import { ThreadId, type RunId } from "../core/Identifiers.ts";

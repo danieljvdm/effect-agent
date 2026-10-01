@@ -1,4 +1,8 @@
-import { Cause, Effect, ErrorReporter, Exit, Stream } from "effect";
+import * as Cause from "effect/Cause";
+import * as Effect from "effect/Effect";
+import * as ErrorReporter from "effect/ErrorReporter";
+import * as Exit from "effect/Exit";
+import * as Stream from "effect/Stream";
 
 import type { RunToolFailureObserver, ToolFailureObservation } from "../RunOptions.ts";
 

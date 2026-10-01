@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { AiError } from "effect/unstable/ai";
+import * as AiError from "effect/unstable/ai/AiError";
 
 import { ToolCallId } from "./Identifiers.ts";
 import { codePointUtf8Length, utf8ByteLength } from "./internal/utf8.ts";

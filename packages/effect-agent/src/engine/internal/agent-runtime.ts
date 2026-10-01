@@ -1,40 +1,36 @@
 import type { Take } from "effect";
-import {
-  Cause,
-  Channel,
-  Clock,
-  Context,
-  DateTime,
-  Duration,
-  Effect,
-  Equal,
-  Exit,
-  Fiber,
-  Layer,
-  Metric,
-  Option,
-  PubSub,
-  Queue,
-  Result,
-  Schedule,
-  Schema,
-  SchemaAST,
-  SchemaGetter,
-  Scope,
-  Semaphore,
-  Stream,
-  Tracer,
-} from "effect";
-import {
-  Tool,
-  AiError,
-  LanguageModel,
-  Model,
-  Prompt,
-  Response,
-  ResponseIdTracker,
-  Toolkit,
-} from "effect/unstable/ai";
+import * as Cause from "effect/Cause";
+import * as Channel from "effect/Channel";
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
+import * as Option from "effect/Option";
+import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
+import * as Result from "effect/Result";
+import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
+import * as SchemaAST from "effect/SchemaAST";
+import * as SchemaGetter from "effect/SchemaGetter";
+import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
+import * as AiError from "effect/unstable/ai/AiError";
+import * as LanguageModel from "effect/unstable/ai/LanguageModel";
+import * as Model from "effect/unstable/ai/Model";
+import * as Prompt from "effect/unstable/ai/Prompt";
+import * as Response from "effect/unstable/ai/Response";
+import * as ResponseIdTracker from "effect/unstable/ai/ResponseIdTracker";
+import * as Tool from "effect/unstable/ai/Tool";
+import * as Toolkit from "effect/unstable/ai/Toolkit";
 
 import * as Agent from "../../core/Agent.ts";
 import {
