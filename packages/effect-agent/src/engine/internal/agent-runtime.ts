@@ -1992,7 +1992,7 @@ const terminalToolTelemetry = (
   ).pipe(
     Effect.andThen(
       (outcome === "success"
-        ? Effect.logInfo("agent tool execution completed")
+        ? Effect.logDebug("agent tool execution completed")
         : Effect.logWarning("agent tool execution failed")
       ).pipe(
         Effect.annotateLogs({

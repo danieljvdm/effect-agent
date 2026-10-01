@@ -405,6 +405,9 @@ Thread-backed instance), and `gen_ai.conversation.id` (the Thread ID). Existing
 `agentId`, `threadId`, `runId`, and applicable `turnId` attributes remain available.
 Agent span names replace `AgentRuntime.run`; update filters using that old name.
 
+Successful tool executions log at Debug; failures log at Warning. The default logger omits
+successful tool logs. Tool spans retain their identity and outcome attributes at either log level.
+
 Model calls label the existing Effect AI `LanguageModel.streamText` span rather than
 creating a second model-call span. The configured model and provider are recorded as
 `gen_ai.request.model` and `gen_ai.provider.name`; native providers retain their response
