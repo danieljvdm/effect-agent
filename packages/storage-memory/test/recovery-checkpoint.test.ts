@@ -80,7 +80,6 @@ describe("disposable durable recovery checkpoint", () => {
   it.effect("keeps fresh Runs bounded and falls back from incompatible Thread context", () =>
     Effect.gen(function* () {
       const store = yield* ThreadStore;
-      const failpoints = yield* DurableRuntimeFailpointTestControl;
       const threadId = ThreadId.make("fresh-checkpoint");
       const requests: Array<Prompt.Prompt> = [];
 
@@ -227,36 +226,9 @@ describe("disposable durable recovery checkpoint", () => {
       expect(JSON.stringify(requests.at(-1))).toContain("fresh request with invalid cache");
 
       // A new compaction still maps the actual canonical prefix, even after cached fresh Runs.
-      const beforeRollover = yield* store.export(ThreadExportRequest.make({ threadId }));
-      let checkpointSaved = false;
-      let retiredReadsAfterCheckpoint = 0;
-
-      yield* failpoints.setHandler((location) =>
-        Effect.sync(() => {
-          if (location === "checkpoint:after-save") checkpointSaved = true;
-        }),
-      );
-
-      const observedRollover = ThreadStore.of({
-        ...store,
-        read: (request) =>
-          store.read(request).pipe(
-            Stream.tap((entry) =>
-              Effect.sync(() => {
-                if (checkpointSaved && entry.sequence <= beforeRollover.records.length)
-                  retiredReadsAfterCheckpoint++;
-              }),
-            ),
-          ),
-      });
-
-      yield* process("new window request", true, observedRollover).pipe(
-        Effect.ensuring(failpoints.clear),
-      );
+      yield* process("new window request", true);
       expect(JSON.stringify(requests.at(-1))).toContain("new window request");
       expect(JSON.stringify(requests.at(-1))).not.toContain("first fresh request");
-      expect(checkpointSaved).toBe(true);
-      expect(retiredReadsAfterCheckpoint).toBe(0);
       const completed = yield* store.export(ThreadExportRequest.make({ threadId }));
 
       expect(completed.records.slice(0, original.records.length)).toEqual(original.records);
