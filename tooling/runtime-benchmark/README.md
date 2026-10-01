@@ -172,21 +172,19 @@ own installation. Reports identify exact commits, dirty state, lockfile hashes, 
 hashes, fixture hash/version, runtime, operating system, CPU, memory, sample counts, median,
 interquartile range, and process failures. The artifact includes the exact transpiled fixture.
 
-The `runtime-v3` artifact contract contains only Base and Head, with `baselineTag` naming
-the release (null for an unlabeled local comparison). The trusted publisher rejects
-older three-revision reports. Release PR tables name Latest release, Main, and Change and
-link the exact tag and commits. Both the comment and artifact show medians and Q1–Q3 spread.
+The `runtime-v3` artifact identifies Base and Head, the selected cases, and comparison or
+profiling mode. `baselineTag` names a release when one was selected; otherwise it is null.
+Ordinary comparison tables show medians and Q1–Q3 spread.
 The nine samples share three worker processes per revision; that spread is not a confidence
 interval, and runner/process variability has not been calibrated. Timing differences alone
 do not establish a regression. When built JavaScript and lockfile hashes match, reports
 explicitly identify identical builds and suppress percentage changes while preserving all
-timings and samples. Workloads,
-operation clocks, warmups, and measured samples per revision are unchanged from `runtime-v2`.
+timings and samples.
 Keep historical artifacts. Incompatible historical APIs must fail clearly rather than silently
 substituting source code or skipping cases. A new fixture changes the measurement definition and
 requires a version bump; report environment changes before interpreting across-run trends.
 
-The PR profile runs 12 child processes and 576 attempts: 19 cases × five warm attempts ×
+The full `pr` profile runs 12 child processes and 576 attempts: 19 cases × five warm attempts ×
 three cohorts × two revisions, plus six cold attempts. Millisecond operation medians do not
 represent CI duration: all attempts, warmups, seed creation, checkpoint preparation, assertions,
 cleanup, imports, and report writes take wall time. The worker-time table retains attempt and
