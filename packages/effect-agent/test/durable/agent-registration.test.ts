@@ -10,7 +10,7 @@ import { Claim, OwnershipToken } from "../../src/durable/SubmissionLedger.ts";
 
 class Dependency extends Context.Service<Dependency, string>()("test/registered-dependency") {}
 
-// https://reve-r6.sentry.io/explore/traces/trace/09c140a052588528d87d0ab131c5cbcc
+// Registration captures dependencies while each Attempt inherits its current trace and sampling.
 it.effect(
   "registered attempts use the current trace and sampling without losing dependencies",
   () =>

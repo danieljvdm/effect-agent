@@ -139,38 +139,51 @@ export const make = (storage: DurableObjectStorage) => {
     }
   };
 
-  const write = ({ before, after }: Change) => {
+  // Nine bindings per lane stay below Durable Object SQLite's 100-parameter limit.
+  const write = (changes: ReadonlyArray<Change>) => {
     const rows = decode(
       sql
         .exec(
-          `INSERT INTO platform_cloudflare_due_queue
-          (id, revision, dueAt, stalls, progressKey, notBefore, state, reported)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, dueAt = excluded.dueAt,
-           stalls = excluded.stalls, progressKey = excluded.progressKey,
-           notBefore = excluded.notBefore, state = excluded.state, reported = excluded.reported
-         WHERE revision = ?
-         RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported`,
-          after.id,
-          after.revision,
-          after.dueAt,
-          after.stalls,
-          after.progressKey,
-          after.notBefore,
-          after.state,
-          after.reported,
-          before?.revision ?? -1,
+          `WITH changes (id, revision, dueAt, stalls, progressKey, notBefore, state, reported, expected_revision) AS (
+            VALUES ${changes.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ")}
+          ) INSERT INTO platform_cloudflare_due_queue
+            (id, revision, dueAt, stalls, progressKey, notBefore, state, reported)
+          SELECT id, revision, dueAt, stalls, progressKey, notBefore, state, reported FROM changes WHERE 1
+          ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, dueAt = excluded.dueAt,
+            stalls = excluded.stalls, progressKey = excluded.progressKey,
+            notBefore = excluded.notBefore, state = excluded.state, reported = excluded.reported
+          WHERE platform_cloudflare_due_queue.revision = (
+            SELECT expected_revision FROM changes WHERE changes.id = excluded.id
+          ) RETURNING id, revision, dueAt, stalls, progressKey, notBefore, state, reported`,
+          ...changes.flatMap(({ before, after }) => [
+            after.id,
+            after.revision,
+            after.dueAt,
+            after.stalls,
+            after.progressKey,
+            after.notBefore,
+            after.state,
+            after.reported,
+            before?.revision ?? -1,
+          ]),
         )
         .toArray(),
     );
 
-    if (rows.length !== 1) throw new Error("Maintenance due revision changed during transaction");
+    // Partial revision acceptance must reject the enclosing source transaction.
+    if (rows.length !== changes.length)
+      throw new Error("Maintenance due revision changed during transaction");
   };
 
   const flush = (frame: Frame) => {
     if (frame.parent !== undefined) return;
-    for (const change of current.changes.values())
-      if (change.before === undefined || !equivalent(change.before, change.after)) write(change);
+
+    const changes = [...current.changes.values()].filter(
+      ({ before, after }) => before === undefined || !equivalent(before, after),
+    );
+
+    for (let offset = 0; offset < changes.length; offset += 11)
+      write(changes.slice(offset, offset + 11));
   };
 
   /** Own the flush inside the source transaction without changing the SQL service.
@@ -320,7 +333,7 @@ export const make = (storage: DurableObjectStorage) => {
     const previous = current.changes.get(after.id);
     const change = { before: previous === undefined ? before : previous.before, after };
 
-    if (current.frame === undefined) write(change);
+    if (current.frame === undefined) write([change]);
     else current.changes.set(after.id, change);
     current.rows = [...rows.filter((row) => row.id !== after.id), after];
     trim();
