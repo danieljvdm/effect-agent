@@ -6,7 +6,7 @@ import {
 } from "@effect-agent/platform-cloudflare/browser-session";
 import { assert, it } from "@effect/vitest";
 import { Config, Effect, Option, Redacted, Schema } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 import puppeteer from "puppeteer-core";
 import browserPuppeteer from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 

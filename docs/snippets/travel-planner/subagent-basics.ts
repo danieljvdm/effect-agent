@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 import { Agent, Subagent } from "effect-agent";
-import { Toolkit } from "effect/unstable/ai";
+import { Toolkit } from "effect/ai";
 
 export const Summarize = Subagent.make("summarize", {
   description: "Summarize a support case in three sentences.",

@@ -14,7 +14,7 @@ import {
   type PageScrapeCaptured,
 } from "effect-agent/page-capture";
 import { WebCaptureFailure } from "effect-agent/web-capture";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 import { recordDiagnostic } from "./server/diagnostics.ts";
 import { pageProgressLabel, trackTool } from "./server/progress.ts";

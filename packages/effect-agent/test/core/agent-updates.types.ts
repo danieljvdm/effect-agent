@@ -1,6 +1,6 @@
 import { Context, Effect, Schema, SchemaGetter } from "effect";
-import type { Tool } from "effect/unstable/ai";
-import { Toolkit } from "effect/unstable/ai";
+import type { Tool } from "effect/ai";
+import { Toolkit } from "effect/ai";
 
 import * as Agent from "../../src/core/Agent.ts";
 import * as AgentUpdates from "../../src/core/AgentUpdates.ts";

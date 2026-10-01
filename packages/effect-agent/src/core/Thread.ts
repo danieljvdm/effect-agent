@@ -1,5 +1,5 @@
 import { Clock, Context, DateTime, Effect, Layer, Schema, SynchronizedRef } from "effect";
-import { Prompt } from "effect/unstable/ai";
+import { Prompt } from "effect/ai";
 
 import { ThreadId, RunId } from "./Identifiers.ts";
 import { utf8ByteLength } from "./internal/utf8.ts";

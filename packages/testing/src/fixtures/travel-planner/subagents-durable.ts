@@ -9,7 +9,7 @@ import * as Subagent from "effect-agent/subagent";
 import { delegationAllocationFromPolicy } from "effect-agent/subagent";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import { Principal, type IdempotencyKey } from "effect-agent/submission-ledger";
-import { LanguageModel, Model, type Response, type Toolkit } from "effect/unstable/ai";
+import { LanguageModel, Model, type Response, type Toolkit } from "effect/ai";
 
 import { DeterministicIdGeneratorLayer } from "./deterministic-layers.ts";
 import type {

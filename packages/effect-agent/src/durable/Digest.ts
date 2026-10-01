@@ -1,5 +1,6 @@
 import type { PlatformError } from "effect";
-import { Array, Crypto, Effect, Encoding, Schema } from "effect";
+import { Array, Crypto, Effect, Schema } from "effect";
+import { Hex } from "effect/encoding";
 
 import type { DefinitionDigestInput } from "./Records.ts";
 import { CanonicalBatch, DefinitionDigests, Digest } from "./Records.ts";
@@ -49,7 +50,7 @@ export const digestJson = Effect.fnUntraced(function* (
       ),
     );
 
-  return yield* Schema.decodeEffect(Digest)(Encoding.encodeHex(digest)).pipe(
+  return yield* Schema.decodeEffect(Digest)(Hex.encode(digest)).pipe(
     Effect.mapError(() => DigestError.make({ message: "SHA-256 returned an invalid digest" })),
   );
 });

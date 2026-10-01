@@ -1,8 +1,8 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Cause, Config, Console, Effect, Exit, FileSystem, Option, Path, Schema } from "effect";
-import { Command as CliCommand, Flag } from "effect/unstable/cli";
-import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http";
-import { ChildProcess } from "effect/unstable/process";
+import { Command as CliCommand, Flag } from "effect/cli";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
+import { ChildProcess } from "effect/process";
 
 import { downloadReleaseBuild, restoreReleaseBuild } from "./release-build.ts";
 import { readCommand, verifyMainBuild } from "./release-ci.ts";

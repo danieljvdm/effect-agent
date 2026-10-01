@@ -7,14 +7,16 @@ const run: NonNullable<UserConfig["run"]> = {
   tasks: {
     test: {
       command: "vitest run",
-      input: [
-        { auto: true },
-        { pattern: "bun.lock", base: "workspace" },
-        { pattern: "!**/node_modules", base: "workspace" },
-        { pattern: "!**/node_modules/.vite*", base: "workspace" },
-        { pattern: "!**/node_modules/.vite*/**", base: "workspace" },
-      ],
-      output: [],
+      cache: {
+        input: [
+          { auto: true },
+          { pattern: "bun.lock", base: "workspace" },
+          { pattern: "!**/node_modules", base: "workspace" },
+          { pattern: "!**/node_modules/.vite*", base: "workspace" },
+          { pattern: "!**/node_modules/.vite*/**", base: "workspace" },
+        ],
+        output: [],
+      },
     },
   },
 };

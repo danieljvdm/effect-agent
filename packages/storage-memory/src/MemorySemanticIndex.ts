@@ -1,4 +1,4 @@
-import { Clock, Effect, Encoding, Layer, Ref, Schema } from "effect";
+import { Clock, Effect, Layer, Ref, Schema } from "effect";
 import { MemoryKey } from "effect-agent/memory-store";
 import {
   MemoryIndexCandidate,
@@ -11,6 +11,7 @@ import {
   SemanticMemoryIndex,
   SemanticMemoryProfile,
 } from "effect-agent/semantic-memory-index";
+import { Hex } from "effect/encoding";
 
 const PositiveCapacity = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_536 }));
 const MaxStoredVectorComponents = 16_777_216;
@@ -57,7 +58,7 @@ const error = (operation: string, reason: MemoryIndexError["reason"]): MemoryInd
 const keyString = (key: MemoryKey): string => JSON.stringify([key.namespace.address, key.id]);
 
 const sourceIdentityBytes = (source: MemoryIndexSource): number =>
-  Encoding.encodeHex(JSON.stringify(source)).length / 2;
+  Hex.encode(JSON.stringify(source)).length / 2;
 
 const decodeBoundary = Effect.fn("InMemorySemanticIndex.decodeBoundary")(function* <A, I>(
   schema: Schema.Codec<A, I, never>,
@@ -116,7 +117,7 @@ const validateChunks = Effect.fn("InMemorySemanticIndex.validateChunks")(functio
 
   for (let index = 0; index < chunks.length; index++) {
     const chunk = chunks[index];
-    const byteLength = Encoding.encodeHex(chunk.text).length / 2;
+    const byteLength = Hex.encode(chunk.text).length / 2;
 
     if (
       chunk.ordinal !== index ||

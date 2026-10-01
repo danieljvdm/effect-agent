@@ -5,7 +5,7 @@ import type { Crypto } from "effect";
 import { Duration, Effect, Layer, Schema } from "effect";
 import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "effect-agent/submission-ledger";
 import { ThreadStore } from "effect-agent/thread-store";
-import type * as SqlClientService from "effect/unstable/sql/SqlClient";
+import type * as SqlClientService from "effect/sql/SqlClient";
 
 import { initializeSqliteJournal, sqliteErrors } from "./internal/sqlite-journal.ts";
 import { SqliteStorageConfig, SqliteStorageConfigValue } from "./SqliteStorageConfig.ts";

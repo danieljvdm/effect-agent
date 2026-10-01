@@ -7,7 +7,7 @@ import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { ThreadId } from "effect-agent/identifiers";
 import { DeploymentId, DefinitionDigests, Digest, ProducerId } from "effect-agent/records";
 import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
-import { Model, Toolkit } from "effect/unstable/ai";
+import { Model, Toolkit } from "effect/ai";
 import { expect, it } from "vite-plus/test";
 
 import { assertCheckpointFault } from "../src/fixture.ts";

@@ -1,5 +1,6 @@
-import { Crypto, Effect, Encoding, Schema } from "effect";
-import type { Prompt } from "effect/unstable/ai";
+import { Crypto, Effect, Schema } from "effect";
+import type { Prompt } from "effect/ai";
+import { Hex } from "effect/encoding";
 
 import { ThreadId } from "../core/Identifiers.ts";
 import { utf8ByteLength } from "../core/internal/utf8.ts";
@@ -233,7 +234,7 @@ const exactSourceRange = (
 };
 
 const utf8Bytes = (value: string): Uint8Array => {
-  const hex = Encoding.encodeHex(value);
+  const hex = Hex.encode(value);
   const bytes = new Uint8Array(hex.length / 2);
 
   for (let index = 0; index < bytes.length; index += 1) {
@@ -269,7 +270,7 @@ export const digestCompactionSource = Effect.fn("digestCompactionSource")(functi
     ),
   );
 
-  return `sha256:${Encoding.encodeHex(digest)}`;
+  return `sha256:${Hex.encode(digest)}`;
 });
 
 /**

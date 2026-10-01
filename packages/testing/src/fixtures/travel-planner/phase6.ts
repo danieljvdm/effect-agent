@@ -11,7 +11,7 @@ import {
 } from "effect-agent/records";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import { type ToolReconciler } from "effect-agent/tool-reconciler";
-import { LanguageModel, Model, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, type Response } from "effect/ai";
 
 import { TravelPlan, TripRequest } from "./definition.ts";
 import {

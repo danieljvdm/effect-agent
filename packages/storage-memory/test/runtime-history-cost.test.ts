@@ -41,7 +41,7 @@ import {
 } from "effect-agent/thread-store";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
-import { LanguageModel, Model, Prompt, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Prompt, Toolkit, type Response } from "effect/ai";
 
 const digest = Schema.decodeSync(Digest)("a".repeat(64));
 const definitions = DefinitionDigests.make({ agent: digest, model: digest, tools: digest });

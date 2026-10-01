@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Schema } from "effect";
-import { IdGenerator as EffectAiIdGenerator } from "effect/unstable/ai";
+import { IdGenerator as EffectAiIdGenerator } from "effect/ai";
 
 import { ThreadId, RunId, TurnId } from "./Identifiers.ts";
 

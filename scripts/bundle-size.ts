@@ -2,8 +2,8 @@ import { gzip } from "node:zlib";
 
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
-import { ChildProcess } from "effect/unstable/process";
+import { Command, Flag } from "effect/cli";
+import { ChildProcess } from "effect/process";
 import { analyzeMetafile, build, version as esbuildVersion } from "esbuild";
 
 import { comparisonExports, stageComparisonModules } from "./internal/comparison-exports.ts";

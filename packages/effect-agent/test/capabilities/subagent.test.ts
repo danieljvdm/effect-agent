@@ -29,14 +29,7 @@ import {
   type SubagentReservationView,
 } from "effect-agent/subagent-reservations";
 import { ThreadHistory } from "effect-agent/thread-history";
-import {
-  type AiError,
-  LanguageModel,
-  Model,
-  type Response,
-  Tool,
-  Toolkit,
-} from "effect/unstable/ai";
+import { type AiError, LanguageModel, Model, type Response, Tool, Toolkit } from "effect/ai";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2

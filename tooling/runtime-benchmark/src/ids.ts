@@ -1,7 +1,7 @@
 import { Effect, Layer, Schema } from "effect";
 import { IdGenerator } from "effect-agent/id-generator";
 import { RunId, ThreadId, TurnId } from "effect-agent/identifiers";
-import { IdGenerator as EffectAiIdGenerator } from "effect/unstable/ai";
+import { IdGenerator as EffectAiIdGenerator } from "effect/ai";
 
 /** Supply the same identity authority to current code and releases predating default IDs. */
 export const BenchmarkIdsLive = Layer.succeed(IdGenerator, {

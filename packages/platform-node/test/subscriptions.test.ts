@@ -52,8 +52,8 @@ import {
   makeSubscriptionInputBinding,
 } from "effect-agent/subscription-input";
 import { Subscriptions } from "effect-agent/subscriptions";
+import { LanguageModel, Model, Toolkit, type Response } from "effect/ai";
 import { TestClock } from "effect/testing";
-import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
 
 const partition = SourcePartition.make({
   tenantId: "node-subscription-tenant",

@@ -1,5 +1,5 @@
 import { Cause, Effect, Exit, Layer, Stream } from "effect";
-import { LanguageModel } from "effect/unstable/ai";
+import { LanguageModel } from "effect/ai";
 
 import { PlannerAttempt } from "./progress.ts";
 import { responseTextPreview } from "./response-stream.ts";

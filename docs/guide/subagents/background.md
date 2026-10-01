@@ -36,7 +36,7 @@ Opt a worker definition into assignment completion through its typed output:
 ```ts twoslash
 import { Agent, Worker } from "effect-agent";
 import { Schema } from "effect";
-import { Toolkit } from "effect/unstable/ai";
+import { Toolkit } from "effect/ai";
 
 const Task = Agent.make("task", {
   input: Schema.String,

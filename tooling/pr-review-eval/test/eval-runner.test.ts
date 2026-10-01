@@ -22,7 +22,7 @@ import {
   type Scope,
   Stream,
 } from "effect";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 
 import {
   decodeObservationLines,

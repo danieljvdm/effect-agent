@@ -11,7 +11,7 @@ the real interpreter without network access, credentials, provider latency, or m
 ## Provide a scripted model layer
 
 ```ts
-import { Model } from "effect/unstable/ai";
+import { Model } from "effect/ai";
 import { ScriptedModel } from "@effect-agent/testing/scripted-model";
 
 const TestModel = Model.make("scripted", "test-model", ScriptedModel.layer(turns));

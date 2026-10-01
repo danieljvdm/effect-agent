@@ -44,7 +44,7 @@ import {
   Tool,
   Toolkit,
   type Response as AiResponse,
-} from "effect/unstable/ai";
+} from "effect/ai";
 
 import {
   currentLargePhase,

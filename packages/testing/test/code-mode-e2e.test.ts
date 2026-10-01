@@ -23,7 +23,7 @@ import { ThreadHistory } from "effect-agent/thread-history";
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
-import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 
 let threadSequence = 0;
 

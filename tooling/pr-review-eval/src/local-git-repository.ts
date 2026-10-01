@@ -7,7 +7,7 @@ import {
 import { type ReviewRequest } from "@effect-agent/pr-review/review";
 import { type ReviewRepository } from "@effect-agent/pr-review/review-repository";
 import { Effect, Path, Result, Schema, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { EvalConfigurationError, type EvalInputDigest } from "./contracts.ts";
 import { digestText } from "./corpus.ts";

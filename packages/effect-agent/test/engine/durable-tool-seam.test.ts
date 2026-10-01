@@ -21,8 +21,8 @@ import { IdGenerator } from "effect-agent/id-generator";
 import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
 import { type RunEvent } from "effect-agent/run-event";
 import { RunContextPreparationPassthrough, type RunTurnResume } from "effect-agent/run-options";
+import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/ai";
 import { TestClock } from "effect/testing";
-import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
 import { ThreadHistory } from "../../src/engine/ThreadHistory.ts";
 

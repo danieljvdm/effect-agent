@@ -1,5 +1,5 @@
 import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { Mic, PhoneOff, Volume2, VolumeX } from "lucide-react";
 import { useRef } from "react";
 

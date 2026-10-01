@@ -1,5 +1,6 @@
-import { Crypto, Effect, Encoding, Option, Schema } from "effect";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Crypto, Effect, Option, Schema } from "effect";
+import { Tool, Toolkit } from "effect/ai";
+import { Hex } from "effect/encoding";
 
 import type { AnyDefinition } from "../core/Agent.ts";
 import {
@@ -140,7 +141,7 @@ const modelKey = Effect.fn("Messaging.modelKey")(function* () {
     .digest("SHA-256", utf8Bytes(JSON.stringify(source)))
     .pipe(Effect.mapError(() => MessagingError.make({ operation: "send", reason: "unavailable" })));
 
-  return Schema.decodeSync(IdempotencyKey)(`peer-tool:${Encoding.encodeHex(digest)}`);
+  return Schema.decodeSync(IdempotencyKey)(`peer-tool:${Hex.encode(digest)}`);
 });
 
 const native = <

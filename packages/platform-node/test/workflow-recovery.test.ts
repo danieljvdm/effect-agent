@@ -7,7 +7,7 @@ import { digestDefinitions } from "effect-agent/digest";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import * as Subagent from "effect-agent/subagent";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
-import { Toolkit, type Response } from "effect/unstable/ai";
+import { Toolkit, type Response } from "effect/ai";
 
 import {
   definitionsFor,

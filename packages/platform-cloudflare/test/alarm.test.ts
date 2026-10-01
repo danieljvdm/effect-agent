@@ -12,8 +12,8 @@ import {
   UnknownResolutionCommand,
 } from "effect-agent/submission-ledger";
 import { DurableObject } from "effect-cf";
+import { SqlClient } from "effect/sql/SqlClient";
 import { TestClock } from "effect/testing";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
 import {

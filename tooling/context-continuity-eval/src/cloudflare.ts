@@ -14,7 +14,7 @@ import { digestDefinition } from "effect-agent/digest";
 import { Receipt } from "effect-agent/durable-agent-runtime";
 import { CanonicalRecordEnvelope } from "effect-agent/records";
 import { runIdForSubmission } from "effect-agent/run-journal";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import { CloudflareIdentity, CloudflareSnapshot } from "./cloudflare-contracts.ts";
 import { EvaluationError, EvaluationReport, ProjectStatus } from "./contracts.ts";

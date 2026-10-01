@@ -21,7 +21,7 @@ import {
   type RunTransientContextHook,
 } from "effect-agent/run-options";
 import { ThreadHistory } from "effect-agent/thread-history";
-import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/unstable/ai";
+import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/ai";
 
 let threadSequence = 0;
 

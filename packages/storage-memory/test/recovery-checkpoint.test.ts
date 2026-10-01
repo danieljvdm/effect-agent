@@ -30,8 +30,8 @@ import {
 } from "effect-agent/thread-store";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
-import type { Prompt, Response } from "effect/unstable/ai";
-import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
+import type { Prompt, Response } from "effect/ai";
+import { LanguageModel, Model, Tool, Toolkit } from "effect/ai";
 
 import { MemorySubmissionLedgerLive } from "../src/MemorySubmissionLedger.ts";
 import { MemoryThreadStoreLive } from "../src/MemoryThreadStore.ts";

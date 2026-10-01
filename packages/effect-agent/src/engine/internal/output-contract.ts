@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { Prompt, Tool } from "effect/unstable/ai";
+import { Prompt, Tool } from "effect/ai";
 
 import type * as Agent from "../../core/Agent.ts";
 

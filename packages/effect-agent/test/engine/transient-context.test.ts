@@ -7,7 +7,7 @@ import { ContextCompactor } from "effect-agent/context-compactor";
 import { IdGenerator } from "effect-agent/id-generator";
 import { RunId, ThreadId, TurnId } from "effect-agent/identifiers";
 import { RunContextPreparation } from "effect-agent/run-options";
-import { AiError, LanguageModel, Model, Prompt, type Response, Toolkit } from "effect/unstable/ai";
+import { AiError, LanguageModel, Model, Prompt, type Response, Toolkit } from "effect/ai";
 
 import { ThreadHistory } from "../../src/engine/ThreadHistory.ts";
 

@@ -16,15 +16,7 @@ import {
   type RunContextHook,
   type RunDurabilityHook,
 } from "effect-agent/run-options";
-import {
-  AiError,
-  LanguageModel,
-  Model,
-  Prompt,
-  type Response,
-  Tool,
-  Toolkit,
-} from "effect/unstable/ai";
+import { AiError, LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/ai";
 
 import {
   CLEARED_TOOL_RESULT,

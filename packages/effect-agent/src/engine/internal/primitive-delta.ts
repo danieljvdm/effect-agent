@@ -1,5 +1,5 @@
 import { Option, Schema } from "effect";
-import { Response } from "effect/unstable/ai";
+import { Response } from "effect/ai";
 
 import { utf8ByteLength } from "../../core/internal/utf8.ts";
 import { boundedValueFootprint } from "./bounded-value.ts";

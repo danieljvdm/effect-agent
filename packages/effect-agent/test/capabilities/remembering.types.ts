@@ -10,7 +10,7 @@ import {
   type MemoryMutationFailure,
 } from "effect-agent/memory-store";
 import * as Protocol from "effect-agent/remembering-store";
-import type { AiError, LanguageModel } from "effect/unstable/ai";
+import type { AiError, LanguageModel } from "effect/ai";
 
 import * as Remembering from "../../src/capabilities/Remembering.ts";
 

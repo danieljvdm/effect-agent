@@ -17,8 +17,8 @@ import {
 } from "effect";
 import { ScheduleAuthorizer, ScheduleRecord, defaultSchedulingLimits } from "effect-agent/schedule";
 import { Scheduling } from "effect-agent/scheduling";
-import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import { ChildProcess, type ChildProcessSpawner } from "effect/process";
+import * as SqlClientService from "effect/sql/SqlClient";
 
 import {
   type SchedulingCrashBoundary,

@@ -1,7 +1,7 @@
 import { OpenAiTool } from "@effect/ai-openai";
 import { DateTime, Effect } from "effect";
 import { Agent, Output, WebSearch } from "effect-agent";
-import { Toolkit } from "effect/unstable/ai";
+import { Toolkit } from "effect/ai";
 
 import { DeliverResponse, ShowTravelOptions, TripTools } from "../agent.ts";
 import { PlannerInput, Text } from "../domain.ts";

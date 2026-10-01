@@ -1,6 +1,6 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { ConfigProvider, Console, Effect, FileSystem, Layer, Path } from "effect";
-import { Command } from "effect/unstable/cli";
+import { Command } from "effect/cli";
 
 import { command } from "./command.ts";
 import { CURRENT_RUNNER_VERSION } from "./contracts.ts";

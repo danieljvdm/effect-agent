@@ -1,15 +1,4 @@
-import {
-  Context,
-  Crypto,
-  Effect,
-  Encoding,
-  Layer,
-  Option,
-  PubSub,
-  Ref,
-  Schema,
-  Stream,
-} from "effect";
+import { Context, Crypto, Effect, Layer, Option, PubSub, Ref, Schema, Stream } from "effect";
 import { digestCanonicalBatch, EMPTY_TAIL_DIGEST } from "effect-agent/digest";
 import { ThreadId } from "effect-agent/identifiers";
 import {
@@ -53,6 +42,7 @@ import {
   type ThreadRecoveryCheckpoints,
   MAX_THREAD_EXPORT_RECORDS,
 } from "effect-agent/thread-store";
+import { Base64 } from "effect/encoding";
 
 const MAX_THREADS = 256;
 const MAX_RECORDS_PER_THREAD = MAX_THREAD_EXPORT_RECORDS;
@@ -137,7 +127,7 @@ const offsetSequence = Effect.fn("MemoryThreadStore.offsetSequence")((
   offset: ObservationOffset | undefined,
 ): Effect.Effect<CanonicalSequence, ThreadStoreError> => {
   if (offset === undefined) return Effect.succeed(ZERO_CANONICAL_SEQUENCE);
-  const prefix = `memory:v1:${Encoding.encodeBase64(threadId)}:`;
+  const prefix = `memory:v1:${Base64.encode(threadId)}:`;
   const encodedSequence = offset.startsWith(prefix) ? offset.slice(prefix.length) : "";
 
   if (!/^\d+$/.test(encodedSequence)) {
@@ -153,7 +143,7 @@ const offsetSequence = Effect.fn("MemoryThreadStore.offsetSequence")((
 });
 
 const observationOffset = (threadId: ThreadId, sequence: CanonicalSequence): ObservationOffset =>
-  Schema.decodeSync(ObservationOffset)(`memory:v1:${Encoding.encodeBase64(threadId)}:${sequence}`);
+  Schema.decodeSync(ObservationOffset)(`memory:v1:${Base64.encode(threadId)}:${sequence}`);
 
 const findThread = Effect.fn("MemoryThreadStore.findThread")((
   state: MemoryState,

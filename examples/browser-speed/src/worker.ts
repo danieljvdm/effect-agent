@@ -1,8 +1,8 @@
 import { BrowserSessions } from "@effect-agent/platform-cloudflare/browser-session";
 import { DurableObject } from "cloudflare:workers";
 import { Effect, Layer, Redacted, Schema } from "effect";
-import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
+import { HttpApiBuilder } from "effect/http-api";
 
 import { LabApi, LabError, ModelApi, modelChoices } from "./contract.ts";
 import { connectKitesurf } from "./kitesurf.ts";

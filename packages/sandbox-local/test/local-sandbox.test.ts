@@ -24,8 +24,8 @@ import {
 } from "effect";
 import { Sandbox, type SandboxEvent, type SandboxRequest } from "effect-agent/sandbox";
 import type { PlatformError } from "effect/PlatformError";
+import { ChildProcessSpawner } from "effect/process";
 import { TestClock } from "effect/testing";
-import { ChildProcessSpawner } from "effect/unstable/process";
 
 const AllowedEnvironmentResult = Schema.Struct({
   allowed: Schema.String,

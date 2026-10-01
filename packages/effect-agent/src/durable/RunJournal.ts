@@ -1,5 +1,5 @@
 import { type Crypto, Effect, Predicate, Schema, Stream, type DateTime } from "effect";
-import { Prompt } from "effect/unstable/ai";
+import { Prompt } from "effect/ai";
 
 import { ThreadId, RunId, ToolCallId, TurnId, type SubmissionId } from "../core/Identifiers.ts";
 import { type ExhaustedLimit } from "../core/RunEvent.ts";

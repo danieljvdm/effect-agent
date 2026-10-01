@@ -11,7 +11,7 @@ import * as Subagent from "effect-agent/subagent";
 import { SubagentHost } from "effect-agent/subagent-host";
 import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import { WorkerHostAuthorizer } from "effect-agent/worker-host";
-import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Toolkit, type Response } from "effect/ai";
 
 const principal = Schema.decodeSync(Principal)("automatic-owner");
 const threadId = Schema.decodeSync(ThreadId)("automatic-parent");

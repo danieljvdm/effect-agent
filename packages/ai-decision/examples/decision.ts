@@ -1,7 +1,7 @@
 import { TypeSafeClient, TypeSafeDecisionModel } from "@effect/ai-typesafe";
 import { Effect, Layer, Schema } from "effect";
-import { Decision, DecisionModel } from "effect/unstable/ai";
-import { FetchHttpClient } from "effect/unstable/http";
+import { Decision, DecisionModel } from "effect/ai";
+import { FetchHttpClient } from "effect/http";
 
 class Received extends Schema.TaggedClass<Received>()("Received", { message: Schema.String }) {}
 class Review extends Schema.TaggedClass<Review>()("Review", { message: Schema.String }) {}

@@ -33,7 +33,7 @@ import {
   SubmissionLedger,
   SubmissionLookupById,
 } from "effect-agent/submission-ledger";
-import { DurableDeferred, Workflow, WorkflowEngine } from "effect/unstable/workflow";
+import { DurableDeferred, Workflow, WorkflowEngine } from "effect/workflow";
 
 import { workflowCompletion } from "./internal/completion.ts";
 import {

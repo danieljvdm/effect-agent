@@ -5,7 +5,7 @@ import {
   HttpClient,
   HttpClientError,
   HttpClientRequest,
-} from "effect/unstable/http";
+} from "effect/http";
 
 const Segment = Schema.NonEmptyString.check(
   Schema.isMaxLength(256),

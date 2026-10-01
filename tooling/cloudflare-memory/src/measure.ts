@@ -1,11 +1,6 @@
 import { Clock, Config, Console, Effect, FileSystem, Schema } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
-import {
-  FetchHttpClient,
-  HttpClient,
-  HttpClientRequest,
-  HttpClientResponse,
-} from "effect/unstable/http";
+import { Command, Flag } from "effect/cli";
+import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import { BenchmarkCase, cases, Sample } from "./contracts.ts";
 

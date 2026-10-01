@@ -1,5 +1,5 @@
 import { Context, DateTime, Effect, Schema } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 import { FundingError, FundingGrant, GrantFunding, RevokeFunding } from "../funding-domain";
 import { AccountId } from "./account";

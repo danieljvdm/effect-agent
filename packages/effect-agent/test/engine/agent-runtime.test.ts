@@ -18,8 +18,8 @@ import * as AgentRuntime from "effect-agent/agent-runtime";
 import { IdGenerator } from "effect-agent/id-generator";
 import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
 import { type RunEvent } from "effect-agent/run-event";
-import type { Response } from "effect/unstable/ai";
-import { AiError, LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
+import type { Response } from "effect/ai";
+import { AiError, LanguageModel, Model, Tool, Toolkit } from "effect/ai";
 
 import { RunContextPreparationPassthrough } from "../../src/engine/RunOptions.ts";
 import { ThreadHistory } from "../../src/engine/ThreadHistory.ts";

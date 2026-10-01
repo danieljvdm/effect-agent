@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import * as Agent from "effect-agent/agent";
 import { CanonicalRecordEnvelope, DefinitionDigestInput } from "effect-agent/records";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 import { ModelUsage } from "./contracts.ts";
 import { ModelId } from "./live-model.ts";

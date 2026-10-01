@@ -4,8 +4,8 @@ import { SqliteClient } from "@effect/sql-sqlite-node";
 import type { Crypto } from "effect";
 import { Effect, Layer } from "effect";
 import { LedgerError, SubmissionLedger } from "effect-agent/submission-ledger";
-import type * as SqlClientService from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
+import type * as SqlClientService from "effect/sql/SqlClient";
+import type { SqlError } from "effect/sql/SqlError";
 
 import { initializeSqliteJournal, sqliteErrors } from "./internal/sqlite-journal.ts";
 import { SqliteStorageConfig } from "./SqliteStorageConfig.ts";

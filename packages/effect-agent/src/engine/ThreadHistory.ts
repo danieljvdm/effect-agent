@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Schema } from "effect";
-import type { Prompt } from "effect/unstable/ai";
+import type { Prompt } from "effect/ai";
 
 import { ThreadId, type RunId } from "../core/Identifiers.ts";
 import { type RunCompleted } from "../core/RunEvent.ts";

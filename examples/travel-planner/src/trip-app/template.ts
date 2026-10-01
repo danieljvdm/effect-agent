@@ -78,7 +78,7 @@ export default defineConfig({
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "effect": "4.0.0-rc.117"
+    "effect": "4.0.0"
   }
 }
 `,
@@ -88,7 +88,7 @@ export default defineConfig({
   "type": "module",
   "dependencies": {
     "@trip/contracts": "workspace:*",
-    "effect": "4.0.0-rc.117",
+    "effect": "4.0.0",
     "effect-cf": "0.43.0"
   }
 }
@@ -98,10 +98,10 @@ export default defineConfig({
   "private": true,
   "type": "module",
   "dependencies": {
-    "@effect/atom-react": "4.0.0-rc.117",
+    "@effect/atom-react": "4.0.0",
     "@trip/contracts": "workspace:*",
     "@types/leaflet": "1.9.21",
-    "effect": "4.0.0-rc.117",
+    "effect": "4.0.0",
     "leaflet": "1.9.4",
     "react": "19.2.8",
     "react-dom": "19.2.8"
@@ -109,7 +109,7 @@ export default defineConfig({
 }
 `,
   "packages/contracts/src/index.ts": `import { Schema } from "effect";
-import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/unstable/httpapi";
+import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/http-api";
 
 const Label = Schema.String.check(Schema.isMaxLength(240));
 const Text = Schema.String.check(Schema.isMaxLength(4000));
@@ -156,8 +156,8 @@ export const TripApi = HttpApi.make("trip-app").add(
 `,
   "packages/server/src/index.ts": `import { Effect, Layer, Schema } from "effect";
 import { ServiceBinding, Worker } from "effect-cf";
-import { HttpRouter, HttpServer } from "effect/unstable/http";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpRouter, HttpServer } from "effect/http";
+import { HttpApiBuilder } from "effect/http-api";
 import { Trip, TripApi, TripUnavailable } from "@trip/contracts";
 
 class TripData extends ServiceBinding.Service<TripData>()("TripData", { binding: "TRIP_DATA" }) {}
@@ -207,8 +207,8 @@ export default Worker.make(application, {
   </body>
 </html>
 `,
-  "packages/web/src/state.ts": `import { FetchHttpClient } from "effect/unstable/http";
-import { AtomHttpApi } from "effect/unstable/reactivity";
+  "packages/web/src/state.ts": `import { FetchHttpClient } from "effect/http";
+import { AtomHttpApi } from "effect/reactivity";
 import { TripApi } from "@trip/contracts";
 export class TripClient extends AtomHttpApi.Service<TripClient>()("TripClient", {
   api: TripApi,
@@ -238,7 +238,7 @@ export function TripMap(_props: { readonly places: readonly Place[] }) {
 }
 `,
   "packages/web/src/App.tsx": `import { useAtomValue } from "@effect/atom-react";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { tripAtom } from "./state.ts";
 import { TripMap } from "./TripMap.tsx";
 

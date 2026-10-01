@@ -4,8 +4,8 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Exit, Deferred, Fiber } from "effect";
 import { SubmissionLedger } from "effect-agent/submission-ledger";
 import { SubscriptionStore, type SubscriptionError } from "effect-agent/subscription";
+import * as SqlClient from "effect/sql/SqlClient";
 import { TestClock } from "effect/testing";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
   restoreV2,

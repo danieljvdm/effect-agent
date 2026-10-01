@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
-import { type LanguageModel, type Model, Prompt } from "effect/unstable/ai";
+import { type LanguageModel, type Model, Prompt } from "effect/ai";
 
 import { type CompactionPolicy } from "../core/AgentPolicy.ts";
 import { type RunId, type ThreadId } from "../core/Identifiers.ts";

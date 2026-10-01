@@ -1,8 +1,9 @@
 import { ReviewFollowUp } from "@effect-agent/pr-review/review";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Encoding, Exit, Fiber, Logger, Redacted, Schema } from "effect";
+import { Effect, Exit, Fiber, Logger, Redacted, Schema } from "effect";
+import { Base64 } from "effect/encoding";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import { TestClock } from "effect/testing";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { makeGitHubClient } from "../src/github.ts";
 import { reviewMarker, reviewPauseMarker, type ReviewHistoryItem } from "../src/selection.ts";
@@ -371,7 +372,7 @@ describe("GitHub read recovery", () => {
             sha: blob,
             size: 23,
             encoding: "base64",
-            content: Encoding.encodeBase64("private-source-sentinel"),
+            content: Base64.encode("private-source-sentinel"),
           };
           {
             status = 503;

@@ -24,8 +24,8 @@ import {
   submissionSettlementRecordId,
   type SubmissionSnapshot,
 } from "effect-agent/submission-ledger";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { CurrentTransformer } from "effect/unstable/sql/Statement";
+import * as SqlClient from "effect/sql/SqlClient";
+import { CurrentTransformer } from "effect/sql/Statement";
 import { expect } from "vite-plus/test";
 
 const digest = Schema.decodeSync(Digest)("a".repeat(64));

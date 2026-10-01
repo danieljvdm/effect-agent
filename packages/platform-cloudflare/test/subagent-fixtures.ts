@@ -6,7 +6,7 @@ import { DefinitionDigests, Digest } from "effect-agent/records";
 import * as Subagent from "effect-agent/subagent";
 import { SubagentPolicy } from "effect-agent/subagent";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
-import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Toolkit, type Response } from "effect/ai";
 
 import {
   TEST_DIGESTS,

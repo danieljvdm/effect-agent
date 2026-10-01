@@ -18,7 +18,7 @@ import {
 } from "effect-agent/run-options";
 import { type ThreadHistory } from "effect-agent/thread-history";
 import { RunToolVisibility } from "effect-agent/tool-exposure";
-import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
+import { LanguageModel, Model, Tool, Toolkit } from "effect/ai";
 import type { expectTypeOf as ExpectTypeOf } from "vite-plus/test";
 
 class Instructions extends Context.Service<Instructions, string>()("api-types/Instructions") {}

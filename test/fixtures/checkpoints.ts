@@ -18,7 +18,7 @@ import {
   LoadCheckpointRequest,
   SaveCheckpointRequest,
 } from "effect-agent/thread-store";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import { expect } from "vite-plus/test";
 
 // Frozen bytes with required compatibility metadata, independent of the current encoder.

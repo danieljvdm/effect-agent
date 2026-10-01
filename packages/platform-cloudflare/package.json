@@ -62,10 +62,10 @@
     "miniflare": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "4.1.11"
   },
   "peerDependencies": {
-    "effect": "^4.0.0-rc.117",
+    "effect": "^4.0.0",
     "effect-cf": "^0.44.1 || ^0.45.0"
   }
 }

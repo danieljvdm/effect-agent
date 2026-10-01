@@ -1,6 +1,6 @@
 import { Config, Crypto, Effect, FileSystem, Path, Redacted, Schema, Stream } from "effect";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { HttpClient, HttpClientRequest } from "effect/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { requireReplayCpu, sha256 } from "./replay-cpu-build.ts";
 import { ReplayCpuError, ReplayCpuRole, ReplayCpuStage } from "./replay-cpu-contracts.ts";

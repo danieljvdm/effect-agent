@@ -27,7 +27,7 @@ import {
   HttpClientRequest,
   type HttpClientError,
   type HttpClientResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 
 /** Node-safe REST crawl implementation. It never exposes or persists provider job identity. */
 export const browserRestCrawlImplementation = SandboxImplementation.make({

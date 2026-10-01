@@ -39,7 +39,7 @@ default. Without it, only `openai` and `xai` bindings use chronological instruct
 group systems before the conversation, retaining the last equivalent instruction and its native
 options. Changing that grouped block can invalidate the history cache.
 
-Anthropic's pinned `@effect/ai-anthropic` 4.0.0-rc.117 requires grouping. Chronological Anthropic
+Anthropic's pinned `@effect/ai-anthropic` 4.0.0 requires grouping. Chronological Anthropic
 history needs a release containing the [upstream adapter change](https://github.com/Effect-TS/effect/pull/8603)
 and a model supporting
 [mid-conversation system messages](https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages).

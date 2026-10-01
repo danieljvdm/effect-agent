@@ -14,9 +14,9 @@ import {
   Schema,
   Stream,
 } from "effect";
-import { Yaml } from "effect/unstable/encoding";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { Yaml } from "effect/encoding";
+import { HttpClient, HttpClientResponse } from "effect/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { publishRelease, withTemporaryManifest } from "../../../scripts/release-publish.ts";
 

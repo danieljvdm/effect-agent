@@ -20,7 +20,7 @@ import {
   ToolReconciler,
   ToolReconcilerError,
 } from "effect-agent/tool-reconciler";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 import {
   ActivityCatalog,

@@ -1,6 +1,6 @@
 import { Config, Context, Effect, FileSystem, Path, Redacted, Schema, Stream } from "effect";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { HttpClient, HttpClientRequest } from "effect/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { type PerformanceBuild } from "./build-performance-cloudflare.ts";
 import { EvaluationError } from "./contracts.ts";

@@ -3,7 +3,7 @@ import process from "node:process";
 import { OpenAiClient } from "@effect/ai-openai";
 import { NodeCrypto, NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Config, Effect, FileSystem, Layer, Schema } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 import { EvaluationError } from "./contracts.ts";
 import { runEvaluation } from "./evaluate.ts";

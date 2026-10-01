@@ -3,14 +3,7 @@ import { Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
 import * as AgentUpdates from "effect-agent/agent-updates";
 import { IdempotencyKey } from "effect-agent/receipt";
-import {
-  LanguageModel,
-  Model,
-  type Prompt,
-  type Response,
-  Tool,
-  Toolkit,
-} from "effect/unstable/ai";
+import { LanguageModel, Model, type Prompt, type Response, Tool, Toolkit } from "effect/ai";
 
 import * as AgentRuntime from "../../src/engine/AgentRuntime.ts";
 import { AgentUpdateAcceptance, ModelUsageAccounting } from "../../src/engine/RunOptions.ts";

@@ -1,5 +1,6 @@
-import { Clock, Crypto, Effect, Encoding, Schema } from "effect";
-import { EmbeddingModel } from "effect/unstable/ai";
+import { Clock, Crypto, Effect, Schema } from "effect";
+import { EmbeddingModel } from "effect/ai";
+import { Hex } from "effect/encoding";
 
 import { utf8ByteLength } from "../core/internal/utf8.ts";
 import type * as MemoryNamespace from "../core/MemoryNamespace.ts";
@@ -95,7 +96,7 @@ export class SemanticQueryResult extends Schema.Class<SemanticQueryResult>(
 }) {}
 
 const utf8 = (text: string): Uint8Array => {
-  const hex = Encoding.encodeHex(text);
+  const hex = Hex.encode(text);
 
   return Uint8Array.from({ length: hex.length / 2 }, (_, index) =>
     Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16),
@@ -289,7 +290,7 @@ export const indexMemorySource = Effect.fn("indexMemorySource")(function* <
     const crypto = yield* Crypto.Crypto;
 
     const fingerprint = yield* crypto.digest("SHA-256", utf8(encodedProfile)).pipe(
-      Effect.map(Encoding.encodeHex),
+      Effect.map(Hex.encode),
       Effect.mapError(() =>
         SemanticMemoryError.make({ operation: "fingerprint profile", reason: "unavailable" }),
       ),

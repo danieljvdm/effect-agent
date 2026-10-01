@@ -22,8 +22,8 @@ import { ThreadId } from "effect-agent/identifiers";
 import { DefinitionDigestInput, DeploymentId, type DefinitionDigests } from "effect-agent/records";
 import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
-import { LanguageModel, Model, Toolkit, type Prompt, type Response } from "effect/unstable/ai";
-import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster";
+import { LanguageModel, Model, Toolkit, type Prompt, type Response } from "effect/ai";
+import { ClusterWorkflowEngine, SingleRunner } from "effect/cluster";
 
 export const deploymentId = Schema.decodeSync(DeploymentId)("workflow-certification");
 export const workflowPrefix = "effect-agent/certification/v1";

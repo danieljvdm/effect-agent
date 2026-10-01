@@ -39,7 +39,7 @@ For provider-native routing with stored keys or Unified Billing, pass the upstre
 import * as Gateway from "@effect-agent/platform-cloudflare/cloudflare-ai-gateway";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Layer, Redacted } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 const gateway = {
   accountId: "your-account",
@@ -105,8 +105,8 @@ import { ThreadObject } from "@effect-agent/platform-cloudflare";
 import { DefinitionDigestInput } from "effect-agent/records";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Layer, Schema } from "effect";
-import { Toolkit } from "effect/unstable/ai";
-import { FetchHttpClient } from "effect/unstable/http";
+import { Toolkit } from "effect/ai";
+import { FetchHttpClient } from "effect/http";
 
 const TravelPlanner = Agent.make("travel-planner", {
   input: Schema.Struct({ destination: Schema.String, days: Schema.Number }),

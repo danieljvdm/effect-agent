@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Schema } from "effect";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient } from "effect/sql/SqlClient";
 
 import { AppId, PlannerError, Revision, TripApp, TripId } from "../domain.ts";
 import { TripFailpoint } from "../server/trips.ts";

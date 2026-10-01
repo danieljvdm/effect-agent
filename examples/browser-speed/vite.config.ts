@@ -25,21 +25,27 @@ export default defineConfig({
     tasks: {
       check: {
         command: "tsc --noEmit -p tsconfig.json",
-        input: [{ auto: true }, "src/**", "test/**", "tsconfig.json"],
-        output: [],
+        cache: {
+          input: [{ auto: true }, "src/**", "test/**", "tsconfig.json"],
+          output: [],
+        },
       },
       test: {
         command: "vp test",
-        env: ["BROWSER_TEST_EXECUTABLE"],
-        input: [{ auto: true }, "src/**", "test/**"],
-        output: [],
+        cache: {
+          env: ["BROWSER_TEST_EXECUTABLE"],
+          input: [{ auto: true }, "src/**", "test/**"],
+          output: [],
+        },
       },
       build: {
         command: "vp build && wrangler deploy --dry-run",
-        env: ["VITE_BROWSER_BENCHMARK_REPORT_URL"],
-        input: [{ auto: true }, "src/**", "index.html", "!.wrangler/**", "!dist/**"],
-        untrackedEnv: ["WRANGLER_LOG_PATH"],
-        output: ["dist/**"],
+        cache: {
+          env: ["VITE_BROWSER_BENCHMARK_REPORT_URL"],
+          input: [{ auto: true }, "src/**", "index.html", "!.wrangler/**", "!dist/**"],
+          untrackedEnv: ["WRANGLER_LOG_PATH"],
+          output: ["dist/**"],
+        },
       },
       worker: {
         command: "wrangler dev --port 8791",

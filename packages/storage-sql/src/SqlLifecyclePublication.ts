@@ -10,7 +10,7 @@ import {
   type LifecyclePublicationStorage,
 } from "effect-agent/lifecycle-publication";
 import { SqlStorageOwner } from "effect-agent/sql-memory-store";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient } from "effect/sql/SqlClient";
 
 import { makeSqlQuery, SqlInteger } from "./SqlStorage.ts";
 import { SqlStorageProgress } from "./SqlStorageProgress.ts";

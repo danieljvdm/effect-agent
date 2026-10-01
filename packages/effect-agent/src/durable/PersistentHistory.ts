@@ -1,5 +1,5 @@
 import { DateTime, Effect, Layer, Schema } from "effect";
-import { Prompt } from "effect/unstable/ai";
+import { Prompt } from "effect/ai";
 
 import { type ThreadId, type RunId } from "../core/Identifiers.ts";
 import { type RunCompleted as RunCompletedEvent } from "../core/RunEvent.ts";

@@ -2,7 +2,7 @@ import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Effect, Layer, type Crypto } from "effect";
 import type { SubmissionLedger } from "effect-agent/submission-ledger";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import { describe, it } from "vite-plus/test";
 
 import { ledgerReadCases } from "../../../test/fixtures/ledger-read-contracts.ts";

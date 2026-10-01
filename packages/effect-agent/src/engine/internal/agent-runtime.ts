@@ -34,7 +34,7 @@ import {
   Response,
   ResponseIdTracker,
   Toolkit,
-} from "effect/unstable/ai";
+} from "effect/ai";
 
 import * as Agent from "../../core/Agent.ts";
 import {

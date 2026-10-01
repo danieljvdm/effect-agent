@@ -27,8 +27,8 @@ import {
 } from "effect-agent/subagent-host";
 import { ToolResultBounds } from "effect-agent/tool-result";
 import { WorkerCompletion, WorkerError, WorkerUpdate } from "effect-agent/worker";
+import { Toolkit } from "effect/ai";
 import { TestClock } from "effect/testing";
-import { Toolkit } from "effect/unstable/ai";
 
 import { automaticReporting } from "../../src/capabilities/internal/subagent-reporting.ts";
 import {

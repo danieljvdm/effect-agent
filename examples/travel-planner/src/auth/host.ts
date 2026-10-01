@@ -5,8 +5,8 @@ import type { EmailProofDelivery } from "@yielded/auth/Proofs";
 import { layerWebCrypto } from "@yielded/auth/WebCrypto";
 import * as Drizzle from "drizzle-orm/effect-sqlite-do";
 import { Effect, Layer, Option, Schema } from "effect";
-import { HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http";
-import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { HttpRouter, HttpServer, HttpServerResponse } from "effect/http";
+import { HttpApiBuilder } from "effect/http-api";
 
 import { FundingApi, FundingError } from "../funding-domain";
 import { makeFundingStore } from "./funding";

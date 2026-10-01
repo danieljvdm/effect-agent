@@ -123,7 +123,7 @@ batching once; the host supplies the page adapter and provider.
 import { BrowserUse } from "effect-agent";
 import { TypeSafeClient, TypeSafeDecisionModel } from "@effect/ai-typesafe";
 import { Config, Layer } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 const browser = BrowserUse.make({ grounding: "decision" });
 // Include browser.toolkit in your Agent; merge your own completion tool if needed.
@@ -177,7 +177,7 @@ import {
   PageUrlTarget,
 } from "effect-agent/page-capture";
 import { Config, Effect } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 const captureExample = Effect.gen(function* () {
   const accountId = yield* Config.NonEmptyString("CLOUDFLARE_ACCOUNT_ID");
@@ -213,7 +213,7 @@ import {
   CloudflareBrowser,
   type CloudflareBrowserOptions,
 } from "@effect-agent/platform-cloudflare/cloudflare-browser";
-import { Toolkit } from "effect/unstable/ai";
+import { Toolkit } from "effect/ai";
 
 declare const env: { BROWSER: CloudflareBrowserOptions["browser"] };
 
@@ -247,8 +247,8 @@ import {
   type CloudflareBrowserRestOptions,
 } from "@effect-agent/platform-cloudflare/browser-rest-capture";
 import { Layer } from "effect";
-import { Toolkit } from "effect/unstable/ai";
-import { FetchHttpClient } from "effect/unstable/http";
+import { Toolkit } from "effect/ai";
+import { FetchHttpClient } from "effect/http";
 
 const readPage = WebCapture.make("read_page", {
   description: "Read example.com as rendered Markdown.",
@@ -284,7 +284,7 @@ cancels the provider job when the adapter has a job identity to clean up.
 import { browserRestCrawlLayer } from "@effect-agent/platform-cloudflare/browser-rest-crawl";
 import { PageCrawl, PageCrawlLimits, PageCrawlRequest } from "effect-agent/page-crawl";
 import { Config, Effect, Layer, Stream } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 const BrowserCrawlLive = Layer.unwrap(
   Effect.gen(function* () {
@@ -356,7 +356,7 @@ import {
   InteractiveBrowserPolicy,
 } from "effect-agent/interactive-browser";
 import { Effect, Layer, Redacted } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 import { WorkerEnvironment } from "effect-cf";
 
 // In an application, Wrangler generates these binding types.

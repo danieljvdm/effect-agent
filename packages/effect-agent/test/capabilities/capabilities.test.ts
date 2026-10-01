@@ -13,7 +13,7 @@ import {
   layerMemory,
   toPrompt,
 } from "effect-agent/thread";
-import { Prompt } from "effect/unstable/ai";
+import { Prompt } from "effect/ai";
 import type { expectTypeOf as ExpectTypeOf } from "vite-plus/test";
 
 const threadId = Schema.decodeSync(ThreadId)("trip-1");

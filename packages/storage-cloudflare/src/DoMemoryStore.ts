@@ -6,7 +6,7 @@ import {
   SqlMemoryLimits,
   SqlStorageOwner,
 } from "effect-agent/sql-memory-store";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import * as SqlClientService from "effect/sql/SqlClient";
 
 import { ownedState } from "./internal/owned-state.ts";
 

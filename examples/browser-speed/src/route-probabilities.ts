@@ -1,7 +1,7 @@
 import { TypeSafeClient, TypeSafeDecisionModel, type TypeSafeSchema } from "@effect/ai-typesafe";
 import { Effect, Layer, Redacted } from "effect";
-import { AiError } from "effect/unstable/ai";
-import { FetchHttpClient } from "effect/unstable/http";
+import { AiError } from "effect/ai";
+import { FetchHttpClient } from "effect/http";
 
 import type { Span } from "./contract.ts";
 import { Trace } from "./telemetry.ts";

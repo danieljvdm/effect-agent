@@ -11,9 +11,9 @@ import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { DefinitionDigestInput } from "effect-agent/records";
 import { SubmissionLedger, SubmissionLookupById } from "effect-agent/submission-ledger";
 import { CloudflareTracer, DurableObject, WorkerEnvironment } from "effect-cf";
-import type { Tool } from "effect/unstable/ai";
-import { FetchHttpClient, HttpRouter } from "effect/unstable/http";
-import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import type { Tool } from "effect/ai";
+import { FetchHttpClient, HttpRouter } from "effect/http";
+import { RpcSerialization, RpcServer } from "effect/rpc";
 
 import { TripToolsLive } from "../agent.ts";
 import type { TripSiteStore } from "../domain.ts";

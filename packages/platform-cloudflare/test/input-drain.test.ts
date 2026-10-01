@@ -10,7 +10,7 @@ import { AgentPolicy } from "effect-agent/agent-policy";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { LedgerError, SubmissionLedger } from "effect-agent/submission-ledger";
 import { ThreadStore, ThreadExportRequest } from "effect-agent/thread-store";
-import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 import { expect, it } from "vite-plus/test";
 
 import { submitOptions } from "./fixtures.ts";

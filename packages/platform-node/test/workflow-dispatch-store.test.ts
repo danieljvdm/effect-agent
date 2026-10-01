@@ -7,7 +7,7 @@ import {
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
-import { DurableDeferred } from "effect/unstable/workflow";
+import { DurableDeferred } from "effect/workflow";
 
 const intent = Schema.decodeSync(WorkflowDispatchIntent)({
   version: 1,

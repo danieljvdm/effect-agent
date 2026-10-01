@@ -42,8 +42,8 @@ import {
 } from "effect-agent/submission-ledger";
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
+import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/ai";
 import { TestClock } from "effect/testing";
-import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 const hostLayerProbe = NodeDurableHost.layer;
 

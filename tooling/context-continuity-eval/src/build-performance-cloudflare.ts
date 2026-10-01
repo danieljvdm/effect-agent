@@ -1,8 +1,8 @@
 import { NodeCrypto, NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { digestJson } from "effect-agent/digest";
-import { Command, Flag } from "effect/unstable/cli";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { Command, Flag } from "effect/cli";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { build } from "esbuild";
 
 import { EvaluationError } from "./contracts.ts";

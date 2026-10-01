@@ -22,7 +22,7 @@ import {
   applyScheduleChange,
   scheduleDeadline,
 } from "effect-agent/schedule-transition";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import * as SqlClientService from "effect/sql/SqlClient";
 
 import { sqliteJsonText } from "./internal/sql-json.ts";
 import { makeSqlQuery, SqlInteger, type SqlWriteTransaction } from "./SqlStorage.ts";

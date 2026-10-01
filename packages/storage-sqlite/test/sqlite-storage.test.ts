@@ -59,8 +59,8 @@ import {
   SaveRecoveryCheckpointRequest,
   type AppendResult,
 } from "effect-agent/thread-store";
+import * as SqlClientService from "effect/sql/SqlClient";
 import { TestClock } from "effect/testing";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import { seedCheckpoint, assertCheckpoint } from "../../../test/fixtures/checkpoints.ts";
 import { snapshotStore } from "../../../test/fixtures/storage-upgrade.ts";

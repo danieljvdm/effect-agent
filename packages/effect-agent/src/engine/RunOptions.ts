@@ -1,5 +1,5 @@
 import { type Cause, Effect, Context, type DateTime, Layer, Schema } from "effect";
-import type { LanguageModel, Model, Prompt, Response } from "effect/unstable/ai";
+import type { LanguageModel, Model, Prompt, Response } from "effect/ai";
 
 import { type AnyDefinition } from "../core/Agent.ts";
 import { type AgentInputError, type AgentToolAuthorizationCheckError } from "../core/AgentError.ts";

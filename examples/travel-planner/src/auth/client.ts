@@ -2,7 +2,7 @@ import * as AuthAtom from "@yielded/auth/Atom";
 import * as Client from "@yielded/auth/Client";
 import type { ProofReference } from "@yielded/auth/Proofs";
 import { Cause, Effect, Option, Redacted, Schema } from "effect";
-import { Atom, AtomRegistry, AsyncResult } from "effect/unstable/reactivity";
+import { Atom, AtomRegistry, AsyncResult } from "effect/reactivity";
 
 import { LoginApi } from "./contract";
 

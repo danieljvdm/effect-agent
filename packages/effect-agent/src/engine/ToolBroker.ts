@@ -1,6 +1,6 @@
 import type { Effect } from "effect";
 import { Context, Schema } from "effect";
-import type { Tool, Toolkit } from "effect/unstable/ai";
+import type { Tool, Toolkit } from "effect/ai";
 
 /**
  * Programmatic Tool invocation seam for Code Mode (runtime spec §12.1,

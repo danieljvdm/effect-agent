@@ -9,8 +9,8 @@ import {
 } from "@effect-agent/storage-sql/sql-storage";
 import { createStorageSchema } from "@effect-agent/storage-sql/sql-storage-schema";
 import { Effect, Schema } from "effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { isSqlError, type SqlError } from "effect/unstable/sql/SqlError";
+import * as SqlClient from "effect/sql/SqlClient";
+import { isSqlError, type SqlError } from "effect/sql/SqlError";
 
 import {
   PostgresStorageCompatibilityError,

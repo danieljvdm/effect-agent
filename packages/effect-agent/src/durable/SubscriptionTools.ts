@@ -1,6 +1,6 @@
 import type { Layer } from "effect";
 import { Crypto, Effect, Schema } from "effect";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 import { type AgentId, type ThreadId } from "../core/Identifiers.ts";
 import { DurableStep, ToolExecutionClass } from "../engine/DurableStep.ts";

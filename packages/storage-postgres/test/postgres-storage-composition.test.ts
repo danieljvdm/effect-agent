@@ -7,7 +7,7 @@ import { ActivityProcessorStore } from "effect-agent/activity-store";
 import { SubscriptionStore } from "effect-agent/subscription";
 import { subscriptionConformancePartition } from "effect-agent/testing/subscription-store-conformance";
 import { ThreadMaterialization, ThreadStore } from "effect-agent/thread-store";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { withTemporaryDatabase } from "./harness.ts";
 

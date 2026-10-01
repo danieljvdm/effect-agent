@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Option, Redacted, Schema, Stream } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 import { browserFailure } from "./browser-failure.ts";
 

@@ -7,8 +7,8 @@ import { TypeSafeClient, TypeSafeDecisionModel } from "@effect/ai-typesafe";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { Agent, AgentRuntime, InMemory } from "effect-agent";
 import * as BrowserUse from "effect-agent/browser-use";
-import { Toolkit } from "effect/unstable/ai";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { Toolkit } from "effect/ai";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 import {
   scripted,

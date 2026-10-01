@@ -22,7 +22,7 @@ import * as Subagent from "effect-agent/subagent";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
-import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Toolkit, type Response } from "effect/ai";
 
 const callId = Schema.decodeSync(ToolCallId)("scout-call");
 

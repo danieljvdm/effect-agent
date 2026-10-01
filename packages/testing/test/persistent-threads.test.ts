@@ -29,7 +29,7 @@ import { RunContextPreparationPassthrough } from "effect-agent/run-options";
 import { ThreadHistory } from "effect-agent/thread-history";
 import { replayThread } from "effect-agent/thread-projection";
 import { ThreadExportRequest, ThreadMaterialization, ThreadStore } from "effect-agent/thread-store";
-import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
+import { LanguageModel, Model, Tool, Toolkit } from "effect/ai";
 
 const threadId = Schema.decodeSync(ThreadId)("retained-history");
 const options = { threadId };

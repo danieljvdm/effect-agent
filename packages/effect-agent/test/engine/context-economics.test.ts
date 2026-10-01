@@ -11,16 +11,9 @@ import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
 import { type RunEvent } from "effect-agent/run-event";
 import { type RunDurabilityHook } from "effect-agent/run-options";
 import { ToolResultBounds, TruncatedToolResult } from "effect-agent/tool-result";
-import {
-  LanguageModel,
-  Model,
-  type Prompt,
-  type Response,
-  Tool,
-  Toolkit,
-} from "effect/unstable/ai";
-import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
-import { HttpClient, HttpClientResponse, HttpServerResponse } from "effect/unstable/http";
+import { LanguageModel, Model, type Prompt, type Response, Tool, Toolkit } from "effect/ai";
+import { toCodecOpenAI } from "effect/ai/OpenAiStructuredOutput";
+import { HttpClient, HttpClientResponse, HttpServerResponse } from "effect/http";
 
 import { RunContextPreparationPassthrough } from "../../src/engine/RunOptions.ts";
 import { ThreadHistory } from "../../src/engine/ThreadHistory.ts";

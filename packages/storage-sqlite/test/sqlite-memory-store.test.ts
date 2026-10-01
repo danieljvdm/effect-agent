@@ -34,8 +34,8 @@ import {
   memoryStoreLayer,
   memoryStoreLayerWithFailpoints,
 } from "effect-agent/sql-memory-store";
+import * as SqlClientService from "effect/sql/SqlClient";
 import { TestClock } from "effect/testing";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 const TestNamespace = MemoryNamespace.define({
   name: "test/memory",

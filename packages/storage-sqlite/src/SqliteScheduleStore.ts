@@ -1,7 +1,7 @@
 import { makeSqlScheduleStore } from "@effect-agent/storage-sql/sql-schedule-store";
 import { Effect, Layer } from "effect";
 import { ScheduleStore } from "effect-agent/schedule";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { initializeSqliteJournal } from "./internal/sqlite-journal.ts";
 import type { SqliteStorageConfig } from "./SqliteStorageConfig.ts";

@@ -1,5 +1,6 @@
 import { ReviewRequest } from "@effect-agent/pr-review/review";
-import { Crypto, Effect, Encoding, FileSystem, Schema, Stream } from "effect";
+import { Crypto, Effect, FileSystem, Schema, Stream } from "effect";
+import { Hex } from "effect/encoding";
 
 import {
   EvalDataError,
@@ -64,7 +65,7 @@ export const digestRepositorySnapshot = Effect.fn("PrReviewEval.digestRepository
 );
 
 export const digestText = Effect.fn("PrReviewEval.digestText")(function* (text: string) {
-  const bytes = yield* Effect.fromResult(Encoding.decodeHex(Encoding.encodeHex(text))).pipe(
+  const bytes = yield* Effect.fromResult(Hex.decode(Hex.encode(text))).pipe(
     Effect.mapError((cause) => dataError("encode text", "UTF-8 encoding failed", { cause })),
   );
 
@@ -74,7 +75,7 @@ export const digestText = Effect.fn("PrReviewEval.digestText")(function* (text: 
     .digest("SHA-256", bytes)
     .pipe(Effect.mapError((cause) => dataError("digest text", "SHA-256 failed", { cause })));
 
-  return yield* Schema.decodeEffect(EvalInputDigest)(Encoding.encodeHex(digest)).pipe(
+  return yield* Schema.decodeEffect(EvalInputDigest)(Hex.encode(digest)).pipe(
     Effect.mapError((cause) =>
       dataError("digest text", "SHA-256 returned an invalid digest", { cause }),
     ),

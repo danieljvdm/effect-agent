@@ -1,5 +1,5 @@
-import { Encoding } from "effect";
 import type { BrowserSelectFileRequest } from "effect-agent/interactive-browser";
+import { Base64 } from "effect/encoding";
 import type { Page } from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 
 type Element = NonNullable<Awaited<ReturnType<Page["$"]>>>;
@@ -38,7 +38,7 @@ function setFileSelection(element: object, encoded: string, name: string, type: 
 
 export const makeFileSelection =
   (page: Page) => async (request: BrowserSelectFileRequest, signal: AbortSignal) => {
-    const encoded = Encoding.encodeBase64(request.bytes);
+    const encoded = Base64.encode(request.bytes);
     const session = request.target === "chooser" ? await page.createCDPSession() : undefined;
 
     if (session !== undefined) {

@@ -22,7 +22,7 @@ import {
 } from "effect-agent/submission-ledger";
 import { SubscriptionError, SubscriptionStore, SourcePartition } from "effect-agent/subscription";
 import { ThreadStore } from "effect-agent/thread-store";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import {
   classifyWriteFailure,

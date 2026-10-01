@@ -14,8 +14,8 @@ import {
   MemoryStorageError,
   MemoryWriter,
 } from "effect-agent/memory-store";
+import { IdGenerator } from "effect/ai";
 import { TestClock } from "effect/testing";
-import { IdGenerator } from "effect/unstable/ai";
 
 import * as MemoryNotes from "../../src/capabilities/MemoryNotes.ts";
 

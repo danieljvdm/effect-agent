@@ -10,7 +10,7 @@ import {
   Stream,
   Tracer,
 } from "effect";
-import { AiError, type Tool } from "effect/unstable/ai";
+import { AiError, type Tool } from "effect/ai";
 
 import type { ToolFailureHandling } from "../../core/RunEvent.ts";
 import { isolateToolDerivative } from "./tool-derivative.ts";

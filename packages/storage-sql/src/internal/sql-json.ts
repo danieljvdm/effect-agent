@@ -1,5 +1,5 @@
-import type * as SqlClient from "effect/unstable/sql/SqlClient";
-import type * as Statement from "effect/unstable/sql/Statement";
+import type * as SqlClient from "effect/sql/SqlClient";
+import type * as Statement from "effect/sql/Statement";
 
 /** Exact SQLite expressions are part of existing expression-index layouts. */
 export const sqliteJsonText = (

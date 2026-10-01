@@ -15,8 +15,8 @@ import {
 import { type ReviewRepository } from "@effect-agent/pr-review/review-repository";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Effect, Layer, Option, Schema } from "effect";
-import { AiError } from "effect/unstable/ai";
-import { FetchHttpClient } from "effect/unstable/http";
+import { AiError } from "effect/ai";
+import { FetchHttpClient } from "effect/http";
 
 import {
   EvalReviewerFailure,

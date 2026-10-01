@@ -8,7 +8,7 @@ import {
   type PageCrawlError,
   type PageCrawlRecord,
 } from "effect-agent/page-crawl";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 
 const JOB_ID = "crawl-job-1";
 const TOKEN = "secret-rest-token";

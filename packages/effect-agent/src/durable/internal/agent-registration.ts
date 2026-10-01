@@ -9,7 +9,7 @@ import {
   Schema,
   Tracer,
 } from "effect";
-import { Tool } from "effect/unstable/ai";
+import { Tool } from "effect/ai";
 
 import type * as Agent from "../../core/Agent.ts";
 import {

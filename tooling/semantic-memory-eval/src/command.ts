@@ -1,5 +1,5 @@
 import { Console, Effect, FileSystem, Schema } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
+import { Command, Flag } from "effect/cli";
 
 import { EvaluationReport } from "./contracts.ts";
 import { runEvaluation } from "./evaluate.ts";

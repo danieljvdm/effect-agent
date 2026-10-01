@@ -36,8 +36,8 @@ import {
   SubmissionLedger,
   SubmissionLookupByKey,
 } from "effect-agent/submission-ledger";
+import { LanguageModel, Model, Toolkit, type Response } from "effect/ai";
 import { TestClock } from "effect/testing";
-import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
 
 const sourceThreadId = Schema.decodeSync(ThreadId)("node-message-source-thread");
 const destinationThreadId = Schema.decodeSync(ThreadId)("node-message-destination-thread");

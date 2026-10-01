@@ -1,5 +1,6 @@
-import { Context, Effect, Encoding, ByteSize, Layer, Redacted, Schema } from "effect";
-import { HttpClient, HttpIncomingMessage, HttpClientRequest } from "effect/unstable/http";
+import { Context, Effect, ByteSize, Layer, Redacted, Schema } from "effect";
+import { Hex } from "effect/encoding";
+import { HttpClient, HttpIncomingMessage, HttpClientRequest } from "effect/http";
 
 import { strictSchema } from "../core/internal/strict-schema.ts";
 import { makeEventSource, type EventSource } from "./EventSource.ts";
@@ -345,7 +346,7 @@ export const webCryptoGitHubWebhookSignatureVerifierLayer = <Key>(
         }
 
         const signatureBytes = yield* Effect.fromResult(
-          Encoding.decodeHex(signature.slice("sha256=".length)),
+          Hex.decode(signature.slice("sha256=".length)),
         ).pipe(
           Effect.mapError(() =>
             GitHubWebhookVerificationError.make({ reason: "invalid-signature" }),

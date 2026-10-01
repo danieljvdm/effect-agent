@@ -1,6 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import { Effect, Redacted } from "effect";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 
 import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";
 

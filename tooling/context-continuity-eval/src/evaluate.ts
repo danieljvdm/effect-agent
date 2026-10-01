@@ -29,7 +29,7 @@ import { memoryStoreLayer } from "effect-agent/sql-memory-store";
 import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import * as ThreadContextHistory from "effect-agent/thread-context-history";
 import { ThreadStore } from "effect-agent/thread-store";
-import { IdGenerator, Toolkit } from "effect/unstable/ai";
+import { IdGenerator, Toolkit } from "effect/ai";
 
 import {
   check,

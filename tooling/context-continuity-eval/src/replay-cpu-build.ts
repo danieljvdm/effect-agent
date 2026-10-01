@@ -1,7 +1,8 @@
 import { NodeCrypto, NodeRuntime, NodeServices } from "@effect/platform-node";
-import { Console, Crypto, Effect, Encoding, FileSystem, Layer, Path, Schema } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { Console, Crypto, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Command, Flag } from "effect/cli";
+import { Hex } from "effect/encoding";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { build } from "esbuild";
 
 import { ReplayCpuBuild, ReplayCpuError } from "./replay-cpu-contracts.ts";
@@ -20,7 +21,7 @@ export const requireReplayCpu = (valid: boolean, message: string) =>
 export const sha256 = Effect.fnUntraced(function* (value: string | Uint8Array) {
   const crypto = yield* Crypto.Crypto;
 
-  return Encoding.encodeHex(
+  return Hex.encode(
     yield* crypto.digest(
       "SHA-256",
       typeof value === "string" ? new TextEncoder().encode(value) : value,

@@ -14,7 +14,7 @@ import { ApprovalDecisionCommand, IdempotencyKey, Principal } from "effect-agent
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
-import { AiError, LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
+import { AiError, LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 
 const usage = {
   inputTokens: { total: 10, uncached: 7, cacheRead: 2, cacheWrite: 1 },

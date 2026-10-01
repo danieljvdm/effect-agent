@@ -1,6 +1,6 @@
 import { OpenAiClient } from "@effect/ai-openai";
 import { Effect, Exit, Layer, Redacted, Ref } from "effect";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import { expect, it } from "vite-plus/test";
 
 import { type ModelUsage } from "../src/contracts.ts";

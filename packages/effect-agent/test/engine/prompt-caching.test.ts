@@ -5,8 +5,8 @@ import { Effect, Layer, Schema } from "effect";
 import { Agent, AgentRuntime, InMemory, ThreadHistory } from "effect-agent";
 import { ContextCompactor } from "effect-agent/context-compactor";
 import { ModelCallContext } from "effect-agent/context-window";
-import { Model, Prompt, ResponseIdTracker, Tool, Toolkit } from "effect/unstable/ai";
-import { HttpClient, HttpClientResponse, HttpServerResponse } from "effect/unstable/http";
+import { Model, Prompt, ResponseIdTracker, Tool, Toolkit } from "effect/ai";
+import { HttpClient, HttpClientResponse, HttpServerResponse } from "effect/http";
 
 const Request = Schema.Struct({
   input: Schema.Array(Schema.Json),

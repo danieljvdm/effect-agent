@@ -1,5 +1,5 @@
 import { Effect, Redacted, Schema, Stream } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 import type { AccountSession } from "../auth/account.ts";
 import { VoiceAnswer, VoiceError, VoiceOffer } from "../voice/protocol.ts";

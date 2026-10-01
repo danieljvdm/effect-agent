@@ -17,8 +17,8 @@ import {
   type SandboxExecute,
   type SandboxRequest,
 } from "effect-agent/sandbox";
-import { ChildProcess } from "effect/unstable/process";
-import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner";
+import { ChildProcess } from "effect/process";
+import { ChildProcessSpawner } from "effect/process/ChildProcessSpawner";
 
 /**
  * The only implementation identity produced by this package. It deliberately states that local

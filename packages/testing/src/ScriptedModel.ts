@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Ref, Schema, Stream } from "effect";
-import { AiError, LanguageModel, Response, Toolkit } from "effect/unstable/ai";
+import { AiError, LanguageModel, Response, Toolkit } from "effect/ai";
 
 const ScriptedPartMetadata = Schema.Record(Schema.String, Schema.NullOr(Schema.Json));
 

@@ -5,7 +5,7 @@ description: Native Effect decisions, language-model adapters, TypeSafe configur
 
 # Decision models
 
-Use `Decision` and `DecisionModel` from `effect/unstable/ai` to evaluate schema-defined input.
+Use `Decision` and `DecisionModel` from `effect/ai` to evaluate schema-defined input.
 The model returns evidence; application code owns thresholds, routing, and side effects.
 Start with the [decision guide](../guide/tools#decision-transitions) or the
 [complete example](https://github.com/danieljvdm/effect-agent/blob/main/packages/ai-decision/examples/decision.ts).
@@ -33,7 +33,7 @@ assessments before executing them.
 
 ```ts twoslash
 import { Schema } from "effect";
-import { Decision, DecisionModel } from "effect/unstable/ai";
+import { Decision, DecisionModel } from "effect/ai";
 
 const Urgency = Decision.make({
   input: Schema.Struct({ message: Schema.String }),
@@ -57,12 +57,13 @@ correctness guarantee. Provider and resolved model identifiers are not part of t
 ## Probability validation
 
 Native `DecisionModel` validates required answers, kinds, labels, finite probabilities in [0, 1],
-and distribution sums within `1e-6` of 1. Classification may return a label that does not have the
+and, by default, distribution sums within `1e-6` of 1. Classification may return a label that does not have the
 highest probability. Ratings must lie within the scale; the core derives their labels from the
 distribution. Application acceptance policies remain explicit.
 
-Effect rc.117 does not accept the former adapter's rounded totals of `0.99` or `1.01`.
-Reported probabilities are preserved without normalization; those totals fail with
+Providers can opt into `probabilityPrecision` to accept rounding drift and rescale distributions.
+TypeSafe sets this to two decimal places, so rounded totals such as `0.99` or `1.01` can be accepted.
+The language model adapter keeps strict validation; invalid sums fail with
 `AiError.InvalidOutputError`.
 
 ## Language model adapter
@@ -73,8 +74,8 @@ Provide `LanguageModelDecisionModel.layer` with any native language model that s
 import { LanguageModelDecisionModel } from "@effect-agent/ai-decision";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Effect, Layer, Schema } from "effect";
-import { Decision, DecisionModel } from "effect/unstable/ai";
-import { FetchHttpClient } from "effect/unstable/http";
+import { Decision, DecisionModel } from "effect/ai";
+import { FetchHttpClient } from "effect/http";
 
 const Sentiment = Decision.make({
   input: Schema.String,
@@ -208,14 +209,14 @@ accounting. `AutoModel.select` tracing records the profile ID without adding tas
 
 ## TypeSafe client
 
-Install `@effect/ai-typesafe` at the same rc as Effect. Its `TypeSafeDecisionModel.model(model)`
+Install `@effect/ai-typesafe` at the same version as Effect. Its `TypeSafeDecisionModel.model(model)`
 provides the native `DecisionModel` and provider/model identity. It does not provide a
 `LanguageModel`.
 
 ```ts twoslash
 import { TypeSafeClient, TypeSafeDecisionModel } from "@effect/ai-typesafe";
 import { Layer } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 const DecisionLive = TypeSafeDecisionModel.model("jev-latest").pipe(
   Layer.provide(TypeSafeClient.layerConfig()),

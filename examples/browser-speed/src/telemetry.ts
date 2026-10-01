@@ -11,7 +11,7 @@ import {
   Stream,
   Tracer,
 } from "effect";
-import { Telemetry } from "effect/unstable/ai";
+import { Telemetry } from "effect/ai";
 
 import {
   browserCommandTimeoutMillis,

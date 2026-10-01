@@ -41,10 +41,10 @@ import {
 } from "effect-agent/submission-ledger";
 import type { Settlement } from "effect-agent/submission-ledger";
 import type { SubmissionStatus } from "effect-agent/submission-status";
-import { Model, Toolkit } from "effect/unstable/ai";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
-import { CurrentTransformer, type Statement } from "effect/unstable/sql/Statement";
+import { Model, Toolkit } from "effect/ai";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { SqlClient } from "effect/sql/SqlClient";
+import { CurrentTransformer, type Statement } from "effect/sql/Statement";
 
 import { BenchmarkError, check } from "./contracts.js";
 import { ledgerCases } from "./diagnostic-cases.js";

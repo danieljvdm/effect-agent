@@ -8,8 +8,8 @@ import { Agent } from "effect-agent";
 import type { Receipt } from "effect-agent/durable-agent-runtime";
 import { ToolCallId } from "effect-agent/identifiers";
 import { AbortCommand, ApprovalDecisionCommand } from "effect-agent/submission-ledger";
-import { Tool, Toolkit, type Response } from "effect/unstable/ai";
-import { Workflow } from "effect/unstable/workflow";
+import { Tool, Toolkit, type Response } from "effect/ai";
+import { Workflow } from "effect/workflow";
 
 import {
   definitionsFor,

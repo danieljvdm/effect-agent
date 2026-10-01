@@ -12,7 +12,7 @@ import { digestDefinitions } from "effect-agent/digest";
 import { ThreadId } from "effect-agent/identifiers";
 import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import { DurableObject, WorkerEnvironment } from "effect-cf";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 import { EvaluationError, type ModelUsage } from "./contracts.ts";
 import { readLog } from "./host-evidence.ts";

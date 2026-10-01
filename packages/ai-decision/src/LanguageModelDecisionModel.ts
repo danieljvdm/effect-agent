@@ -1,5 +1,5 @@
 import { Effect, Layer, Match, Schema } from "effect";
-import { type Decision, DecisionModel, LanguageModel } from "effect/unstable/ai";
+import { type Decision, DecisionModel, LanguageModel } from "effect/ai";
 
 const Probability = Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 }));
 

@@ -58,8 +58,8 @@ import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
+import { LanguageModel, Model, Response, Tool, Toolkit, type Prompt } from "effect/ai";
 import { TestClock } from "effect/testing";
-import { LanguageModel, Model, Response, Tool, Toolkit, type Prompt } from "effect/unstable/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable-approval");

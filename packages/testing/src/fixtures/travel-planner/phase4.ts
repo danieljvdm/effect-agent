@@ -12,7 +12,7 @@ import {
   ProducerId,
 } from "effect-agent/records";
 import { Principal, type IdempotencyKey } from "effect-agent/submission-ledger";
-import { Model, Tool, Toolkit } from "effect/unstable/ai";
+import { Model, Tool, Toolkit } from "effect/ai";
 
 import { ScriptedModel, type ScriptedTurnInput } from "../../ScriptedModel.ts";
 import {

@@ -39,16 +39,13 @@ import {
 
 export { IdempotencyKey, JoinedToHost, QueueSequence, Principal } from "../core/Receipt.ts";
 
-const identifier = <const Name extends string>(name: Name) =>
-  Schema.NonEmptyString.check(Schema.isMaxLength(256)).pipe(
-    Schema.brand(`@effect-agent/thread/${name}`),
-  );
-
 /**
  * Opaque proof that one Attempt currently owns a Submission's lane. It authorizes ledger
  * mutations only; canonical-log fencing authority remains the producer epoch (DUR-006).
  */
-export const OwnershipToken = identifier("OwnershipToken");
+export const OwnershipToken = Schema.NonEmptyString.check(Schema.isMaxLength(256)).pipe(
+  Schema.brand("@effect-agent/thread/OwnershipToken"),
+);
 export type OwnershipToken = typeof OwnershipToken.Type;
 
 /**
@@ -641,7 +638,9 @@ export type ChildSettledOutcome = typeof ChildSettledOutcome.Type;
 
 /** Parent-owned child budget reservation identity, deterministically derived by the
  * coordinator from the parent Run and Tool Call identity (spec §12 step 2). */
-export const ChildReservationId = identifier("ChildReservationId");
+export const ChildReservationId = Schema.NonEmptyString.check(Schema.isMaxLength(256)).pipe(
+  Schema.brand("@effect-agent/thread/ChildReservationId"),
+);
 export type ChildReservationId = typeof ChildReservationId.Type;
 
 /**

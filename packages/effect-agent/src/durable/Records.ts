@@ -1,5 +1,5 @@
 import { Option, Schema } from "effect";
-import { Prompt } from "effect/unstable/ai";
+import { Prompt } from "effect/ai";
 
 import { InputMessage } from "../capabilities/Messaging.ts";
 import { PolicyLimit } from "../core/AgentError.ts";
@@ -35,23 +35,24 @@ import { ModelCallUsage, RunUsageSummary, RunTotals } from "../core/Usage.ts";
 import { WorkerBudgetScope, WorkerRef, WorkerSource, WorkerStop } from "../core/Worker.ts";
 import { ContextHandoff } from "../engine/ContextWindow.ts";
 
-const identifier = <const Name extends string>(name: Name) =>
-  Schema.NonEmptyString.pipe(Schema.brand(`@effect-agent/thread/${name}`));
-
 /** Stable identity of one canonical record. */
-export const RecordId = identifier("RecordId");
+export const RecordId = Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/thread/RecordId"));
 export type RecordId = typeof RecordId.Type;
 
 /** Stable idempotency identity of one atomic append. */
-export const BatchId = identifier("BatchId");
+export const BatchId = Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/thread/BatchId"));
 export type BatchId = typeof BatchId.Type;
 
 /** Identity of the deployment that produced a record. */
-export const DeploymentId = identifier("DeploymentId");
+export const DeploymentId = Schema.NonEmptyString.pipe(
+  Schema.brand("@effect-agent/thread/DeploymentId"),
+);
 export type DeploymentId = typeof DeploymentId.Type;
 
 /** Identity of a fenced canonical-log producer. */
-export const ProducerId = identifier("ProducerId");
+export const ProducerId = Schema.NonEmptyString.pipe(
+  Schema.brand("@effect-agent/thread/ProducerId"),
+);
 export type ProducerId = typeof ProducerId.Type;
 
 /** SHA-256 digest encoded as lowercase hexadecimal text. */
@@ -62,7 +63,9 @@ export const Digest = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)).pi
 export type Digest = typeof Digest.Type;
 
 /** Adapter-owned resume cursor. Callers must not parse or synthesize it. */
-export const ObservationOffset = identifier("ObservationOffset");
+export const ObservationOffset = Schema.NonEmptyString.pipe(
+  Schema.brand("@effect-agent/thread/ObservationOffset"),
+);
 export type ObservationOffset = typeof ObservationOffset.Type;
 
 /** Gap-free position in one Thread's canonical sequence. */

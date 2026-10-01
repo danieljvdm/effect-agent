@@ -1,7 +1,7 @@
 import { OpenAiClient, OpenAiSchema } from "@effect/ai-openai";
 import { Effect, Ref, Schema, Semaphore, Stream } from "effect";
-import { AiError } from "effect/unstable/ai";
-import { HttpBody, HttpClientResponse } from "effect/unstable/http";
+import { AiError } from "effect/ai";
+import { HttpBody, HttpClientResponse } from "effect/http";
 
 import { type ModelUsage } from "./contracts.ts";
 import { MAX_COST_MICROUSD } from "./profiles.ts";

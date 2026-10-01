@@ -2,7 +2,7 @@ import { createMessageDeliveryPendingIndex } from "@effect-agent/storage-sql/sql
 import { createNativeReadIndexes } from "@effect-agent/storage-sql/sql-thread-native-reads";
 import { SqliteMigrator } from "@effect/sql-sqlite-do";
 import { Effect } from "effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { createMessageDeliveryTables } from "./message-delivery-schema.ts";
 import { createRecoveryCheckpointTable } from "./recovery-checkpoint-schema.ts";

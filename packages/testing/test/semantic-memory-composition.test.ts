@@ -9,7 +9,7 @@ import { MemoryScope, MemoryKey, MemoryWriter } from "effect-agent/memory-store"
 import { indexMemorySource, querySemanticMemory } from "effect-agent/semantic-memory";
 import { SemanticMemoryIndex, SemanticMemoryProfile } from "effect-agent/semantic-memory-index";
 import { memoryStoreLayer } from "effect-agent/sql-memory-store";
-import { AiError, EmbeddingModel } from "effect/unstable/ai";
+import { AiError, EmbeddingModel } from "effect/ai";
 
 const TestNamespace = MemoryNamespace.define({
   name: "test/memory",

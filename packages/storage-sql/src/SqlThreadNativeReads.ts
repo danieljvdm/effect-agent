@@ -21,8 +21,8 @@ import {
   ThreadNotMaterialized,
   ThreadStoreError,
 } from "effect-agent/thread-store";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
+import * as SqlClient from "effect/sql/SqlClient";
+import type { SqlError } from "effect/sql/SqlError";
 
 import { sqliteJsonText, nullSafeEquals, queryIdentifier } from "./internal/sql-json.ts";
 import { makeSqlQuery, SqlInteger, makeSqlTransaction } from "./SqlStorage.ts";

@@ -1,6 +1,6 @@
 import { assert, expectTypeOf, it } from "@effect/vitest";
 import { Effect } from "effect";
-import type { AiError } from "effect/unstable/ai";
+import type { AiError } from "effect/ai";
 
 import { routeProbabilities } from "../src/route-probabilities.ts";
 

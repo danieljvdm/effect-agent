@@ -11,7 +11,7 @@ import {
   PreparedInput,
   subscriptionDeliveryKeyString,
 } from "effect-agent/subscription";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { v2Columns } from "./internal/storage-v2-layout.ts";
 import { V2Delivery, V2Schedule, V2Subscription } from "./internal/storage-v2.ts";

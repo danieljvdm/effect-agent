@@ -9,7 +9,7 @@ import { RunContextPreparation, RunToolAuthorization } from "effect-agent/run-op
 import { submissionSettlementRecordId } from "effect-agent/submission-ledger";
 import { ThreadCheckpoint, ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { DurableObject } from "effect-cf";
-import { LanguageModel, Model, Toolkit } from "effect/unstable/ai";
+import { LanguageModel, Model, Toolkit } from "effect/ai";
 import { describe, expect, it } from "vite-plus/test";
 
 import {

@@ -14,8 +14,8 @@ import {
   Schema,
   Stream,
 } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
-import { ChildProcess } from "effect/unstable/process";
+import { Command, Flag } from "effect/cli";
+import { ChildProcess } from "effect/process";
 import { build, version as esbuildVersion } from "esbuild";
 
 import {

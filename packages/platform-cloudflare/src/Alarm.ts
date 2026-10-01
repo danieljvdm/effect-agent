@@ -42,8 +42,8 @@ import {
 } from "effect-agent/thread-projection-maintenance";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { DurableObjectStorage } from "effect-cf";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
+import { SqlClient } from "effect/sql/SqlClient";
+import type { SqlError } from "effect/sql/SqlError";
 
 import { DurableObjectContext } from "./CloudflareBindings.ts";
 import { AuxiliaryDispatchMillis, CloudflareDurableRuntimeConfig } from "./CloudflareConfig.ts";

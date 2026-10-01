@@ -1,6 +1,6 @@
 import { Context, DateTime, Effect, Layer, Redacted, Schema } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
+import { SqlClient } from "effect/sql/SqlClient";
 
 import type { OpenAiConnection } from "../credential-domain.ts";
 import { PlannerError } from "../domain.ts";

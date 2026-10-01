@@ -2,7 +2,7 @@ import { SqliteClient } from "@effect/sql-sqlite-do";
 import { runInDurableObject } from "cloudflare:test";
 import { Effect, Exit, Layer } from "effect";
 import { DurableObject } from "effect-cf";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient } from "effect/sql/SqlClient";
 import { expect, it } from "vite-plus/test";
 
 import { instrumentedStorage } from "../../../test/fixtures/instrumented-storage.ts";

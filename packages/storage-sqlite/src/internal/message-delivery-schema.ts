@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 /** Additive storage owned by this adapter; creation participates in its version transaction. */
 export const createMessageDeliveryTables = Effect.gen(function* () {

@@ -1,7 +1,7 @@
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Context, Effect, Exit, Predicate, Schema, Semaphore } from "effect";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
+import { SqlClient } from "effect/sql/SqlClient";
+import type { SqlError } from "effect/sql/SqlError";
 
 import { DoStorageCorruptionError, DoStorageError } from "../DoStorageError.ts";
 

@@ -1,5 +1,5 @@
 import { Context, Effect, Schema } from "effect";
-import { Tool, type LanguageModel } from "effect/unstable/ai";
+import { Tool, type LanguageModel } from "effect/ai";
 
 import type { AnyDefinition } from "../../core/Agent.ts";
 import { ModelProtocolError } from "../../core/AgentError.ts";

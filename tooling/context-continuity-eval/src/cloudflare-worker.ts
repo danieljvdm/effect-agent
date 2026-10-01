@@ -23,8 +23,8 @@ import { memoryStoreLayer } from "effect-agent/sql-memory-store";
 import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import * as ThreadContextHistory from "effect-agent/thread-context-history";
 import { DurableObject, WorkerEnvironment } from "effect-cf";
-import { IdGenerator } from "effect/unstable/ai";
-import { FetchHttpClient } from "effect/unstable/http";
+import { IdGenerator } from "effect/ai";
+import { FetchHttpClient } from "effect/http";
 
 import {
   cloudflareDefinition,

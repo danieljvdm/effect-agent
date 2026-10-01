@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 import { Emitter, UpdateError } from "../AgentUpdates.ts";
 

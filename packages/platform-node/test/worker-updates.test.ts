@@ -13,7 +13,7 @@ import { AbortCommand, IdempotencyKey, Principal } from "effect-agent/submission
 import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { WorkerError, WorkerUpdate } from "effect-agent/worker";
 import { WorkerHostAuthorizer } from "effect-agent/worker-host";
-import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Toolkit, type Response } from "effect/ai";
 
 const input = Schema.Struct({ question: Schema.String });
 const output = Schema.Struct({ answer: Schema.String });

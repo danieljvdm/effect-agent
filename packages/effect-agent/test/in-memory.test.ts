@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Context, Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect";
-import { LanguageModel, Model, type Response, Toolkit } from "effect/unstable/ai";
+import { LanguageModel, Model, type Response, Toolkit } from "effect/ai";
 import type { expectTypeOf as ExpectTypeOf } from "vite-plus/test";
 
 import * as Agent from "../src/core/Agent.ts";

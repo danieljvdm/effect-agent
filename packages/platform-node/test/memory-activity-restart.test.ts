@@ -25,8 +25,8 @@ import { MemoryReader } from "effect-agent/memory-store";
 import { RunContextPreparationPassthrough } from "effect-agent/run-options";
 import { memoryReaderLayer } from "effect-agent/sql-memory-store";
 import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
-import { LanguageModel, Model, type Response, Toolkit } from "effect/unstable/ai";
-import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process";
+import { LanguageModel, Model, type Response, Toolkit } from "effect/ai";
+import { ChildProcess, type ChildProcessSpawner } from "effect/process";
 
 import {
   DAN_THREAD,

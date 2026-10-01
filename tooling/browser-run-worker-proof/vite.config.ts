@@ -6,16 +6,18 @@ export default defineConfig({
       build: {
         command: "wrangler deploy --dry-run",
         // Wrangler reads its own temporary bundle during validation.
-        input: [
-          { auto: true },
-          "!.wrangler",
-          "!.wrangler/**",
-          { pattern: "bun.lock", base: "workspace" },
-          { pattern: "!**/node_modules", base: "workspace" },
-          { pattern: "!**/node_modules/.vite*", base: "workspace" },
-          { pattern: "!**/node_modules/.vite*/**", base: "workspace" },
-        ],
-        output: [],
+        cache: {
+          input: [
+            { auto: true },
+            "!.wrangler",
+            "!.wrangler/**",
+            { pattern: "bun.lock", base: "workspace" },
+            { pattern: "!**/node_modules", base: "workspace" },
+            { pattern: "!**/node_modules/.vite*", base: "workspace" },
+            { pattern: "!**/node_modules/.vite*/**", base: "workspace" },
+          ],
+          output: [],
+        },
       },
     },
   },

@@ -2,7 +2,7 @@ import type { Redacted } from "effect";
 import { Clock, Effect, Exit, FileSystem, Path, Schedule, Schema } from "effect";
 import { Receipt } from "effect-agent/durable-agent-runtime";
 import { runIdForSubmission } from "effect-agent/run-journal";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import { EvaluationError } from "./contracts.ts";
 import type { PerformanceIdentity } from "./performance-contracts.ts";

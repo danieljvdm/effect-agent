@@ -6,7 +6,7 @@ import {
   SubscriptionStore,
   defaultSubscriptionLimits,
 } from "effect-agent/subscription";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import { expect } from "vite-plus/test";
 
 import { storageV2Fixture } from "./storage-v2.ts";

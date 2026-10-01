@@ -45,8 +45,8 @@ import {
   ThreadStoreError,
   type AppendResult,
 } from "effect-agent/thread-store";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
-import * as Statement from "effect/unstable/sql/Statement";
+import * as SqlClientService from "effect/sql/SqlClient";
+import * as Statement from "effect/sql/Statement";
 
 import { WRITER_LOCK_KEY } from "../src/internal/postgres-storage.ts";
 import {
