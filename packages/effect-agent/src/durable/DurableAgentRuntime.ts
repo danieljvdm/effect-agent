@@ -1871,21 +1871,83 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
     let projection: RunJournalProjection | undefined;
 
-    if (priorContext !== undefined && tail.sequence - priorContext.throughSequence <= 4_096) {
+    // A rollover in this Attempt may have certified a newer context than the initial view.
+    // Both candidates remain disposable: incompatible suffixes fall back to canonical replay.
+    for (const context of [previous.state.context, priorContext]) {
+      if (context === undefined || tail.sequence - context.throughSequence > 4_096) continue;
+
       const suffix = yield* Stream.runCollect(
-        canonicalRange(ctx.threadId, tail.sequence, priorContext.throughSequence),
+        canonicalRange(ctx.threadId, tail.sequence, context.throughSequence),
       );
 
-      if (contextSuffixCompatible(suffix, submission.submissionId)) {
+      const seed = previous.state.seed;
+      const runId = runIdForSubmission(submission.submissionId);
+
+      // An early rollover context already covers this Run's original input. Its seed retains
+      // every record after the retired prefix; prove that no owner response has been covered
+      // before using that input to anchor suffix certification. Later same-Run contexts cannot
+      // use this shortcut: late evidence could change their already rendered Tool history.
+      const originalInput =
+        context === previous.state.context &&
+        previous.state.submissionId === submission.submissionId &&
+        seed?.runId === runId &&
+        seed.committedTurns === 0 &&
+        seed.compaction.sequence === context.throughSequence &&
+        seed.compaction.record.payload._tag === "CompactionCreated" &&
+        seed.compaction.record.payload.kind === "rollover" &&
+        seed.compaction.record.payload.runId === runId &&
+        seed.throughSequence === seed.compaction.record.payload.coversThrough
+          ? previous.state.records.find(
+              ({ sequence, record: { payload, recordId } }) =>
+                sequence > seed.throughSequence &&
+                sequence < context.throughSequence &&
+                payload._tag === "UserInputRecorded" &&
+                payload.kind === "user" &&
+                payload.runId === runId &&
+                payload.submissionId === submission.submissionId &&
+                recordId === submissionInputRecordId(submission.submissionId),
+            )
+          : undefined;
+
+      const retainedSuffix =
+        originalInput === undefined
+          ? []
+          : previous.state.records.filter(({ sequence }) => sequence >= originalInput.sequence);
+
+      const anchored =
+        originalInput !== undefined &&
+        seed?.firstSequence === originalInput.sequence &&
+        retainedSuffix.length === context.throughSequence - originalInput.sequence + 1 &&
+        retainedSuffix.every(
+          ({ sequence, record: { payload, recordId } }, index) =>
+            sequence === originalInput.sequence + index &&
+            (index === 0 ||
+              (payload._tag === "RunStarted" &&
+                payload.runId === runId &&
+                recordId === runStartedRecordId(runId)) ||
+              (payload._tag === "CompactionCreated" &&
+                payload.runId === runId &&
+                payload.kind === "rollover" &&
+                sequence === context.throughSequence &&
+                recordId === seed.compaction.record.recordId)),
+        );
+
+      if (
+        contextSuffixCompatible(
+          anchored ? [originalInput, ...suffix] : suffix,
+          submission.submissionId,
+        )
+      ) {
         projection = yield* projectRunJournalStream(
           Stream.fromIterable(suffix),
           undefined,
           undefined,
           undefined,
           undefined,
-          priorContext,
+          context,
         ).pipe(Effect.catchTag("RunJournalError", () => Effect.succeed(undefined)));
       }
+      if (projection !== undefined) break;
     }
 
     if (projection === undefined) {
@@ -4989,11 +5051,48 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           let latestResponse: CanonicalSequence | undefined;
           let firstSequence = journalSeed?.firstSequence;
           const orchestrationCalls = new Set<string>();
+          const contextCertificate = makeThreadContextCertificate(runId.length);
+          const contextIdentities = new Set<CanonicalSequence>();
+          let contextEligible = journalSeed === undefined;
+          let originalInputSeen = false;
 
           yield* Stream.runForEach(source, (entry) =>
             Effect.sync(() => {
               const payload = entry.record.payload;
 
+              // Before this Run has a response, a rollover's owner and Thread prompt views
+              // coincide only when its exact input/start/rollover follow the prior history.
+              // Certify that full prefix during the existing discovery scan. Never carry
+              // owner instructions, accounting or an interleaved continuation into context.
+              if (contextEligible) {
+                contextCertificate.add(entry);
+                if (retainThreadIdentity(entry)) {
+                  if (contextIdentities.size < 4_096) contextIdentities.add(entry.sequence);
+                  else contextEligible = false;
+                }
+                if (!originalInputSeen) {
+                  if ("runId" in payload && payload.runId === runId) {
+                    originalInputSeen =
+                      payload._tag === "UserInputRecorded" &&
+                      payload.kind === "user" &&
+                      payload.submissionId === submissionId &&
+                      entry.record.recordId === submissionInputRecordId(submissionId);
+                    if (!originalInputSeen) contextEligible = false;
+                  }
+                } else if (
+                  !(
+                    (payload._tag === "RunStarted" &&
+                      payload.runId === runId &&
+                      entry.record.recordId === runStartedRecordId(runId)) ||
+                    (payload._tag === "CompactionCreated" &&
+                      payload.runId === runId &&
+                      payload.kind === "rollover" &&
+                      entry.record.recordId === compactionId)
+                  )
+                ) {
+                  contextEligible = false;
+                }
+              }
               if (entry.record.recordId === compactionId) compaction = entry;
               if (!("runId" in payload) || payload.runId !== runId) return;
               firstSequence ??= entry.sequence;
@@ -5192,7 +5291,43 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           )
             return;
 
-          const contents = yield* encodeRecoveryCheckpoint(validated.value);
+          let state = validated.value;
+
+          if (
+            contextEligible &&
+            originalInputSeen &&
+            contextCertificate.isValid() &&
+            current.protectedContext === undefined
+          ) {
+            // Keep every identity that a later context-seeded Run needs, including malformed
+            // lineage record-ID markers. If the seed omitted one, decline this optional view.
+            for (const entry of retained) contextIdentities.delete(entry.sequence);
+
+            if (contextIdentities.size === 0) {
+              const prompt = yield* Schema.encodeEffect(Prompt.Prompt)(current.prompt).pipe(
+                Effect.flatMap(decodePersisted),
+                Effect.option,
+              );
+
+              if (Option.isSome(prompt))
+                state = RecoveryCheckpointState.make({
+                  ...state,
+                  context: ThreadContextCheckpoint.make({
+                    throughSequence: tail.sequence,
+                    prompt: prompt.value,
+                    ...(current.contextWindowId === undefined
+                      ? {}
+                      : { contextWindowId: current.contextWindowId }),
+                  }),
+                });
+            }
+          }
+
+          let contents = yield* encodeRecoveryCheckpoint(state);
+
+          // Optional Thread context must never displace an otherwise valid Run checkpoint.
+          if (Option.isNone(contents) && state.context !== undefined)
+            contents = yield* encodeRecoveryCheckpoint(validated.value);
 
           if (Option.isNone(contents)) return;
 
