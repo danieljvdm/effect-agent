@@ -1,5 +1,15 @@
 # @effect-agent/storage-cloudflare
 
+## 0.1.0-beta.162
+
+### Patch Changes
+
+- [#737](https://github.com/danieljvdm/effect-agent/pull/737) [`aa50237`](https://github.com/danieljvdm/effect-agent/commit/aa502375beb6e45a0979cb46a8324dccf6c22304) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Batch lifecycle publication acknowledgements, and reduce recovery queries and redundant maintenance for exclusive SQLite owners. Preserve exact identities, persisted retry budgets, and compatibility with custom publication storage.
+
+- Updated dependencies [[`aa50237`](https://github.com/danieljvdm/effect-agent/commit/aa502375beb6e45a0979cb46a8324dccf6c22304)]:
+  - effect-agent@0.1.0-beta.162
+  - @effect-agent/storage-sql@0.1.0-beta.162
+
 ## 0.1.0-beta.161
 
 ### Patch Changes
