@@ -51,7 +51,7 @@ const ExclusiveMode = Schema.Tuple([Schema.Struct({ locking_mode: Schema.Literal
 const JournalMode = Schema.Tuple([Schema.Struct({ journal_mode: Schema.String })]);
 
 const DatabaseHeader = Schema.Tuple([
-  Schema.Struct({ user_version: SqlInteger, table_count: SqlInteger }),
+  Schema.Struct({ user_version: SqlInteger, schema_object_count: SqlInteger }),
 ]);
 
 const RetainedOwnership = Schema.Array(
@@ -105,13 +105,13 @@ export const exclusiveHostClientLayer: Layer.Layer<
         const [header] = yield* Schema.decodeUnknownEffect(DatabaseHeader)(
           yield* sql`
           SELECT (SELECT user_version FROM pragma_user_version) AS user_version,
-                 (SELECT COUNT(*) FROM sqlite_master WHERE type = 'table') AS table_count
+                 (SELECT COUNT(*) FROM sqlite_master) AS schema_object_count
         `,
         );
 
-        // Only a new file may change journal mode before compatibility checks. Existing
+        // Only a version-zero file with no schema objects may change journal mode. Existing
         // stores must already satisfy the adapter's WAL contract, including predecessors.
-        if (header.user_version !== 0 || header.table_count !== 0) {
+        if (header.user_version !== 0 || header.schema_object_count !== 0) {
           return yield* SqliteStorageCompatibilityError.make({
             actualVersion: header.user_version,
             supportedVersion: CurrentSqliteStorageVersion,
