@@ -1,0 +1,80 @@
+---
+title: Getting started
+description: Install Effect Agent and run your first agent.
+---
+
+<a id="getting-started"></a>
+
+Build an agent that classifies a bug report and returns a typed result.
+
+<a id="installation-and-compatibility"></a>
+
+## Install
+
+In a TypeScript project with [Bun](https://bun.sh):
+
+```sh
+bun add effect-agent@beta effect
+```
+
+Use an Effect AI provider for model access. See the [package map](/reference/packages/)
+for compatibility.
+
+## Create an agent
+
+Save as `agent.ts`:
+
+```ts
+import { InMemory, Agent, AgentRuntime } from "effect-agent";
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { BunRuntime } from "@effect/platform-bun";
+import { Config, Console, Effect, Schema } from "effect";
+import { Toolkit } from "effect/ai";
+import { FetchHttpClient } from "effect/http";
+
+const triage = Agent.make("triage", {
+  input: Schema.String,
+  output: Schema.Struct({
+    severity: Schema.Literals(["low", "medium", "high", "critical"]),
+    explanation: Schema.String,
+  }),
+  instructions: "Classify the bug report by severity. Explain your reasoning in one sentence.",
+  toolkit: Toolkit.empty,
+  policy: {
+    maxTurns: 2,
+    maxToolCalls: 1,
+    maxDuration: "30 seconds",
+  },
+});
+
+const program = AgentRuntime.run(triage, "All users get a 500 error when signing in.").pipe(
+  Effect.tap((result) => Console.log(result.output)),
+  Effect.provide(OpenAiLanguageModel.model("gpt-6-luna")),
+  Effect.provide(OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_API_KEY") })),
+  Effect.provide(FetchHttpClient.layer),
+  Effect.provide(InMemory.layer),
+);
+
+BunRuntime.runMain(program);
+```
+
+The output schema validates the model's answer. The policy limits the run. `InMemory.layer` keeps
+conversation history in memory for the application Scope. To continue a conversation, share that
+Layer and reuse the returned Thread ID; see [in-memory conversations](/guide/threads/#in-memory-conversations).
+
+## Run it
+
+```sh
+export OPENAI_API_KEY="your-api-key"
+bun agent.ts
+```
+
+Example output:
+
+```json
+{ "severity": "critical", "explanation": "All users are blocked from signing in." }
+```
+
+## Next
+
+[Add tools](/guide/tools/), [stream responses](/guide/run-agents/), or [save thread history](/guide/threads/).

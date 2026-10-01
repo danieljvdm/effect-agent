@@ -10,14 +10,14 @@ and validates the result — with typed errors, streaming, and bounded execution
 bun add effect-agent@beta
 ```
 
-Use an [Effect AI provider](docs/guide/getting-started.md) for model access.
+Use an [Effect AI provider](docs/src/content/docs/guide/getting-started.md) for model access.
 
 Prefer named namespace imports from package roots, such as `import { Agent } from "effect-agent"`.
 Direct module paths use kebab-case, such as `effect-agent/agent-runtime`; see the
-[import guide](docs/reference/packages.md#public-imports) for direct imports and lazy loading.
+[import guide](docs/src/content/docs/reference/packages.md#public-imports) for direct imports and lazy loading.
 
 Public beta: APIs and stored data may change before 1.0. Persistent adapters support a
-[data-preserving beta49/beta50 storage upgrade](docs/guide/operations.md#adopting-these-contracts).
+[data-preserving beta49/beta50 storage upgrade](docs/src/content/docs/guide/operations.md#adopting-these-contracts).
 
 ## A basic agent
 
@@ -92,7 +92,7 @@ const TravelToolsLive = TravelTools.toLayer({
 
 Define these before `planner`, set its `toolkit` to `TravelTools`, and add `TravelToolsLive`
 to `Layer.mergeAll` above.
-[More about tools, approvals, and MCP →](docs/guide/tools.md)
+[More about tools, approvals, and MCP →](docs/src/content/docs/guide/tools.md)
 
 ## Stream progress
 
@@ -110,23 +110,23 @@ BunRuntime.runMain(streaming);
 ```
 
 Use this in place of the earlier `BunRuntime.runMain` call.
-[More about streaming and interactive input →](docs/guide/run-agents.md)
+[More about streaming and interactive input →](docs/src/content/docs/guide/run-agents.md)
 
 ## More examples
 
 - [Travel planner](docs/snippets/travel-planner/) — complete agent, tools, and provider setup.
-- [Subagents](docs/guide/subagents.md), [browser tools](docs/guide/browser.md), and
-  [Code Mode](docs/guide/code-mode.md) — delegate research, browse pages, and execute code.
-- [Storage backends](docs/storage/index.md), [persistent threads](docs/guide/threads.md),
-  [durable execution](docs/concepts/durability.md), and
-  [Effect Workflows](docs/guide/workflows.md) — keep history and resume work.
+- [Subagents](docs/src/content/docs/guide/subagents.md), [browser tools](docs/src/content/docs/guide/browser.md), and
+  [Code Mode](docs/src/content/docs/guide/code-mode.md) — delegate research, browse pages, and execute code.
+- [Storage backends](docs/src/content/docs/storage/index.md), [persistent threads](docs/src/content/docs/guide/threads.md),
+  [durable execution](docs/src/content/docs/concepts/durability.md), and
+  [Effect Workflows](docs/src/content/docs/guide/workflows.md) — keep history and resume work.
 - [Cloudflare travel planner](examples/travel-planner/) and the [PR reviewer](packages/pr-review/README.md).
 - [Browser speed lab](examples/browser-speed/) — chat-driven browser tasks with independent verification and a timing waterfall.
 
-Read [the runtime model](docs/concepts/runtime-model.md) for turn, ownership, and wake rules.
-Start with the [getting-started guide](docs/guide/getting-started.md), or explore the
-[package map](docs/reference/packages.md#capability-inventory) and
-[deployment guide](docs/guide/operations.md#authorization-and-isolation).
+Read [the runtime model](docs/src/content/docs/concepts/runtime-model.md) for turn, ownership, and wake rules.
+Start with the [getting-started guide](docs/src/content/docs/guide/getting-started.md), or explore the
+[package map](docs/src/content/docs/reference/packages.md#capability-inventory) and
+[deployment guide](docs/src/content/docs/guide/operations.md#authorization-and-isolation).
 
 ## Development
 

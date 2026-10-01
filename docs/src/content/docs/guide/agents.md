@@ -1,0 +1,399 @@
+---
+title: Agent definitions
+description: Define agents with schemas, tools, instructions, and run limits.
+---
+
+<a id="agent-definitions"></a>
+
+An agent definition contains schemas, instructions, a native Effect AI toolkit, and a finite
+policy. The application supplies model services and other dependencies when it runs the agent.
+
+```ts
+const definition = Agent.make("support-triage", {
+  input: SupportRequest,
+  output: Resolution,
+  instructions,
+  toolkit: SupportToolkit,
+  policy,
+});
+
+const run = AgentRuntime.run(definition, input).pipe(Effect.provide(ClaudeModel));
+```
+
+Definitions contain no provider client, database connection, mutable thread, or acquired
+resource. Reuse one definition across many runs. Effect Schema supplies the data types and runtime
+validation; provider wire schemas derive from those definitions.
+
+<a id="definition-contract"></a>
+
+## Build a definition
+
+`Agent.make` requires an ID, input and output schemas, instructions, and a toolkit.
+Declare ordinary limits as a plain `policy` object; `Agent.make` validates it and fills defaults.
+A complete `AgentPolicy` value is also accepted. Standalone defaults are
+12 turns, 24 tool calls, 5 minutes, and tool concurrency 4. Other defaults follow `AgentPolicy.make`.
+Delegated children inherit omitted policy fields from their parent. Supply a partial object
+to inherit individual fields; `AgentPolicy.make` fills its own defaults before inheritance.
+Definitions retain the explicit fields as `policyOverrides`; `policy` holds their standalone values.
+It also accepts `inputPrompt`, `completion`, `runDisposition`, a description, and metadata.
+
+Instructions may be static prompt input or a function of decoded input. That function may return
+an `Effect`. Its errors and service requirements become part of the run type.
+
+## Choose final-output format
+
+Output Schemas use JSON final messages by default. For ordinary assistant text, wrap the complete
+Schema with `Output.text`. The Schema must encode as a string; its checks, transformations, and
+service requirements still apply.
+
+```ts twoslash
+import { Output } from "effect-agent";
+import { Schema } from "effect";
+
+const Reply = Output.text(Schema.String.check(Schema.isMaxLength(20_000)));
+// Pass Reply as Agent.make(..., { output: Reply, ... }).
+```
+
+The runtime instructs the model to reply without JSON wrapping and decodes that text directly.
+Whitespace, quotes, and empty replies are preserved. Use `Schema.NonEmptyString` when silence is
+invalid. Apply `Output.text` after composing the Schema. Required completion tools still take
+precedence; optional completion tools retain their own parameter contract. Durable records store
+the validated string as a JSON string value. Metadata does not select an output format.
+Once `RunCompleted` records validated output, recovery preserves that stored
+value without decoding it through a later output Schema.
+
+## Choose model-visible input
+
+The runtime normally sends the complete schema-encoded input as a JSON user message. Use
+`inputPrompt` to send a smaller or differently shaped value.
+
+```ts
+const definition = Agent.make("support-triage", {
+  input: Schema.Struct({ question: Schema.String, authorizationToken: Schema.String }),
+  output: Resolution,
+  instructions: "Answer the customer's question.",
+  inputPrompt: ({ question }) =>
+    Effect.succeed(Prompt.make([{ role: "user", content: [{ type: "text", text: question }] }])),
+  toolkit: SupportToolkit,
+  policy,
+});
+```
+
+`inputPrompt` receives decoded input and returns native Effect AI `Prompt.RawInput`, directly or
+through an `Effect`. Strings become user messages. Prompts and message arrays keep their roles,
+parts, provider options, and multimodal content. Return an empty Prompt or message array to omit
+the input message. Its errors and service requirements join the run's `E` and `R`.
+
+The runtime builds the source from history, instructions, and projected input, then applies context
+preparation and compaction. Outgoing requests place system instructions and the output contract
+before the conversation; optional transient context and run status follow the conversation. See
+[Context management](/guide/context-management/).
+
+Projection changes only model-visible input. Durable admission still stores the complete encoded
+input, and tool authorization receives it. Keep secrets out of instructions and apply separate
+disclosure rules to history, tool results, steering, and host context transforms.
+
+Durable attempts may evaluate the projection again. Committed turns keep their recorded projected
+messages. Projection effects must tolerate another evaluation and must not assume exactly-once
+external execution.
+
+A projection failure stops the run before the next model request. The runtime never falls back to
+the full input. Projection services, errors, interruption, and deadlines follow normal Effect
+semantics.
+
+<a id="deliberate-absences"></a>
+
+## Provide native model services
+
+Models are execution requirements: use `Effect.provide` for a Run, `Stream.provide` for a
+stream, and `Layer.provide` for subagent handlers.
+
+```ts twoslash
+import { Effect, Layer, Stream } from "effect";
+import { AgentRuntime, Subagent } from "effect-agent";
+import { ModelLive, planner } from "./node-agent.ts";
+import { Research } from "./delegation.ts";
+// ---cut---
+const program = AgentRuntime.run(planner, "Plan a weekend in Lisbon.").pipe(
+  Effect.provide(ModelLive),
+);
+
+const events = AgentRuntime.stream(planner, "Plan a weekend in Lisbon.").pipe(
+  Stream.provide(ModelLive),
+);
+
+const ResearchLive = Subagent.layer(Research).pipe(Layer.provide(ModelLive));
+```
+
+`run`, `stream`, and `start` require `LanguageModel.LanguageModel`, `Model.ProviderName`, and
+`Model.ModelName`. Native Effect model Layers provide all three; their client requirements
+remain visible until the application supplies them. Supply tool handlers and history alongside
+those clients. Keep the model Layer around both `start` and the detached run's lifetime.
+
+`Subagent.layer` captures the supplied model when its handler Layer is built. Use
+`Layer.provideMerge(ModelLive)` when an assembled Layer should expose that model to the parent
+too; the [attached-subagent walkthrough](/guide/subagents/in-memory-attached/) shows the complete setup.
+[AutoModel](/reference/decision-models/#automodel) satisfies the same requirement and selects
+once on each thread's first turn, including each new child.
+
+The model Layer must have no construction error. Put fallible setup in the enclosing Layer or
+Effect. When constructing a service that needs to reuse a model, capture its client dependencies:
+
+```ts twoslash
+import { Effect } from "effect";
+import { AgentRuntime } from "effect-agent";
+import { ModelLive, planner } from "./node-agent.ts";
+// ---cut---
+const captured = Effect.gen(function* () {
+  const modelLayer = yield* ModelLive.captureRequirements;
+  return yield* AgentRuntime.run(planner, "Plan a weekend in Lisbon.").pipe(
+    Effect.provide(modelLayer),
+  );
+});
+```
+
+```ts
+type BeforeModel = Agent.DefinitionRequirements<typeof definition>;
+type ExecutionRequirements = Agent.Requirements<typeof definition>;
+type Failure = Agent.Failure<typeof definition>;
+```
+
+Selecting between several definitions produces the union of their errors and requirements.
+Provide every branch or narrow the selection before execution. Optional explicit bindings are
+covered in the [API reference](/reference/packages/#model-requirements).
+
+## Resume across deployments
+
+Keep Thread identities independent of deployment fingerprints. The original admission, input,
+principal, digests, idempotency key and Receipt remain immutable. Register one current executable
+per stable `agentId` and optionally declare each Tool's replay version:
+
+```ts
+const registration = {
+  agent: definition,
+  model: modelLayer,
+  definitions: deploymentDefinitions,
+  continuity: {
+    versions: {
+      tools: { search: "search-command" },
+    },
+  },
+};
+```
+
+When `continuity.versions` is supplied, include every current Tool. Each version is a JSON value;
+change it when handler meaning, durable Step codecs or names, external idempotency keys,
+authorization semantics, completion projection, or child/report protocols change. Registration hashes
+that version with the Tool's schemas, failure mode, approval policy, execution class, kind, and
+completion or context-rollover role. Without explicit
+versions, it uses the Tool definitions declaration as the version. JSON Schema cannot detect
+changed handler code or codec transforms, so keep those declarations accurate.
+
+Queued and resumed work selects the current binding by `agentId`. Historical Agent or toolbox
+digests do not gate execution. A committed continuation retains its original input and prompt;
+static instructions do not require a future input codec to accept that value. Input-dependent
+instructions still decode their required input. Admission, lineage, and prepared delivery evidence
+remain exact and are never rewritten.
+
+Recovery checks each pending operation against its recorded execution contract. A changed or
+removed mutating Tool that was never dispatched receives `ToolUnavailable` with
+`execution: "not-executed"`, allowing the model to continue with current Tools. If an effect may
+have occurred, the call stays unknown unless reconciliation supplies proof. Absence of a prepared
+record does not prove that readonly work never ran. See
+[operation recovery](/concepts/durability/#admission-and-recovery).
+
+Hosts with deferred bindings can compile current metadata without acquiring executable services:
+
+```ts
+import { AgentRegistration } from "effect-agent";
+import { Effect } from "effect";
+
+const metadata = Effect.gen(function* () {
+  return yield* AgentRegistration.compileBindingContracts(definition, definitions, {
+    tools: { search: "search-command" },
+  });
+});
+```
+
+The Effect returns `{ digests }` and requires Crypto. Use those digests in the deferred binding.
+There is no historical manifest or Agent replay-version registry to maintain.
+
+For a low-level binding without per-operation hashes, the Tool digest supplies the operation
+version. Direct `processThread` execution without a current registration uses `deploymentId`
+instead. Reusing that ID asserts unchanged handler, Durable Step, and idempotency semantics;
+unfinished mutations crossing deployments need registered per-operation versions or reconciliation.
+
+Cloudflare maintenance persists bounded per-lane retries for missing current bindings and
+continues other eligible lanes. Reinstantiation retains the backoff; registering the missing Agent
+resumes the same Receipt. Parked unknown operations do not block later input in their Thread.
+
+Durable `maxDuration` bounds each active Attempt using its original recorded allowance. Time
+spent evicted, waiting for a binding, or suspended does not consume execution time. An actual
+duration exhaustion is recorded before child cleanup and survives recovery. The Run's start time
+and cumulative turn, Tool and cost accounting are unchanged; immutable worker authorization
+expiry still limits execution. Roll out the matching runtime and storage packages together before
+writing the new duration record; older runtimes cannot read it.
+
+## Typed and external inputs
+
+The main operations accept `Agent.EncodedInput<typeof definition>`. The runtime decodes that value
+before instructions run. For `Schema.NumberFromString`, callers pass a string and instructions
+receive a number.
+
+Encode a decoded value with `Schema.encodeEffect(definition.input)`. Use `runUnknown`,
+`streamUnknown`, or `startUnknown` for untrusted external data. Invalid input fails with
+`AgentInputError` before instructions or model execution.
+
+## Complete through a tool
+
+Set `completion` when a successful tool result should become the agent's output without another
+model turn. The projector receives decoded tool parameters and result:
+
+```ts twoslash
+import { Agent } from "effect-agent";
+import { Effect, Schema } from "effect";
+import { Tool, Toolkit } from "effect/ai";
+
+const Answer = Schema.Struct({ answer: Schema.String });
+const Complete = Tool.make("complete", { parameters: Answer, success: Schema.Void });
+const Tools = Toolkit.make(Complete);
+
+export const Definition = Agent.make("answer-question", {
+  input: Schema.Struct({ question: Schema.String }),
+  output: Answer,
+  instructions: "Answer the question using the complete tool.",
+  toolkit: Tools,
+  policy: {
+    maxTurns: 3,
+    maxToolCalls: 3,
+    maxDuration: "30 seconds",
+  },
+  completion: {
+    tool: "complete",
+    required: true,
+    project: ({ parameters }) => parameters,
+  },
+});
+
+export const ToolsLive = Tools.toLayer({ complete: () => Effect.void });
+```
+
+Provide `ToolsLive` with the model and history services when running this definition.
+The output schema validates the projected value. With `required: true`, each turn must call a
+tool and completion must use the named tool. Without it, valid final assistant JSON may also
+complete the run. [Exhaustion policy](/concepts/budgets/#exhaustion-final-answer-or-failure)
+controls the last available turn.
+
+A completion tool must be the only application call, after any other needed application tool
+results arrive. Completed provider work, such as hosted web search with a terminal result, may
+appear in the same response and still counts toward run budgets. When a model mixes a completion
+tool with other application calls, the engine rejects those application calls before any handler
+starts and returns one `ModelProtocolError` result per rejected call. Provider results are retained.
+The next ordinary turn can correct the declaration. Each rejected call counts toward `maxToolCalls` and
+`repeatedFailureLimit`; model usage, turns, cost, and duration remain charged to the same run.
+There is no separate retry allowance. A batch of three rejected calls can therefore exhaust the
+default repeated-failure limit immediately. Budget exhaustion still controls finalization, and an
+invalid finalization batch fails without another correction.
+
+This correction also applies to `completionFromTools`. Provider calls without terminal results,
+context rollover mixed with other calls, and invalid application batches recovered as pending work
+still fail: pending durable calls cannot safely be treated as unexecuted. Recovery permits one
+completion call alongside recorded terminal provider results, using recorded application results
+when available and never replaying an uncertain ordinary side effect. Finalization after budget
+exhaustion still permits only the advertised completion tool, with no provider calls. Completed
+rejections are retained atomically with their failed results and survive recovery without replay.
+Ordinary valid tool batches keep their configured concurrency. `ToolCallFailed` events identify
+each rejected call by name and ID; turn events show correction attempts and the terminal run event
+reports their outcome.
+
+`completion` decides how a run finishes. `runDisposition` labels its successful output for
+durable readers.
+
+Use `completionFromTools` for an action whose committed result can satisfy the whole request,
+while retaining a separate `completion` tool for ordinary replies. Each declaration names a tool
+and provides a pure projector returning `Option.some(output)` or `Option.none()`:
+
+```ts
+completionFromTools: [{
+  tool: "complete_action",
+  project: ({ parameters, result }) =>
+    parameters.wholeRequestSatisfied && result.status === "committed"
+      ? Option.some(`Created [${result.name}](${result.href}).`)
+      : Option.none(),
+}],
+```
+
+Import `Option` from `effect`. The tool's schemas define the parameters and result in this example.
+Only opt in tools with an explicit whole-request contract; completing the first step of a larger
+request must not end the run. Return `None` for pending approval, partial, or otherwise insufficient
+results. A declared tool failure also continues normally. Invalid output or a throwing projector
+fails the run, rather than treating an unconfirmed result as success.
+
+These action tools must be the only call in their batch and obey ordinary tool, turn, and token
+budgets. They cannot execute in the reserved finalization turn; the existing `completion` tool
+retains that role. Authorization, approvals, cancellation, and durable tool replay rules remain
+unchanged. Recovery re-evaluates the projector from canonical parameters and results, so it must
+be deterministic and perform no effects. Tool names must be distinct across completion declarations.
+
+## Declare application completion explicitly
+
+Use `runDisposition` when durable readers need an application-defined classification in addition
+to the framework settlement outcome.
+
+```ts
+const RunDisposition = Schema.Literal("application-complete");
+
+const definition = Agent.make("support-triage", {
+  input: SupportRequest,
+  output: Resolution,
+  instructions,
+  toolkit: SupportToolkit,
+  policy,
+  runDisposition: {
+    schema: RunDisposition,
+    fromOutput: (resolution) => resolution.runDisposition,
+  },
+});
+```
+
+The selector receives decoded output and may return `undefined`. The schema validates and encodes
+any returned value. Invalid output fails with `AgentRunDispositionError`.
+
+Only an ordinary completed durable run stores the encoded disposition on
+`SubmissionSettled.runDisposition`. Budget exhaustion, failure, abort, and incomplete recovery
+store none. Parse it with the same application schema. Do not infer completion from prose or tool
+success.
+
+## Stable identity
+
+The string passed to `Agent.make` becomes a branded `AgentId` and contributes to durable identity
+and definition digests. Renaming it creates a new identity. Before 1.0, stored data has no
+migration promise.
+
+## Policy is part of the program
+
+For a reusable validated policy value, import the Schema declaration directly:
+
+```ts twoslash
+import { AgentPolicy } from "effect-agent/agent-policy";
+
+AgentPolicy.make({
+  maxTurns: 12,
+  maxToolCalls: 24,
+  maxDuration: "5 minutes",
+  toolConcurrency: 4,
+  repeatedFailureLimit: 3,
+  tokenBudget: 80_000,
+  costBudgetMicrousd: 2_000_000,
+  onExhaustion: "final-answer",
+});
+```
+
+Turns, tool calls, duration, and concurrency need positive finite bounds. Token and cost budgets
+are optional because some models do not report enough usage data.
+
+The default `onExhaustion: "final-answer"` allows one constrained final answer for turn, tool call,
+or token exhaustion. The result uses `finishReason: "budget-exhausted"`. See
+[Budgets & bounded autonomy](/concepts/budgets/) for all exhaustion rules and
+[Context management](/guide/context-management/) for tool result bounds, run status, context limits,
+and compaction.

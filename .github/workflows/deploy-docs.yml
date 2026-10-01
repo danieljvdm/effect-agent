@@ -1,4 +1,4 @@
-# Deploys the VitePress docs site to a Cloudflare Worker with Alchemy
+# Deploys the Astro Starlight docs site to a Cloudflare Worker with Alchemy
 # (alchemy.run.ts, stage `prod`, https://effect-agent.com). Alchemy
 # runs `vp run docs:build` itself, content-hashes the output, and skips the
 # deploy when nothing changed; state lives in the account-wide Cloudflare
