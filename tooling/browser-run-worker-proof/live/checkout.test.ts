@@ -358,7 +358,10 @@ const proof = Effect.gen(function* () {
     yield* save();
     if (Exit.isFailure(executed)) return yield* safeFailure(executed.cause);
     if (executed.value.status !== 200)
-      return yield* fail("run:" + publicEvidence(observed.evidence).failure, executed.value.status);
+      return yield* fail(
+        `run:${observed.evidence.phase}:${publicEvidence(observed.evidence).failure}`,
+        executed.value.status,
+      );
     const evidence = observed.evidence;
 
     if (

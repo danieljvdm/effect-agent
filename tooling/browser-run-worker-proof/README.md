@@ -86,12 +86,17 @@ The runner records its identity and pending report before provisioning the stage
 
 The ignored `.checkout-proof/<run>/report.json` in this workspace retains the commit,
 Worker name, dispatch status, sanitized independent evidence, allowlisted Worker failure codes,
-failure stage/status,
+the last checkout operation, failure stage/status,
 cleanup result, and total, checkout, and cleanup milliseconds. Total time includes
 deployment and retirement. Checkout time measures the single run request; cleanup time
 measures closure, its independent confirmation, and Worker retirement. Evidence is
 written atomically. A mismatched receipt is omitted rather than publishing unexpected
 identity or payload values.
+
+Failure codes distinguish invalid helper calls from browser failures and retain known
+error tags even when a failure is carried as an Effect defect. The operation identifies
+whether it occurred during scraping, browser setup, model execution, input, or closure;
+unknown errors still use `worker-failure` without publishing their messages.
 
 ## Recovery
 

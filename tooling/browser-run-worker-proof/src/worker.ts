@@ -272,6 +272,7 @@ export class CheckoutRun extends DurableObject<Env> {
     let blocked = false;
     let submitted = false;
     const isStopped = () => this.stopped;
+    const phase = (value: typeof CheckoutPhase.Type) => this.phase(value);
 
     const invalid = () =>
       BrowserUse.BrowserUseError.make({
@@ -375,6 +376,7 @@ export class CheckoutRun extends DurableObject<Env> {
                   }),
                 );
 
+          phase("act");
           const result = yield* input.pipe(Effect.exit);
 
           if (Exit.isFailure(result)) {
@@ -427,6 +429,7 @@ export class CheckoutRun extends DurableObject<Env> {
             );
 
             if (control === undefined || raw === undefined) return yield* invalid();
+            this.phase("credential");
             yield* handle
               .fill(
                 BrowserFillRequest.make({
@@ -464,6 +467,7 @@ export class CheckoutRun extends DurableObject<Env> {
 
           if (control === undefined || raw === undefined) return yield* invalid();
           submitted = true; // Fence before dispatch, including a lost reply.
+          this.phase("submit");
           yield* handle
             .click(
               BrowserClickRequest.make({
@@ -484,6 +488,7 @@ export class CheckoutRun extends DurableObject<Env> {
           const observation = yield* observe;
           const receipt = this.evidence().receipt;
 
+          this.phase("receipt");
           if (
             receipt === null ||
             this.evidence().attempts !== 1 ||
@@ -622,23 +627,23 @@ export class CheckoutRun extends DurableObject<Env> {
           const found = Cause.findError(cause);
 
           const error = Result.isSuccess(found)
-            ? Schema.decodeOption(Schema.Struct({ _tag: Schema.String }))(found.success)
-            : Option.none();
+            ? found.success
+            : Result.getOrElse(Cause.findDefect(cause), () => undefined);
 
-          const defect = Cause.findDefect(cause);
+          const detail = Schema.decodeUnknownOption(
+            Schema.Struct({
+              _tag: Schema.optionalKey(Schema.String),
+              name: Schema.optionalKey(Schema.String),
+            }),
+          )(error);
 
-          const defectName = Result.isSuccess(defect)
-            ? Schema.decodeUnknownOption(Schema.Struct({ name: WorkerFailure }))(defect.success)
-            : Option.none();
-
-          const code =
-            Result.isSuccess(found) && Schema.is(CheckoutError)(found.success)
-              ? found.success.stage
-              : Option.isSome(error)
-                ? error.value._tag
-                : Option.isSome(defectName)
-                  ? defectName.value.name
-                  : "worker-failure";
+          const code = Schema.is(CheckoutError)(error)
+            ? error.stage
+            : Schema.is(BrowserUse.BrowserUseError)(error)
+              ? `BrowserUseError:${error.code}`
+              : Option.isSome(detail)
+                ? (detail.value._tag ?? detail.value.name ?? "worker-failure")
+                : "worker-failure";
 
           const tag = Option.getOrElse(
             Schema.decodeUnknownOption(WorkerFailure)(code),

@@ -23,6 +23,8 @@ export const WorkerFailure = Schema.Literals([
   "InteractiveBrowserUnsupportedError",
   "BrowserRunCleanupError",
   "BrowserUseError",
+  "BrowserUseError:invalid",
+  "BrowserUseError:browser",
   "SchemaError",
   "AiError",
   "AgentPolicyError",
