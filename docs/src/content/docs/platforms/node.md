@@ -30,8 +30,8 @@ The version declarations identify the agent, model, and tools used by accepted w
 Use a persistent database path with one live host per SQLite file. Give each replacement host
 incarnation a distinct `producerId`.
 The automatic host holds SQLite's exclusive connection lock for its entire Scope. Another host
-or an independent database reader fails to open while that connection is alive. Use a local
-filesystem with working SQLite locks; do not replace or unlink a live database file.
+fails startup, and independent readers cannot access the database while that connection is alive.
+Use a local filesystem with working SQLite locks; do not replace or unlink a live database file.
 New files are initialized in WAL mode; existing files must already use WAL mode.
 `workerConcurrency` limits worker loops and defaults to one.
 Active workers share one periodic ledger scan.
