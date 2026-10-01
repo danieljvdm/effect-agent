@@ -245,7 +245,8 @@ export class CheckoutRun extends DurableObject<Env> {
     const acquired = yield* host.acquire(
       InteractiveBrowserPolicy.make({
         network: { _tag: "ExactHosts", allowedHosts: [new URL(origin).host] },
-        maxActions: 60,
+        // Reserve up to 60 read-only operations for one minute of login readiness.
+        maxActions: 120,
         maxElapsedMillis: 240_000,
         maxReturnedBytes: 16_384,
       }),
@@ -265,8 +266,60 @@ export class CheckoutRun extends DurableObject<Env> {
     const session = yield* acquired.connect;
     const handle = session.handle;
 
-    this.phase("navigate");
-    yield* handle.navigate(BrowserNavigateRequest.make({ url: `${origin}/shop/login` }));
+    this.phase("login-readiness");
+    // The runner's /evidence route can be ready before this browser's route.
+    // Navigation accepts HTTP error pages; prove the login controls before any input.
+    yield* Effect.gen({ self: this }, function* () {
+      if (this.stopped)
+        return yield* CheckoutError.make({
+          stage: "authority",
+          message: "Run was closed during browser readiness",
+        });
+      yield* handle.navigate(BrowserNavigateRequest.make({ url: `${origin}/shop/login` }));
+      const result = yield* handle.readText(BrowserReadTextRequest.make({}));
+      const page = yield* Schema.decodeEffect(BrowserRunPageObservation)(result.text);
+
+      if (this.stopped)
+        return yield* CheckoutError.make({
+          stage: "authority",
+          message: "Run was closed during browser readiness",
+        });
+      if (
+        !["email", "password"].every((kind) =>
+          page.controls.some(
+            (control) =>
+              control.kind.startsWith("input:") && control.inputType === kind && !control.disabled,
+          ),
+        ) ||
+        !page.controls.some(
+          (control) =>
+            control.kind === "button" && control.label === "Sign in" && !control.disabled,
+        )
+      )
+        return yield* CheckoutError.make({
+          stage: "login-readiness",
+          message: "The browser has not reached the login fixture",
+        });
+    }).pipe(
+      Effect.retry({
+        schedule: Schedule.spaced("2 seconds"),
+        while: (error) =>
+          (error._tag === "CheckoutError" && error.stage === "login-readiness") ||
+          (error._tag === "InteractiveBrowserActionError" &&
+            error.operation === "read-text" &&
+            error.evidence?.session === "attached"),
+      }),
+      Effect.timeoutOrElse({
+        duration: "1 minute",
+        orElse: () =>
+          Effect.fail(
+            CheckoutError.make({
+              stage: "login-readiness",
+              message: "The browser login fixture did not become ready",
+            }),
+          ),
+      }),
+    );
     let raw: typeof BrowserRunPageObservation.Type | undefined;
     const refs = new Map<string, (typeof BrowserRunPageObservation.Type.controls)[number]>();
     let sequence = 0;
