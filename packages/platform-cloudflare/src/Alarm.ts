@@ -301,17 +301,26 @@ export interface ThreadPublicationService {
   readonly drain: Effect.Effect<Option.Option<number>, DurableAlarmError>;
 }
 
+const emptyPublication: ThreadPublicationService = {
+  invalidate: Effect.void,
+  prepareGeneration: () => Effect.void,
+  drain: Effect.succeed(Option.none()),
+};
+
 /** Opt in with `ThreadObject.layer(registrations, { publication: Layer.effect(ThreadPublication)(...) })`. */
 export class ThreadPublication extends Context.Service<
   ThreadPublication,
   ThreadPublicationService
 >()("@effect-agent/platform-cloudflare/ThreadPublication") {
-  static readonly layer = Layer.succeed(this)({
-    invalidate: Effect.void,
-    prepareGeneration: () => Effect.void,
-    drain: Effect.succeed(Option.none()),
-  });
+  static readonly layer = Layer.succeed(this)(emptyPublication);
 }
+
+// Only the actual empty default can waive required publication. Missing or replaced
+// services retain the barrier, including hosts that rebuild maintenance Layers.
+const requiresPublication = Effect.map(
+  Effect.serviceOption(ThreadPublication),
+  (service) => Option.isNone(service) || service.value !== emptyPublication,
+);
 
 /**
  * Host-assembled native message recovery. Preparation is a bounded local selection; the
@@ -841,6 +850,7 @@ export class ThreadMutationGate extends Context.Service<
         yield* failpoint.hit("maintenance:dirty:before");
         const now = yield* Clock.currentTimeMillis;
         const nativeSource = yield* CurrentNativeSource;
+        const publicationRequired = yield* requiresPublication;
 
         if (invalidatesRecovery || lanes.length > 0)
           yield* runTransaction("advance maintenance generation", () =>
@@ -849,7 +859,7 @@ export class ThreadMutationGate extends Context.Service<
 
               if (invalidatesRecovery) {
                 dueQueue.dirty(DueQueue.Native, now);
-                dueQueue.dirty(DueQueue.Publication, now);
+                if (publicationRequired) dueQueue.dirty(DueQueue.Publication, now);
               }
               // Enrollment is a crash fallback, not evidence that the body committed.
               for (const id of lanes) dueQueue.dirty(id, now, false);
@@ -877,7 +887,9 @@ export class ThreadMutationGate extends Context.Service<
 
         const enrolled = new Set([
           ...lanes,
-          ...(invalidatesRecovery ? [DueQueue.Native, DueQueue.Publication] : []),
+          ...(invalidatesRecovery
+            ? [DueQueue.Native, ...(publicationRequired ? [DueQueue.Publication] : [])]
+            : []),
         ]);
 
         for (const id of enrolled) activeLanes.set(id, (activeLanes.get(id) ?? 0) + 1);
@@ -958,6 +970,8 @@ export class ThreadMutationGate extends Context.Service<
             message: "Source progress requires its authoritative SQL transaction",
           });
         const affected = new Set([...lanes, ...(yield* CurrentMutationLanes)]);
+
+        if (!(yield* requiresPublication)) affected.delete(DueQueue.Publication);
 
         if (affected.has(DueQueue.Publication)) affected.add(DueQueue.Native);
 
@@ -1128,7 +1142,6 @@ export class ThreadMaintenance extends Context.Service<
             DueQueue.Messages,
             DueQueue.RecoveryEvents,
             DueQueue.Lifecycle,
-            DueQueue.LifecycleStart,
           ].includes(row.id)
             ? row.id.slice("effect-agent:".length)
             : "host";
@@ -1144,15 +1157,28 @@ export class ThreadMaintenance extends Context.Service<
         }
       }).pipe(Effect.catchCause((cause) => ErrorReporter.report(cause)));
 
-      yield* runTransaction("register native maintenance lanes", async () => {
-        for (const id of [
-          DueQueue.Publication,
-          DueQueue.Projection,
-          DueQueue.Messages,
-          ...framework.lanes.map((lane) => lane.id),
-        ])
-          dueQueue.register(id);
-      });
+      yield* runTransaction("register native maintenance lanes", () =>
+        dueQueue.transaction(async () => {
+          for (const id of [
+            DueQueue.Publication,
+            DueQueue.Projection,
+            DueQueue.Messages,
+            ...framework.lanes.map((lane) => lane.id),
+          ])
+            dueQueue.register(id);
+
+          // Earlier releases split this one outbox across start and after-native lanes.
+          // Retire only scheduling metadata, retaining revision fencing and domain retries.
+          if (framework.lanes.some((lane) => lane.id === DueQueue.Lifecycle)) {
+            const start = dueQueue.read().find((row) => row.id === "effect-agent:lifecycle-start");
+
+            if (start !== undefined && start.dueAt !== null) {
+              dueQueue.dirty(DueQueue.Lifecycle, start.dueAt);
+              dueQueue.complete(start, null);
+            }
+          }
+        }),
+      );
 
       const runQueued = <E, R>(
         selected: DueQueue.DueLane,
@@ -2709,11 +2735,6 @@ export class ThreadMaintenance extends Context.Service<
                 current.some(
                   (row) =>
                     !afterNativeIds.has(row.id) &&
-                    // Both phases drain the same lifecycle queue. Lazy retention during
-                    // this wave must not interrupt its own publication before acknowledgement.
-                    !(
-                      row.id === DueQueue.LifecycleStart && afterNativeIds.has(DueQueue.Lifecycle)
-                    ) &&
                     !active.has(row.id) &&
                     row.dueAt !== null &&
                     row.dueAt <= now &&

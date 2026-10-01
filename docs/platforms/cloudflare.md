@@ -366,7 +366,6 @@ Application outboxes enroll independent lanes in one durable due queue:
 ```ts
 import { ThreadHostMaintenance, ThreadMutationGate } from "@effect-agent/platform-cloudflare/alarm";
 import { Context, Effect } from "effect";
-import { SqlClient } from "effect/unstable/sql";
 
 const maintenance = Context.make(ThreadHostMaintenance, {
   lanes: [{ id: "replies", dispatchTimeoutMillis: 30_000, run: replies.deliverWave }],
@@ -374,9 +373,8 @@ const maintenance = Context.make(ThreadHostMaintenance, {
 
 const retainReply = Effect.gen(function* () {
   const gate = yield* ThreadMutationGate;
-  const sql = yield* SqlClient.SqlClient;
   yield* gate.withMutation(
-    sql.withTransaction(
+    gate.withTransaction(
       Effect.gen(function* () {
         const added = yield* replies.retain;
         if (added) yield* gate.recordProgress(["replies"]);
@@ -448,7 +446,7 @@ uses `invalidatesRecovery: false` with no lanes. Native admissions and controls 
 `invalidatesRecovery: true`.
 
 The queue retains each lane's own revision and deadline. Repeated marks in one source transaction
-merge the earliest deadline and highest progress cursor into one scheduler write per changed lane.
+merge the earliest deadline and highest progress cursor, then batch changed lanes into revision-fenced writes.
 A pass shares its queue view, releasing large views when it exits. The gate owns the source transaction and its flush; prearming and attempt charging commit before fallible work. Built-in stores use this boundary automatically. Custom sources can opt into coalescing with `ThreadMutationGate.withTransaction` at their outermost SQL transaction. Within that boundary, nested transactions that schedule work use it too.
 A finishing wave cannot erase a newer producer enrollment, and a lane waits for an in-flight source mutation body to finish.
 Completions and producer notifications drive the active event; there is no wake-scan timer.
@@ -494,8 +492,9 @@ const RuntimeLive = ThreadObject.layer(registrations, {
 
 Source transactions durably retain publication intent. A Run's start, or a Subagent's actual
 start, retains the ordered prefix through that record before execution continues. An independent
-maintenance wave publishes that prefix while native work runs; later canonical facts stay in the
-journal until the settlement wave materializes them together. Ledger and delivery facts retain
+maintenance lane publishes that prefix and subsequent progress while native work runs. Each finite
+wave materializes a bounded journal suffix and publishes ordered owner batches; committed debt
+and retry deadlines schedule continuation, with no idle polling. Ledger and delivery facts retain
 their own source receipts. Attempts, model calls, input joins, and handoffs continue while
 publication is pending or failing. Eviction reconstructs unmaterialized intent from the journal.
 
@@ -523,7 +522,8 @@ deadline. An exhausted owner parks with its payload retained; later facts for th
 behind it, while execution and other owners continue. After repairing the destination, an operator
 can call `ThreadStore.lifecyclePublications.retryParked(ownerThreadId, nowMillis)` through the
 assembled Cloudflare store; it enrolls the lifecycle lane in the due queue. Serialize publication
-drains and operator retries per owner.
+drains and operator retries per owner. SQL stores acknowledge completed owner batches together
+at the end of each wave, including completed batches before a later dispatch is interrupted.
 
 Pending and parked obligations retain private payloads until acknowledgement. Keep native source
 admissions and Run-input records, and do not delete their Object, until publication debt is

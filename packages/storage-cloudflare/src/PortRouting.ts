@@ -813,6 +813,7 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
   const checkpoints = local.checkpoints;
   const recoveryCheckpoints = local.recoveryCheckpoints;
   const lifecyclePublications = local.lifecyclePublications;
+  const acknowledgeMany = lifecyclePublications?.acknowledgeMany;
   const transport = yield* ThreadPortTransport;
   const transportCall: TransportCall = makeTransportCall(transport);
 
@@ -990,6 +991,16 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
       : {
           lifecyclePublications: {
             ...lifecyclePublications,
+            ...(acknowledgeMany === undefined
+              ? {}
+              : {
+                  acknowledgeMany: (batches) =>
+                    batches.every((batch) =>
+                      batch.every((publication) => options.ownsThread(publication.ownerThreadId)),
+                    )
+                      ? acknowledgeMany(batches)
+                      : Effect.fail(LifecyclePublicationError.make({ reason: "unavailable" })),
+                }),
             acknowledge: (batch) =>
               batch.every((publication) => options.ownsThread(publication.ownerThreadId))
                 ? lifecyclePublications.acknowledge(batch)

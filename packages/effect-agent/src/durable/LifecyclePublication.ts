@@ -158,6 +158,14 @@ export interface LifecyclePublicationStorage {
   readonly acknowledge: (
     publications: LifecyclePublicationBatch,
   ) => Effect.Effect<void, LifecyclePublicationError>;
+  /** Optional atomic acknowledgement of up to 100 successfully published owner batches.
+   * Validate every exact batch before consuming any debt. Empty waves succeed without writes.
+   * Wrappers that validate acknowledgement authority must wrap this method too.
+   * Custom services may omit this; drains then acknowledge each batch immediately.
+   */
+  readonly acknowledgeMany?: (
+    batches: ReadonlyArray<LifecyclePublicationBatch>,
+  ) => Effect.Effect<void, LifecyclePublicationError>;
   /**
    * Claim a due owner batch and persist its retry before dispatch. Eight automatic attempts;
    * 1s exponential backoff capped at 60s, after the dispatch timeout. The final attempt parks
@@ -265,7 +273,9 @@ const withSource = Effect.fn("LifecyclePublication.withSource")(
  * One finite wave for the host's existing maintenance coordinator. Persist the next deadline
  * before dispatch, so interruption and process loss retain the same facts without another timer.
  * Finish independent owner batches before surfacing failures; interruption stops the wave.
- * Acknowledgements are exact and idempotent. No producer or external Tool is re-executed here.
+ * Acknowledgements are exact and idempotent. An optional storage wave acknowledgement commits
+ * completed batches in groups of up to 100, including when a later dispatch is interrupted. No producer or
+ * external Tool is re-executed here.
  */
 export const drainLifecyclePublications = Effect.fn("LifecyclePublication.drain")(function* (
   storage: LifecyclePublicationStorage,
@@ -275,37 +285,50 @@ export const drainLifecyclePublications = Effect.fn("LifecyclePublication.drain"
 ) {
   const handler = yield* LifecyclePublicationHandler;
   const pending = yield* storage.pending(yield* Clock.currentTimeMillis, limit, options);
-
+  const acknowledgeMany = storage.acknowledgeMany;
+  const published: Array<LifecyclePublicationBatch> = [];
   let failures: Cause.Cause<LifecyclePublicationError> = Cause.empty;
 
-  for (const batch of pending) {
-    yield* Effect.gen(function* () {
-      if (!(yield* storage.claim(batch, yield* Clock.currentTimeMillis, timeoutMillis))) return;
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const publications = yield* Effect.forEach(batch, withSource);
+  return yield* Effect.gen(function* () {
+    for (const batch of pending) {
+      yield* Effect.gen(function* () {
+        if (!(yield* storage.claim(batch, yield* Clock.currentTimeMillis, timeoutMillis))) return;
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const publications = yield* Effect.forEach(batch, withSource);
 
-          yield* handler.publish(publications);
-        }),
-      ).pipe(
-        Effect.timeoutOrElse({
-          duration: timeoutMillis,
-          orElse: () => LifecyclePublicationError.make({ reason: "unavailable" }),
-        }),
+            yield* handler.publish(publications);
+          }),
+        ).pipe(
+          Effect.timeoutOrElse({
+            duration: timeoutMillis,
+            orElse: () => LifecyclePublicationError.make({ reason: "unavailable" }),
+          }),
+        );
+        if (acknowledgeMany === undefined) yield* storage.acknowledge(batch);
+        else published.push(batch);
+      }).pipe(
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterrupts(cause),
+          (cause) => {
+            failures = Cause.combine(failures, cause);
+
+            return Effect.void;
+          },
+        ),
       );
-      yield* storage.acknowledge(batch);
-    }).pipe(
-      Effect.catchCauseIf(
-        (cause) => !Cause.hasInterrupts(cause),
-        (cause) => {
-          failures = Cause.combine(failures, cause);
+    }
+    if (failures.reasons.length > 0) return yield* Effect.failCause(failures);
 
-          return Effect.void;
-        },
-      ),
-    );
-  }
-  if (failures.reasons.length > 0) return yield* Effect.failCause(failures);
-
-  return pending.length;
+    return pending.length;
+  }).pipe(
+    Effect.onExit(() =>
+      acknowledgeMany === undefined || published.length === 0
+        ? Effect.void
+        : Effect.gen(function* () {
+            for (let offset = 0; offset < published.length; offset += 100)
+              yield* acknowledgeMany(published.slice(offset, offset + 100));
+          }),
+    ),
+  );
 });
