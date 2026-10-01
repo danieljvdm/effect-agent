@@ -4,6 +4,7 @@ import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
+import { CompactionPolicy } from "effect-agent/agent-policy";
 import { CLEARED_TOOL_RESULT, CONTEXT_ROLLOVER_PREFIX } from "effect-agent/compaction";
 import { ContextRolloverRequest, ContextRolloverTool } from "effect-agent/context-window";
 import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
@@ -120,6 +121,68 @@ const expectCrash = <A, E>(exit: Exit.Exit<A, E>) => {
 };
 
 layer(testLayer)("durable output and current-Run pruning", (it) => {
+  // https://github.com/danieljvdm/effect-agent/issues/745
+  it.effect(
+    "keeps replying when summary retention falls between a user message and its reply",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const reply = "lorem ipsum dolor sit amet ".repeat(150);
+        const scripted = scriptedModel(() => finalParts(reply));
+
+        const agent = Agent.withModel(
+          Agent.make("compaction-chat", {
+            input: Schema.Struct({ text: Schema.String }),
+            output: Output.text(Schema.String),
+            instructions: "Reply in detail.",
+            toolkit: Toolkit.empty,
+            policy: {
+              contextTokenLimit: 6_000,
+              compaction: CompactionPolicy.make({ keepRecentTokens: 2_000 }),
+            },
+          }),
+          scripted.model,
+        );
+
+        const options = submitOptions("compaction-chat");
+
+        for (let message = 1; message <= 10; message++) {
+          const receipt = yield* runtime.submit(
+            agent,
+            { text: `message ${message}` },
+            {
+              ...options,
+              idempotencyKey: IdempotencyKey.make(`message-${message}`),
+            },
+          );
+
+          const settled = yield* runtime.processThread(agent, receipt.threadId);
+
+          expect(settled).toHaveLength(1);
+          expect(
+            settled[0]?.outcome,
+            `message ${message}: ${settled[0]?.failure?.message ?? "no failure"}`,
+          ).toBe("completed");
+        }
+        const records = yield* readLog(options.threadId);
+
+        expect(
+          records.filter(({ record }) => record.payload._tag === "CompactionCreated").length,
+        ).toBeGreaterThan(1);
+
+        const finalPrompt = scripted.prompts.at(-1) ?? Prompt.empty;
+
+        expect(
+          finalPrompt.content.filter((message) => message.role !== "system").slice(-5, -1),
+        ).toEqual([
+          Prompt.userMessage({ content: [Prompt.textPart({ text: '{"text":"message 8"}' })] }),
+          Prompt.assistantMessage({ content: [Prompt.textPart({ text: reply })] }),
+          Prompt.userMessage({ content: [Prompt.textPart({ text: '{"text":"message 9"}' })] }),
+          Prompt.assistantMessage({ content: [Prompt.textPart({ text: reply })] }),
+        ]);
+      }),
+  );
+
   {
     const text = '  Committed once.\n"Keep these quotes."  ' as const;
 
