@@ -396,8 +396,8 @@ export const choosePruneBound = (
  * Summarize selection: the source cut index `C` — messages `[0, C)` outside
  * the protected block fold into the summary; `[C, …)` is the kept tail.
  * Walks newest→oldest accumulating view estimates until `keepRecentTokens`
- * is retained, then moves the cut down so no tool message is separated from
- * the assistant message that declared its calls.
+ * is retained, then moves the cut down to keep leading user/system messages
+ * with their assistant response and tool results with their declaring assistant.
  */
 export const chooseSummarizeCut = (
   source: ReadonlyArray<Prompt.Message>,
@@ -418,9 +418,15 @@ export const chooseSummarizeCut = (
       break;
     }
   }
-  // A tool message must stay with its declaring assistant message: walk the
-  // cut down across any tool messages so pairing is never split.
-  while (cut > 0 && source[cut]?.role === "tool") {
+  // Durable responses commit pending input and the assistant reply together.
+  // Retain that input with the reply, including when a tool result pulls the
+  // cut back to its declaring assistant. Moving backward preserves the tail.
+  while (
+    cut > 0 &&
+    (source[cut]?.role === "tool" ||
+      source[cut - 1]?.role === "user" ||
+      source[cut - 1]?.role === "system")
+  ) {
     cut -= 1;
   }
 

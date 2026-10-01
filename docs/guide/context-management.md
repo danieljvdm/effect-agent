@@ -1041,7 +1041,8 @@ the history view and estimate until compaction changes them. The default compact
 1. clears old application tool results outside the preferred `keepRecentTokens` tail while keeping
    message structure and call/result pairs;
 2. if pruning is insufficient, makes one metered summary call and keeps the instruction prefix,
-   summary, and recent tail.
+   summary, and recent tail. The retained tail can exceed `keepRecentTokens` to keep user inputs
+   with their replies and tool calls with their results.
 
 Compaction changes the model view. It never rewrites the thread log. `CompactionPerformed`
 reports each reduction. DN and DC also append `CompactionCreated`, so later attempts and runs use
