@@ -46,6 +46,41 @@ it never silently evicts earlier conversations. Concurrent updates must extend t
 prefix, or fail with reason `"conflict"` without overwriting history. Authorize thread access and
 serialize same-thread Runs when concurrent external work is unacceptable.
 
+## Release disposable conversations
+
+Wrap each independent request in `InMemory.scoped` inside the shared application runtime:
+
+```ts
+const request = Effect.gen(function* () {
+  const first = yield* AgentRuntime.run(agent, "Plan a trip to Lisbon");
+  return yield* AgentRuntime.run(agent, "Make it cheaper", { threadId: first.threadId });
+}).pipe(InMemory.scoped);
+
+// Reuse one ManagedRuntime built with InMemory.layer and your model/tool services.
+const result = await runtime.runPromise(request);
+```
+
+The workflow owns its newly created Threads, including attached children. History remains
+available for follow-ups inside the workflow and is released on success, failure, or interruption.
+All owners and retained conversations share the same count and byte limits; an active owner does
+not receive another store budget. An owner cannot claim an existing conversation from another
+owner or the application. Such access fails with reason `"conflict"`; a closed owner fails with
+reason `"fenced"`.
+
+Consume streams and await `start` handles inside the wrapper. Inspect or export history there
+if it must outlive the workflow, and construct `toRunThreadOptions` there so its hooks capture
+the owned store. Returned outputs and snapshots remain ordinary values, but returned Thread IDs
+no longer carry continuation history after the workflow closes. Keep the default application
+owner for conversations that must continue across requests, or use persistent history.
+
+`InMemory.scoped` requires the matching in-memory store and history adapter. Persistent history
+and custom adapters without this capability fail with `InMemoryScopeError`. Durable hosts keep
+their journal retention; use this wrapper for ordinary Runs.
+
+This is an explicit lifetime choice: a shared default `InMemory.layer` still retains completed
+conversations and rejects a 257th distinct Thread. Merely finishing a Run does not release it;
+unbounded retention, finite memory, and unlimited fresh conversations cannot coexist.
+
 ## Inspect a conversation
 
 ```ts
