@@ -1,4 +1,6 @@
-import { Schema, SchemaParser, SchemaTransformation } from "effect";
+import * as Schema from "effect/Schema";
+import * as SchemaParser from "effect/SchemaParser";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 
 /** Keep strict parsing on nested values even when an outer parser uses its defaults. */
 export const strictSchema = <S extends Schema.Top>(schema: S) =>

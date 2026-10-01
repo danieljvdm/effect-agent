@@ -1,6 +1,7 @@
 import type { Effect } from "effect";
-import { Context, Schema } from "effect";
 import type { Tool, Toolkit } from "effect/ai";
+import * as Context from "effect/Context";
+import * as Schema from "effect/Schema";
 
 /**
  * Programmatic Tool invocation seam for Code Mode (runtime spec §12.1,

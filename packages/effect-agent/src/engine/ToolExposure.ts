@@ -1,5 +1,6 @@
-import { Context, type Effect } from "effect";
+import type { Effect } from "effect";
 import type { Tool } from "effect/ai";
+import * as Context from "effect/Context";
 
 import type { RunId, ThreadId } from "../core/Identifiers.ts";
 

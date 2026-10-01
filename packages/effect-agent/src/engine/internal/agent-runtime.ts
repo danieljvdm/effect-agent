@@ -1,40 +1,36 @@
 import type { Take } from "effect";
-import {
-  Cause,
-  Channel,
-  Clock,
-  Context,
-  DateTime,
-  Duration,
-  Effect,
-  Equal,
-  Exit,
-  Fiber,
-  Layer,
-  Metric,
-  Option,
-  PubSub,
-  Queue,
-  Result,
-  Schedule,
-  Schema,
-  SchemaAST,
-  SchemaGetter,
-  Scope,
-  Semaphore,
-  Stream,
-  Tracer,
-} from "effect";
-import {
-  Tool,
-  AiError,
-  LanguageModel,
-  Model,
-  Prompt,
-  Response,
-  ResponseIdTracker,
-  Toolkit,
-} from "effect/ai";
+import * as AiError from "effect/ai/AiError";
+import * as LanguageModel from "effect/ai/LanguageModel";
+import * as Model from "effect/ai/Model";
+import * as Prompt from "effect/ai/Prompt";
+import * as Response from "effect/ai/Response";
+import * as ResponseIdTracker from "effect/ai/ResponseIdTracker";
+import * as Tool from "effect/ai/Tool";
+import * as Toolkit from "effect/ai/Toolkit";
+import * as Cause from "effect/Cause";
+import * as Channel from "effect/Channel";
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
+import * as Option from "effect/Option";
+import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
+import * as Result from "effect/Result";
+import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
+import * as SchemaAST from "effect/SchemaAST";
+import * as SchemaGetter from "effect/SchemaGetter";
+import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
 
 import * as Agent from "../../core/Agent.ts";
 import {
@@ -143,7 +139,7 @@ import { ThreadHistory, ThreadHistoryError } from "../ThreadHistory.ts";
 import { CurrentToolCatalog, RunToolVisibility, type CatalogEntry } from "../ToolExposure.ts";
 import { boundedValueFootprint } from "./bounded-value.ts";
 import { isTextOutput, outputSchemaContract, prepareModelPrompt } from "./output-contract.ts";
-import { ownPrimitiveDelta } from "./primitive-delta.ts";
+import { ownPrimitiveTextPart } from "./primitive-delta.ts";
 import {
   boundedCanonicalJsonSnapshot,
   boundedJsonSnapshot,
@@ -995,12 +991,10 @@ const ownModelResponsePartGeneral = Effect.fnUntraced(function* <
   }
   const codec = modelResponseCodecFor(toolkit);
 
-  const encodingFailure = ModelProtocolError.make({
-    message: "Model response part failed canonical encoding",
-  });
-
   const encoded = yield* Schema.encodeUnknownEffect(codec)(part).pipe(
-    Effect.mapError(() => encodingFailure),
+    Effect.mapError(() =>
+      ModelProtocolError.make({ message: "Model response part failed canonical encoding" }),
+    ),
   );
 
   const retainedBytes = yield* inspectModelResponsePartCapacity(usage, encoded, limits);
@@ -1020,12 +1014,10 @@ const ownModelResponsePartGeneral = Effect.fnUntraced(function* <
       }),
   });
 
-  const decodingFailure = ModelProtocolError.make({
-    message: "Model response part failed canonical decoding",
-  });
-
   const ownedPart = yield* Schema.decodeUnknownEffect(codec)(ownedEncoded).pipe(
-    Effect.mapError(() => decodingFailure),
+    Effect.mapError(() =>
+      ModelProtocolError.make({ message: "Model response part failed canonical decoding" }),
+    ),
   );
 
   return { ownedPart, retainedBytes };
@@ -1040,7 +1032,7 @@ const ownModelResponsePart = <Tools extends Record<string, Tool.Any>>(
   Effect.suspend((): ReturnType<typeof ownModelResponsePartGeneral> => {
     const primitive =
       usage.responsePartCount < limits.maxModelResponseParts
-        ? ownPrimitiveDelta(part, limits.maxModelResponseBytes - usage.responsePartBytes)
+        ? ownPrimitiveTextPart(part, limits.maxModelResponseBytes - usage.responsePartBytes)
         : undefined;
 
     return primitive === undefined
@@ -1992,7 +1984,7 @@ const terminalToolTelemetry = (
   ).pipe(
     Effect.andThen(
       (outcome === "success"
-        ? Effect.logInfo("agent tool execution completed")
+        ? Effect.logDebug("agent tool execution completed")
         : Effect.logWarning("agent tool execution failed")
       ).pipe(
         Effect.annotateLogs({

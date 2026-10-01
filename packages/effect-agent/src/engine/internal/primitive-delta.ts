@@ -1,14 +1,25 @@
-import { Option, Schema } from "effect";
-import { Response } from "effect/ai";
+import * as Response from "effect/ai/Response";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 import { utf8ByteLength } from "../../core/internal/utf8.ts";
 import { boundedValueFootprint } from "./bounded-value.ts";
 
 const brand = "~effect/ai/Response/Part";
 const keys = [brand, "type", "id", "delta", "metadata"];
+const boundaryKeys = [brand, "type", "id", "metadata"];
 
 const decode = Schema.decodeUnknownOption(
-  Schema.toType(Schema.Union([Response.TextDeltaPart, Response.ReasoningDeltaPart])),
+  Schema.toType(
+    Schema.Union([
+      Response.TextDeltaPart,
+      Response.ReasoningDeltaPart,
+      Response.TextStartPart,
+      Response.TextEndPart,
+      Response.ReasoningStartPart,
+      Response.ReasoningEndPart,
+    ]),
+  ),
 );
 
 const overhead = (type: "text-delta" | "reasoning-delta") => ({
@@ -22,29 +33,49 @@ const overhead = (type: "text-delta" | "reasoning-delta") => ({
   ),
 });
 
+const boundaryOverhead = (
+  type: "text-start" | "text-end" | "reasoning-start" | "reasoning-end",
+) => ({
+  source: boundedValueFootprint(Response.makePart(type, { id: "" }), Number.MAX_SAFE_INTEGER),
+  encoded: boundedValueFootprint({ type, id: "", metadata: {} }, Number.MAX_SAFE_INTEGER),
+});
+
 const overheads = {
   "text-delta": overhead("text-delta"),
   "reasoning-delta": overhead("reasoning-delta"),
+  "text-start": boundaryOverhead("text-start"),
+  "text-end": boundaryOverhead("text-end"),
+  "reasoning-start": boundaryOverhead("reasoning-start"),
+  "reasoning-end": boundaryOverhead("reasoning-end"),
 };
 
 /**
- * Copy the common primitive delta into owned data before native Schema validation.
+ * Copy primitive text and reasoning parts into owned data before native Schema validation.
  * Descriptor checks select this optimization; they do not replace the native codec.
  * Extra fields, accessors, and nonempty metadata use the general ownership path.
  * No provider object survives, including an empty metadata object's hidden storage.
  * Unlike a generic footprint shortcut, this cannot retain an exotic backing buffer.
  */
-export const ownPrimitiveDelta = (part: unknown, maxBytes: number) => {
+export const ownPrimitiveTextPart = (part: unknown, maxBytes: number) => {
   try {
     if (part === null || typeof part !== "object") return undefined;
     if (Array.isArray(part) || ArrayBuffer.isView(part)) return undefined;
     const prototype = Object.getPrototypeOf(part);
 
     if (prototype !== Object.prototype && prototype !== null) return undefined;
-    if (Reflect.ownKeys(part).length !== keys.length) return undefined;
+    const typeDescriptor = Object.getOwnPropertyDescriptor(part, "type");
+
+    if (typeDescriptor === undefined || !("value" in typeDescriptor)) return undefined;
+
+    const isDelta =
+      typeDescriptor.value === "text-delta" || typeDescriptor.value === "reasoning-delta";
+
+    const selectedKeys = isDelta ? keys : boundaryKeys;
+
+    if (Reflect.ownKeys(part).length !== selectedKeys.length) return undefined;
     const snapshot: Record<string, unknown> = {};
 
-    for (const key of keys) {
+    for (const key of selectedKeys) {
       const descriptor = Object.getOwnPropertyDescriptor(part, key);
 
       if (descriptor === undefined || !("value" in descriptor)) return undefined;
@@ -52,8 +83,18 @@ export const ownPrimitiveDelta = (part: unknown, maxBytes: number) => {
     }
     const { type, id, delta, metadata } = snapshot;
 
-    if (type !== "text-delta" && type !== "reasoning-delta") return undefined;
-    if (typeof id !== "string" || typeof delta !== "string") return undefined;
+    if (
+      type !== "text-delta" &&
+      type !== "reasoning-delta" &&
+      type !== "text-start" &&
+      type !== "text-end" &&
+      type !== "reasoning-start" &&
+      type !== "reasoning-end"
+    ) {
+      return undefined;
+    }
+    if (isDelta !== (type === "text-delta" || type === "reasoning-delta")) return undefined;
+    if (typeof id !== "string" || (isDelta && typeof delta !== "string")) return undefined;
     if (metadata === null || typeof metadata !== "object") return undefined;
     if (Array.isArray(metadata) || ArrayBuffer.isView(metadata)) return undefined;
     const metadataPrototype = Object.getPrototypeOf(metadata);
@@ -63,7 +104,7 @@ export const ownPrimitiveDelta = (part: unknown, maxBytes: number) => {
     const fixed = overheads[type];
 
     if (fixed.source === undefined || fixed.encoded === undefined) return undefined;
-    const bytes = utf8ByteLength(id) + utf8ByteLength(delta);
+    const bytes = utf8ByteLength(id) + (typeof delta === "string" ? utf8ByteLength(delta) : 0);
 
     if (bytes + fixed.source > maxBytes || bytes + fixed.encoded > maxBytes) return undefined;
     // Never pass the provider's metadata object (or any other object) to the decoder.

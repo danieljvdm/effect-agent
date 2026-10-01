@@ -1,4 +1,4 @@
-import { AiError } from "effect/ai";
+import * as AiError from "effect/ai/AiError";
 import * as Schema from "effect/Schema";
 
 import { ToolCallId } from "./Identifiers.ts";

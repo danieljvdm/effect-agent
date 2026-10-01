@@ -1,5 +1,6 @@
-import { Context, Schema } from "effect";
 import type { Tool } from "effect/ai";
+import * as Context from "effect/Context";
+import * as Schema from "effect/Schema";
 
 /** Registered native names only. Empty selection deliberately clears non-pinned Tools. */
 export const ToolNames = Schema.Array(

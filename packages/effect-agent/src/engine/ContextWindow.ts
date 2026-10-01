@@ -1,5 +1,7 @@
-import { Context, type Effect, Schema } from "effect";
-import { Hex } from "effect/encoding";
+import type { Effect } from "effect";
+import * as Context from "effect/Context";
+import * as Hex from "effect/encoding/Hex";
+import * as Schema from "effect/Schema";
 
 import { RunId, ThreadId } from "../core/Identifiers.ts";
 

@@ -1,5 +1,6 @@
-import { Schema } from "effect";
-import { Prompt, Tool } from "effect/ai";
+import * as Prompt from "effect/ai/Prompt";
+import * as Tool from "effect/ai/Tool";
+import * as Schema from "effect/Schema";
 
 import type * as Agent from "../../core/Agent.ts";
 

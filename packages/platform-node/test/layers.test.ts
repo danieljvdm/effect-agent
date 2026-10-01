@@ -149,6 +149,32 @@ const failureOf = <A, E>(exit: Exit.Exit<A, E>): unknown => {
 };
 
 describe("NodeDurableAgentRuntime", () => {
+  // d5410af permits two managed hosts over one file; producer names cannot prove host death.
+  it.effect("rejects a second managed host and releases exclusion when its owner closes", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const options = runtimeOptions(filename, { busyTimeout: 0 });
+
+        yield* Effect.gen(function* () {
+          const owner = yield* NodeDurableHost;
+
+          const duplicate = yield* Effect.void.pipe(
+            Effect.provide(NodeHost.layer([], options)),
+            Effect.exit,
+          );
+
+          expect(failureOf(duplicate)).toMatchObject({
+            _tag: "SqliteStorageError",
+            operation: "acquire exclusive host",
+          });
+          expect(yield* owner.admissionOpen).toBe(true);
+        }).pipe(Effect.provide(NodeHost.layer([], options)));
+
+        yield* Effect.void.pipe(Effect.provide(NodeHost.layer([], options)));
+      }),
+    ),
+  );
+
   it.effect("supervises managed workers and releases their resources on failure", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {

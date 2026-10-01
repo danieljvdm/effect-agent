@@ -1,4 +1,5 @@
-import { DateTime, Redacted } from "effect";
+import * as DateTime from "effect/DateTime";
+import * as Redacted from "effect/Redacted";
 
 import { utf8ByteLength } from "../../core/internal/utf8.ts";
 

@@ -64,6 +64,9 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
   const isFenceRejected = Schema.is(FenceRejected);
   const isAppendConflict = Schema.is(AppendConflict);
   const isCheckpointRejected = Schema.is(CheckpointRejected);
+  const canonicalRecordJson = Schema.fromJsonString(CanonicalRecord);
+  const decodeRecordJson = Schema.decodeEffect(canonicalRecordJson);
+  const encodeRecordJson = Schema.encodeEffect(canonicalRecordJson);
 
   const storeError = (operation: string, error: { readonly message: string }) =>
     ThreadStoreError.make({
@@ -129,7 +132,7 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
   const encodeCanonicalRecord = Effect.fn("SqlThreadStore.encodeCanonicalRecord")(function* (
     record: CanonicalRecord,
   ): Effect.fn.Return<string, ThreadStoreError> {
-    return yield* Schema.encodeEffect(Schema.fromJsonString(CanonicalRecord))(record).pipe(
+    return yield* encodeRecordJson(record).pipe(
       Effect.mapError((error) => schemaStoreError("encode canonical record", error)),
     );
   });
@@ -156,9 +159,7 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
     readonly record_json: string;
     readonly sequence: CanonicalSequence;
   }) {
-    const record = yield* Schema.decodeEffect(Schema.fromJsonString(CanonicalRecord))(
-      row.record_json,
-    ).pipe(
+    const record = yield* decodeRecordJson(row.record_json).pipe(
       Effect.mapError((error) =>
         ThreadStoreError.make({
           operation: "decode canonical record",
@@ -276,7 +277,7 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
     );
 
     const records = yield* Effect.forEach(stored.records, (record) =>
-      Schema.decodeEffect(Schema.fromJsonString(CanonicalRecord))(record.record_json).pipe(
+      decodeRecordJson(record.record_json).pipe(
         Effect.map((decoded) => ({ decoded, row: record })),
         Effect.mapError((error) =>
           options.errors.corruption({
@@ -362,9 +363,7 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
           const expectedRecord = canonicalBatch.records[index];
           const storedRecord = batchRecords[index];
 
-          const expectedJson = yield* Schema.encodeEffect(Schema.fromJsonString(CanonicalRecord))(
-            expectedRecord,
-          ).pipe(
+          const expectedJson = yield* encodeRecordJson(expectedRecord).pipe(
             Effect.mapError((error) =>
               options.errors.corruption({
                 table: "effect_agent_canonical_batches",
@@ -374,9 +373,7 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
             ),
           );
 
-          const storedJson = yield* Schema.encodeEffect(Schema.fromJsonString(CanonicalRecord))(
-            storedRecord.decoded,
-          ).pipe(
+          const storedJson = yield* encodeRecordJson(storedRecord.decoded).pipe(
             Effect.mapError((error) =>
               options.errors.corruption({
                 table: "effect_agent_canonical_records",

@@ -33,7 +33,7 @@ import { NodeDurableHost } from "@effect-agent/platform-node";
 NodeDurableHost.layer;
 ```
 
-For direct module access or lazy-loading boundaries, the corresponding imports are:
+For direct module access, unbundled startup, or lazy-loading boundaries, use:
 
 ```ts
 import * as Agent from "effect-agent/agent";
@@ -41,7 +41,12 @@ import * as AgentRuntime from "effect-agent/agent-runtime";
 import * as NodeDurableHost from "@effect-agent/platform-node/node-durable-host";
 ```
 
-Both forms support tree shaking. Use direct module paths at lazy-loading boundaries: mixing a
+Both forms support tree shaking in bundles. Native Node evaluates every namespace re-exported
+by a root import; `sideEffects` does not make those exports lazy. Direct paths limit the initial
+module graph, including when importing upstream Effect modules. Other root imports in the same
+process can still load those shared modules.
+
+Use direct module paths at lazy-loading boundaries: mixing a
 static root import with a dynamic import of that same root can pull the runtime into the initial
 bundle. Also use dedicated subpaths for optional adapters and helpers intended for another
 runtime, such as the Node-safe Cloudflare AI Gateway helper. The Cloudflare package root

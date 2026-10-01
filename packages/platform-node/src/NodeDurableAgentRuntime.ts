@@ -10,6 +10,7 @@ import {
 } from "@effect-agent/storage-sqlite/sqlite-storage-failpoint";
 import { submissionLedgerLayer } from "@effect-agent/storage-sqlite/sqlite-submission-ledger";
 import {
+  exclusiveHostClientLayer,
   threadStoreLayer,
   storageFailpointLayer,
   type SqliteStorageInitializationError,
@@ -50,6 +51,7 @@ import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { type WakeScheduler } from "effect-agent/wake-scheduler";
 import type * as SqlClientService from "effect/sql/SqlClient";
 
+import { ExclusiveSqliteHost } from "./internal/exclusive-host.ts";
 import { NodeWakeSchedulerConfig, nodeWakeSchedulerLayer } from "./NodeWakeScheduler.ts";
 
 const PositiveMillis = Schema.Int.check(Schema.isGreaterThan(0));
@@ -498,18 +500,24 @@ export class NodeDurableAgentRuntime {
     >,
   ) {
     const assembled = Layer.unwrap(
-      Effect.map(configFromOptions(options), (config) => {
+      Effect.gen(function* () {
+        const config = yield* configFromOptions(options);
+        const exclusive = yield* ExclusiveSqliteHost;
         const nodeConfigLayer = Layer.succeed(NodeDurableAgentRuntimeConfig)(config);
 
-        const infrastructure = Layer.mergeAll(
+        const clientInfrastructure = Layer.mergeAll(
           sqliteStorageConfigLayer,
           storageFailpointLayer({
             filename: config.filename,
             failpoint: options.storageFailpoint,
           }),
-          SqliteClient.layer({ filename: config.filename }),
+          SqliteClient.layer({ filename: config.filename, disableWAL: exclusive }),
           NodeCrypto.layer,
         );
+
+        const infrastructure = exclusive
+          ? Layer.fresh(exclusiveHostClientLayer).pipe(Layer.provideMerge(clientInfrastructure))
+          : clientInfrastructure;
 
         const runtimeFailpointLayer =
           options.runtimeFailpoint === undefined
