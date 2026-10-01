@@ -154,7 +154,7 @@ export const completeBatch = (
     (options.mode !== undefined && report.mode !== options.mode) ||
     (options.cases !== undefined &&
       (report.cases?.length !== names.length ||
-        !names.every((name, index) => report.cases?.[index] === name)))
+        !workloads.every(({ name }, index) => report.cases?.[index] === name)))
   )
     return false;
 

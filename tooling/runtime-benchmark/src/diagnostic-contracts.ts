@@ -113,7 +113,7 @@ export const completeDiagnosticBatch = (
       (options.cases.length !== workloads.length ||
         report.cases?.length !== workloads.length ||
         !workloads.every(
-          ({ name }, index) => options.cases?.[index] === name && report.cases?.[index] === name,
+          ({ name }, index) => options.cases?.includes(name) && report.cases?.[index] === name,
         )))
   )
     return false;
