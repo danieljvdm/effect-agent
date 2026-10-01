@@ -209,8 +209,11 @@ const proof = Effect.gen(function* () {
     if (response.status !== 200 && !(operation === "run" && response.status === 502))
       return yield* fail(operation, response.status);
 
-    const evidence = yield* response.json.pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(Evidence)),
+    const body = yield* response.text.pipe(
+      Effect.mapError(() => fail(operation + ":transport-or-timeout", response.status)),
+    );
+
+    const evidence = yield* Schema.decodeEffect(Schema.fromJsonString(Evidence))(body).pipe(
       Effect.mapError(() => fail(operation + ":invalid-evidence", response.status)),
     );
 
@@ -332,8 +335,7 @@ const proof = Effect.gen(function* () {
             (error.stage === "evidence:transport-or-timeout" ||
               (error.stage === "evidence" &&
                 error.status !== null &&
-                error.status >= 500 &&
-                error.status <= 599))),
+                (error.status === 404 || (error.status >= 500 && error.status <= 599))))),
       }),
       Effect.timeout("1 minute"),
       Effect.mapError((error) =>

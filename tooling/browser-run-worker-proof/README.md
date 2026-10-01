@@ -31,8 +31,9 @@ and an independently fetched matching receipt. A model completion message or an 
 success alone cannot pass the gate.
 
 Before dispatch, the runner waits for authenticated evidence from a pristine
-Durable Object, retrying transient 5xx/transport failures at most five times within
-one minute. Static health alone does not prove the receiver is ready.
+Durable Object, retrying fresh-route 404 and transient 5xx/transport failures at most
+five times within one minute. Static health alone does not prove the receiver is ready.
+Authentication failures, invalid evidence, and nonpristine owners fail immediately.
 
 A read-only scrape preflight runs before browser creation. Transient 5xx/reset
 failures of that preflight may retry, at most twice. Read-only browser observations
