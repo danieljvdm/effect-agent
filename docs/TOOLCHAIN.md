@@ -258,12 +258,12 @@ Each attempt preserves its own evidence artifact, including failures. This gate 
 documented continuity scenario; it does not certify large-history startup or Cloudflare host
 performance.
 
-The [hosted checkout gate](../tooling/browser-run-worker-proof/README.md#ci-policy) runs six automated
-cases with `gpt-6-luna`, four concurrently. Checkout or cleanup failure blocks the release. Configure the `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` and narrow
+The [hosted checkout gate](../tooling/browser-run-worker-proof/README.md#ci-policy) runs one browser-agent checkout
+with `gpt-6-luna`, a bound test-buyer credential, and an independently checked receipt. Checkout or cleanup failure blocks the release. Configure the `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` and narrow
 `BROWSER_RENDERING_API_TOKEN` repository secrets and the `CLOUDFLARE_WORKERS_SUBDOMAIN` variable;
 it reuses `OPENAI_API_KEY`. Its report is retained for 30 days and recorded cleanup is retried after
 failure or cancellation. **Manual hosted checkout** also runs on demand for a selected revision.
-Only the version PR and an ungated publication trigger this paid matrix; changeset additions and
+Only the version PR and an ungated publication trigger this paid checkout; changeset additions and
 ordinary PRs do not, and CI never waits for human verification.
 
 The release PR always runs candidate builds and the required `ready` gate. It can reuse
@@ -295,7 +295,7 @@ For an authenticated manual release:
 2. Run `vp run changeset:version`, then `vp install`.
 3. Run `vp run ready`.
 4. Supply [live credentials](#live-credentials) and the [checkout environment](../tooling/browser-run-worker-proof/README.md#run)
-   for the exact clean candidate. Use one checkout repetition and `CHECKOUT_HUMAN=false`.
+   for the exact clean candidate. Use a fresh run ID and bound test-buyer password.
 5. Run `vp run release:publish --dry-run`, then
    `EFFECT_AGENT_LIVE=1 vp run --no-cache release:checked-publish`.
    Add `--otp <code>` if npm requests it.

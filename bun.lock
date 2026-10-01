@@ -404,8 +404,6 @@
         "@effect/platform-node": "catalog:",
         "effect": "catalog:",
         "effect-agent": "workspace:*",
-        "effect-cf": "catalog:",
-        "puppeteer-core": "catalog:",
       },
       "devDependencies": {
         "@cloudflare/workers-types": "catalog:",

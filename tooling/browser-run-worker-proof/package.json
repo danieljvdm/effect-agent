@@ -13,9 +13,7 @@
     "@effect/ai-openai": "catalog:",
     "@effect/platform-node": "catalog:",
     "effect": "catalog:",
-    "effect-agent": "workspace:*",
-    "effect-cf": "catalog:",
-    "puppeteer-core": "catalog:"
+    "effect-agent": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:",

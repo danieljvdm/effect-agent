@@ -19,10 +19,7 @@ jobs:
       CI: "true"
       VP_GIT_HOOKS: "0"
       CHECKOUT_MODEL: gpt-6-luna
-      CHECKOUT_REPETITIONS: "2"
-      CHECKOUT_CONCURRENCY: "4"
-      CHECKOUT_START_INTERVAL_MS: "1000"
-      CHECKOUT_HUMAN: "false"
+      CHECKOUT_EXPECTED_SHA: ${{ github.sha }}
     steps:
       - name: Check out the exact candidate
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -46,8 +43,11 @@ jobs:
         run: |
           set -euo pipefail
           CHECKOUT_TOKEN="$(openssl rand -hex 32)"
+          CHECKOUT_PASSWORD="$(openssl rand -hex 32)"
           echo "::add-mask::$CHECKOUT_TOKEN"
+          echo "::add-mask::$CHECKOUT_PASSWORD"
           echo "CHECKOUT_TOKEN=$CHECKOUT_TOKEN" >> "$GITHUB_ENV"
+          echo "CHECKOUT_PASSWORD=$CHECKOUT_PASSWORD" >> "$GITHUB_ENV"
           echo "CHECKOUT_RUN_ID=checkout-$(openssl rand -hex 6)" >> "$GITHUB_ENV"
       - name: Run the hosted checkout gate
         timeout-minutes: 25
@@ -82,5 +82,5 @@ jobs:
           name: checkout-manual-${{ github.run_id }}-${{ github.run_attempt }}
           path: tooling/browser-run-worker-proof/.checkout-proof/${{ env.CHECKOUT_RUN_ID }}/report.json
           include-hidden-files: true
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30

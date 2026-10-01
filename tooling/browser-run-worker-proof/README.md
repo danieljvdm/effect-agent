@@ -1,193 +1,124 @@
-# Hosted browser and checkout proof
+# Hosted checkout proof
 
-A real `effect-agent` buyer receives a purchase request and discovers a controlled store through
-ordinary browser observations. The store and payment pages run on separate HTTPS Workers;
-Cloudflare Browser Run supplies Chromium. A consumer-owned Durable Object retains the browser
-reference, authentication, cart, approval and payment-attempt ledger across requests.
+One ephemeral Worker serves a controlled store and a real model-driven buyer. Its
+`CheckoutRun` Durable Object owns the one-shot dispatch fence, private browser session,
+payment-attempt count, and receipt. The host uses BrowserUse over
+CloudflareInteractiveBrowser; the browser may reach only the fixture origin.
 
 ```text
-Alchemy test lifecycle
-  ├─ existing binding proof → Quick Actions, credentials, upload, scoped cleanup
-  ├─ shop Worker → CheckoutRun (SQLite) → retained Browser Run session
-  └─ payment Worker ← browser iframe / wallet redirect
-
-buyer → discover → cart → sign in → address / wallet verification → shipping → payment
-      → request approval → separate user request → submit once → inspect order history
+Alchemy Test → Worker + CheckoutRun → Cloudflare Browser Run
+  /run once → /shop/login → /shop/product → /shop/review
+             → POST /shop/pay (commits, returns 503) → /shop/orders
+  independent GET /evidence → POST /close → GET /evidence → destroy
 ```
 
-The binding proof serves its own source page so capture, scrape, screenshot and navigation checks
-do not depend on another site's markup. See the [browser guide](../../docs/guide/browser.md) for the production adapters.
-The example depends directly on `@cloudflare/puppeteer` for the binding proof and uses the public
-native `BrowserSessions` and `BrowserCredentialAccess` APIs for the buyer.
+The designated buyer is `buyer@example.test`. This store never contacts a payment
+processor or charges money. Model and Cloudflare usage still incur provider costs.
+Passing this proof establishes the controlled checkout behavior; it does not establish
+Stripe, Shop Pay, real payment, or human-takeover compatibility.
 
 ## What it checks
 
-Each isolated run starts with four units of inventory and a dummy account. The buyer must find one
-blue medium Everyday Shirt, choose standard shipping, and obtain approval for $42.12 USD. The
-runner validates the full server-recorded product, variant, quantity, address, shipping, tax,
-currency and payment result. It requires one order and exactly the expected payment attempts.
-An accidental second submission fails the proof even though the receiver refuses a second order.
+The buyer chooses one blue, medium Everyday Shirt and standard shipping. The runner
+independently checks every receipt field, including the designated buyer, delivery to
+123 Test Street, San Francisco, CA 94107, US, quantity one, subtotal 3400 cents,
+shipping 500 cents, tax 312 cents, total 4212 cents, USD, and paid status.
 
-| Scenario           | Embedded card                               | Accelerated wallet                                        | Expected attempts                      |
-| ------------------ | ------------------------------------------- | --------------------------------------------------------- | -------------------------------------- |
-| Success            | Dynamically mounted cross-origin card frame | Email, verification, saved address/card                   | paid                                   |
-| Correction         | Invalid saved ZIP plus primary-card decline | Saved-card decline                                        | declined, paid with backup             |
-| Ambiguous response | Payment commits; confirmation responds 503  | Same                                                      | paid; inspect history, no resubmission |
-| Human takeover     | —                                           | Operator enters verification and returns the same browser | paid                                   |
+The payment endpoint deliberately returns an ambiguous 503 after committing the receipt.
+The terminal submission tool submits once and reads browser order history; ordinary
+browser actions cannot submit payment. The runner requires exactly one payment attempt
+and an independently fetched matching receipt. A model completion message or an HTTP
+success alone cannot pass the gate.
 
-The generic browser tools expose observations, navigation, clicks, text entry, selections and
-credential filling. The buyer receives no selectors, click sequence or purchase API. Its owner
-allows only the two fixture origins and supplies dummy credentials through the native fill helper.
-Navigation, clicks, credential fills and waits return a page observation in the same tool result.
-If that read fails, the result retains the completed action and requests read-only recovery;
-it does not authorize repeating the input. Typing and option selection keep explicit observations
-so several fields can be edited before rereading the form.
-Observations include visible frames and current control values, so collapsed payment sections must
-be opened before their fields become observable. Each frame includes its ordered CSS iframe path;
-copy that path into browser and credential tools, with field selectors relative to the selected
-frame. A frame URL is not a selector. Dummy field values can be visible; this is not a
-credential-secrecy proof.
+A read-only scrape preflight runs before browser creation. Transient 5xx/reset
+failures of that preflight may retry, at most twice. Read-only browser observations
+also retry an attached-session read failure twice, using public execution evidence.
+The runner never retries `POST /run`
+or a purchase. Lost responses remain unresolved, and the Durable Object's persisted
+started fence refuses a replacement run. Closure persists a stop fence before
+acknowledgement so a suspended preflight cannot allocate a browser afterward.
 
-Approval belongs to the owner. The agent can request a pause but cannot grant approval. The runner
-approves the independently checked quote through a separate authenticated request. Changing cart,
-address, shipping or payment invalidates that approval. Each continuation starts a bounded agent
-Run and reattaches the same browser; agent conversation history is not persisted. This demonstrates
-consumer-owned browser continuity, not framework durable-thread replay.
-
-The owner fences a running request before dispatch. A lost request is unresolved and cannot start
-again automatically. A native attachment is scoped to one request; releasing it disconnects without
-closing the retained browser. An alarm enforces the session's twenty-minute lifetime. The runner
-closes the exact session before destroying its owner. Closure or destruction failure fails the gate
-and retains the Alchemy stage when browser recovery is still needed.
+The host injects `CHECKOUT_PASSWORD` through guarded credential input. It is a
+redacted Worker binding, not model input. This is host-owned credential injection,
+not coverage of the BrowserCredentialAccess helper. The separate control token
+authorizes `/run`, `/evidence`, and `/close`; fixture navigation never receives it.
+Worker observability is disabled. Reports contain no transcripts, raw exceptions,
+passwords, control tokens, session IDs, or private URLs.
 
 ## Run
 
-Required environment:
+Use a clean committed checkout. Required environment:
 
-| Variable                       | Purpose                                                                 |
-| ------------------------------ | ----------------------------------------------------------------------- |
-| `CLOUDFLARE_ACCOUNT_ID`        | Intended account; checked against Alchemy's resolved account            |
-| `CLOUDFLARE_API_TOKEN`         | Local deployment credential with Workers and Durable Object permissions |
-| `BROWSER_RENDERING_API_TOKEN`  | Narrow account-scoped Browser Run Write token                           |
-| `CLOUDFLARE_WORKERS_SUBDOMAIN` | Workers subdomain, without `.workers.dev`; also used for recovery       |
-| `OPENAI_API_KEY`               | Real model credential, injected by the operator's secret manager        |
-| `CHECKOUT_MODEL`               | Explicit OpenAI model ID                                                |
-| `CHECKOUT_TOKEN`               | Fresh random bearer token for the fixture control API                   |
-| `CHECKOUT_RUN_ID`              | Fresh lowercase letters/digits/hyphens, at most 24 characters           |
-| `CHECKOUT_REPETITIONS`         | 1–5 repetitions of every automated scenario; default 1                  |
-| `CHECKOUT_CONCURRENCY`         | 1–12 simultaneous checkout cases; default 4                             |
-| `CHECKOUT_START_INTERVAL_MS`   | Minimum interval between case admissions, 1000–60000 ms; default 1000   |
-| `CHECKOUT_HUMAN`               | `true` runs one operator takeover before the matrix; default `false`    |
+| Variable                       | Purpose                                                       |
+| ------------------------------ | ------------------------------------------------------------- |
+| `CHECKOUT_EXPECTED_SHA`        | Exact 40-character commit that must equal HEAD                |
+| `CHECKOUT_RUN_ID`              | Fresh lowercase letters/digits/hyphens, at most 24 characters |
+| `CHECKOUT_MODEL`               | Explicit model ID; CI uses gpt-6-luna                         |
+| `CHECKOUT_TOKEN`               | Fresh random control API bearer token                         |
+| `CHECKOUT_PASSWORD`            | Fresh random password for the designated fixture buyer        |
+| `OPENAI_API_KEY`               | Model provider credential                                     |
+| `CLOUDFLARE_ACCOUNT_ID`        | Intended account, checked against Alchemy's account           |
+| `CLOUDFLARE_API_TOKEN`         | Deployment credential; stays on the runner                    |
+| `BROWSER_RENDERING_API_TOKEN`  | Narrow account-scoped Browser Run Write token                 |
+| `CLOUDFLARE_WORKERS_SUBDOMAIN` | Workers subdomain without .workers.dev                        |
 
-The browser and OpenAI credentials enter only temporary Workers as secret bindings. The deployment
-credential stays local. Keep the bearer token, `.alchemy` state and temporary Live View file private.
-
-From the repository root, after injecting credentials:
+After supplying provider credentials through the environment or the
+[documented secret manager](../../docs/TOOLCHAIN.md#live-credentials):
 
 ```sh
+export CHECKOUT_EXPECTED_SHA="$(git rev-parse HEAD)"
 export CHECKOUT_RUN_ID="checkout-$(openssl rand -hex 6)"
 export CHECKOUT_TOKEN="$(openssl rand -hex 32)"
+export CHECKOUT_PASSWORD="$(openssl rand -hex 32)"
 export CHECKOUT_MODEL=gpt-6-luna
-export CHECKOUT_REPETITIONS=2
-export CHECKOUT_CONCURRENCY=4
-export CHECKOUT_HUMAN=false
 vp run --no-cache -F @effect-agent/example-browser-run-worker-proof prove:live
 ```
 
-The automated matrix runs four isolated checkouts at a time, admitting at most one new case per
-second. Actions and approval continuations within each checkout remain sequential. The binding
-proof starts once all three origins serve their fixtures, and finishes before the matrix starts;
-stage retirement waits for all case fibers, including interrupted children. Report updates are
-serialized and published atomically. Adjust concurrency and admission spacing to the account's
-browser and model limits.
+Missing configuration, a dirty checkout, a mismatched SHA, an existing report, or an
+occupied Worker name fails before deployment. Local Alchemy emulation is refused.
+The runner records its identity and pending report before provisioning the stage.
 
-Only the binding proof retries, and only when nothing can have taken effect. A provider protocol
-or navigation failure in its Quick Action stages (capture, scrape, screenshot) reruns the proof, up
-to three attempts; these stages run before any browser session opens. `infrastructureRetries` in
-the report lists each retry. Rate limits, later stages, and every checkout case failure fail the
-run: a case can allocate a browser before it fails, so it is never replaced.
+The ignored `.checkout-proof/<run>/report.json` in this workspace retains the commit,
+Worker name, dispatch status, sanitized independent evidence, failure stage/status,
+cleanup result, and total, checkout, and cleanup milliseconds. Total time includes
+deployment and retirement. Checkout time measures the single run request; cleanup time
+measures closure, its independent confirmation, and Worker retirement. Evidence is
+written atomically. A mismatched receipt is omitted rather than publishing unexpected
+identity or payload values.
 
-Human takeover is a separate, optional operator check. Set `CHECKOUT_HUMAN=true` explicitly to run
-it before the automated matrix. The runner prints the path to a temporary `live-view.txt` file. Open its private URL,
-enter the fixture code `246810`, and select **Verify and use saved details** within five minutes.
-Select **Done** if Live View offers it. The owner resumes after verification and an inactive provider
-handoff; no further browser action is needed. The URL is removed afterward and is never put in the
-report or model history. Automated runs never wait for an operator and do not establish human takeover.
+## Recovery
 
-The ignored `tooling/browser-run-worker-proof/.checkout-proof/<run>/report.json` records model,
-source commit/dirty state, policy, selected profile, completion rate, failures, observations, tool
-outcomes, model usage and finish reasons, server orders, attempt ledger and cleanup result.
-Click and credential-fill outcomes include the requested frame selectors, target selectors and
-credential field roles. Pseudo-selector text arguments become `[redacted]`; attribute literals are
-retained only for source-owned fixture names, types, titles and autocomplete tokens. URL/value
-attributes, URL schemes, escaped/encoded selectors and other literal-bearing selectors become `null`.
-These target records omit credential identifiers, material, session capabilities and raw exceptions.
+The runner closes the exact private browser session, independently reads its closed
+state, persists closure evidence, then destroys the Worker. Unconfirmed closure fails
+the gate and preserves the Worker and its Durable Object alarm for recovery. Destruction
+must also be confirmed by the Worker management API. A lost browser-acquisition reply
+without a session ID keeps cleanup unconfirmed and requires provider reconciliation;
+the owner is retained rather than claiming that no browser was created.
 
-Instrumented reports retain request-local monotonic spans for model calls, browser dispatch,
-observations, waits, attachment, approval/resume and exact closure. Each browser span identifies
-the model turn that requested it; model spans retain requested/resolved model IDs, tool names
-and reported tokens. An observation-only turn can therefore be counted independently from an
-observation tool call. Observation sizes are UTF-8 bytes. Missing usage and browser protocol
-counts remain unavailable; provider costs are unpriced, not zero.
-
-Case elapsed time starts before seeding and ends after exact browser closure, including approval
-requests and cleanup. Admission queueing is excluded from cases and included in matrix time.
-Deployment, readiness, the binding proof and retirement have separate totals. Spans may nest or
-overlap: do not add their durations to estimate wall time. Timing adds two synchronous SQLite
-writes per span and native response metadata collection; hosted comparisons must use the same
-instrumentation. Worker clocks may coarsen synchronous work; zero-duration spans do not imply
-zero cost. Running spans survive process loss; interruption retains finalizer outcomes.
-
-Each request has a five-minute duration, 60-turn, 120-tool-call and 500,000-token budget; each
-scenario permits at most six continuations.
-Provider/model work costs money. Repetitions use fresh stores and browsers; failed attempts are
-retained without automatic model or purchase retries. Deterministic fixtures do not make model
-actions deterministic.
-
-If interrupted, retain the same configuration and `.alchemy` directory, then run only recovery:
+Keep the same clean revision, environment, report, and private `.alchemy` directory.
+Recovery performs closure and retirement only:
 
 ```sh
 CHECKOUT_CLEANUP=true vp run --no-cache -F @effect-agent/example-browser-run-worker-proof prove:live
 ```
 
-Recovery reads the existing report, closes its recorded sessions, destroys the same Alchemy stage,
-and confirms all three Worker scripts are absent. Browser retirement is recorded atomically before
-Worker teardown, so recovery also handles an already-absent owner. It never deploys or reruns purchases. A fresh
-attempt needs a fresh run ID; existing evidence cannot be overwritten. Hard termination can prevent
-local finalizers, so the owner alarm and explicit recovery remain necessary.
-
-## Provider evidence and limits
-
-The fixture reproduces interaction patterns, not provider branding or payment processing.
-
-| Provider | Simulated here                                                                                                                     | Separate verification and blockers                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| -------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Stripe   | Mounted card fields in an independent-origin frame, validation, card replacement, final review, decline and uncertain confirmation | Public [checkout demo](https://checkout.stripe.dev/) inspected without payment submission. No actual payment compatibility established. Stripe explicitly [does not support automated UI tests](https://docs.stripe.com/automated-testing) of Checkout/Payment Element; its [sandbox API tests](https://docs.stripe.com/testing) are a separate integration boundary. No Stripe sandbox credential is configured for this proof.                                                                                                                                                                         |
-| Shop Pay | Email-first redirect, six-digit verification, saved address/card, shipping and final review                                        | Pattern follows the [documented buyer checkout](https://help.shop.app/en/shop/shop-pay/check-out). No provider checkout was completed: no Shopify development store or test Shop account is available. Shopify's [Shop Pay testing setup](https://shopify.dev/docs/apps/build/checkout/test-checkout-ui-extensions) requires a development store, Shopify Payments test mode, a Shop account with a vaulted test card, and phone verification. [Test-mode guidance](https://help.shopify.com/en/manual/payments/shopify-payments/testing-shopify-payments) covers test cards, not Shop Pay Installments. |
-
-Passing this controlled receiver never establishes Stripe or Shop Pay compatibility. Genuine
-provider checks require the supported sandbox setup and their own receipts; do not substitute a
-clone result. Real funds, fulfillment, live accounts, fraud systems, 3DS and installment eligibility
-are outside this fixture.
+Recovery never deploys or calls `/run`. An absent owner is acceptable after recorded
+closure, or when no run was dispatched. Otherwise it fails clearly. Successful cleanup
+does not turn a failed checkout into passing evidence. Use a fresh run ID for a new
+attempt; existing evidence cannot be overwritten.
 
 ## CI policy
 
-Ordinary PR CI runs deterministic state tests, lifecycle failure/interruption tests, and the local
-workerd receiver checks without credentials or deployment. The Changesets version PR runs this proof
-as a release gate on its exact head commit through the reusable `release-gates.yml` workflow, with
-one repetition (six cases); its `ready` check requires the gate. See
-[Releasing to npm](../../docs/TOOLCHAIN.md#releasing-to-npm) for how publication reuses that result.
-Adding a changeset or opening an ordinary PR does not trigger a hosted run. Checkout or cleanup
-failure blocks the release.
+Ordinary PR CI runs the local workerd receiver proof without deployment or credentials.
+The Changesets version PR runs one hosted checkout on its exact head through
+`release-gates.yml`, required by `ready`. Publication reuses that proof only under
+the repository's existing release revision policy. The manual hosted checkout workflow
+also runs one attempt at the selected dispatch commit.
 
-For an on-demand run, select **Manual hosted checkout** in GitHub Actions and choose a trusted
-branch or tag. It checks out that dispatch's exact commit and sets its own repetitions. Both
-workflows use `gpt-6-luna`, concurrency four, one-second admission spacing, and
-`CHECKOUT_HUMAN=false`. Only an explicit local operator run establishes human takeover coverage.
-
-Configure the `OPENAI_API_KEY`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, and narrow
-`BROWSER_RENDERING_API_TOKEN` repository secrets, plus the `CLOUDFLARE_WORKERS_SUBDOMAIN` variable.
-Each attempt generates a fresh run ID and masked control token. Both workflows retry recorded
-cleanup after failure or cancellation and retain `report.json`, including failed results, for 30 days.
-Never upload `.alchemy` or `live-view.txt` as CI artifacts. Hard runner termination can still prevent
-cleanup; use the recorded run ID to inspect remaining Workers and their browser-owner alarms.
+Both workflows generate and mask the control token and buyer password, retry recorded
+cleanup after failure or cancellation, and retain only `report.json` for 30 days.
+Missing evidence, failed checkout, or unconfirmed cleanup fails the job. Never upload
+`.alchemy`, credentials, or private session capabilities. Hard runner termination
+can prevent finalizers and lose local Alchemy state; the retained Worker alarm remains
+the fallback for closing its browser. Preserve private deployment state securely when
+manual retirement is needed.

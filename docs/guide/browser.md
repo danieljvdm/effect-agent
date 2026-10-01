@@ -548,8 +548,8 @@ nor payment acceptance. Inspect the site's result separately. An error's dispatc
 and cleanup retain partial-write and termination evidence; an uncertain fill must not be retried
 automatically. Confirmed cleanup does not undo website effects.
 
-The [runnable Worker proof](https://github.com/danieljvdm/effect-agent/blob/main/tooling/browser-run-worker-proof/src/credentials.ts)
-uses dummy credentials, continues with ordinary observations, and reattaches the same session.
+The [runnable Worker proof](https://github.com/danieljvdm/effect-agent/blob/main/tooling/browser-run-worker-proof/src/worker.ts)
+uses a host-bound dummy login and guarded interactive input, then independently verifies a test checkout. It does not exercise `BrowserCredentialAccess` or card filling.
 
 ### Replace the removed Protected Browser API
 
@@ -641,14 +641,12 @@ describe action timing and lifecycle details.
 ## Hosted browser and checkout proof
 
 The repository includes an [opt-in temporary deployment proof](https://github.com/danieljvdm/effect-agent/tree/main/tooling/browser-run-worker-proof).
-It exercises the hosted Browser Run binding with Markdown capture, selector scrape, PNG screenshot,
-an interactive pass, credentials and uploads. A real buyer then discovers a multi-step store,
-uses cross-origin card fields or an accelerated wallet, pauses for approval, and resumes the same
-browser through a consumer-owned Durable Object. The server checks the exact purchase and every
-payment attempt, including declines and uncertain confirmations. An operator profile adds human
-takeover and return. Alchemy owns deployment and teardown; reports retain unsuccessful attempts.
-It needs Cloudflare and model credentials. Its README documents the command, recovery, deliberate
-CI policy, and the distinction between simulated checkout behavior and actual provider compatibility.
+It runs one real buyer with `BrowserUse` and the Cloudflare interactive browser against a test-only
+store. A host-bound password authenticates the designated buyer. The terminal submission Tool
+places the approved order once and reads its receipt after an ambiguous confirmation; the runner
+independently checks the exact purchase and submission count. Alchemy owns deployment and teardown.
+Its README documents credentials, revision checks, recovery, CI policy, and the limits of this
+controlled checkout. It does not establish payment-provider compatibility.
 
 ## Next steps
 
