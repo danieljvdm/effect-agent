@@ -13,6 +13,7 @@ import {
   type BindingSelection,
   type ResolvedBinding,
 } from "effect-agent/agent-registration";
+import * as AgentUpdates from "effect-agent/agent-updates";
 import { estimatePromptTokens } from "effect-agent/compaction";
 import { CompactionError, ContextCompactor } from "effect-agent/context-compactor";
 import { type DurableSubmitOptions } from "effect-agent/durable-agent-runtime";
@@ -811,13 +812,18 @@ export const searchDefinition = Agent.make("cf-search", {
 const BookTool = Tool.make("book", {
   parameters: Schema.Struct({ ref: Schema.String }),
   success: Schema.Struct({ confirmation: Schema.String }),
+  failure: AgentUpdates.UpdateError,
+  dependencies: [AgentUpdates.Emitter],
 });
 
 export const bookTools = Toolkit.make(BookTool);
 /** Lose the RPC reply after the external action, without claiming a safe-to-retry failure. */
 export const lostBookReplies = new Set<string>();
 
-export const bookToolHolds = new Map<string, Effect.Effect<void>>();
+export const bookToolHolds = new Map<
+  string,
+  Effect.Effect<void, AgentUpdates.UpdateError, AgentUpdates.Emitter>
+>();
 
 export const bookToolLayer = bookTools.toLayer({
   book: ({ ref }) =>
@@ -835,6 +841,7 @@ export const bookToolLayer = bookTools.toLayer({
 export const bookDefinition = Agent.make("cf-book", {
   input: FixtureInput,
   output: FixtureOutput,
+  updates: Schema.String,
   instructions: ({ ref }) => `Book it. [ref:${ref}]`,
   toolkit: bookTools,
   policy: AgentPolicy.make({ ...fixturePolicy, maxDuration: "5 minutes" }),

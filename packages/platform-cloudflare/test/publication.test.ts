@@ -1,8 +1,13 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Clock, Effect, Option, Schema } from "effect";
+import * as AgentUpdates from "effect-agent/agent-updates";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { ThreadId } from "effect-agent/identifiers";
-import { ApprovalDecisionCommand, SubmissionLedger } from "effect-agent/submission-ledger";
+import {
+  ApprovalDecisionCommand,
+  IdempotencyKey,
+  SubmissionLedger,
+} from "effect-agent/submission-ledger";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -187,6 +192,144 @@ const latch = () => {
 };
 
 describe("durable host publication", () => {
+  // Regressions: https://github.com/danieljvdm/effect-agent/pull/713 and
+  // https://github.com/danieljvdm/effect-agent/pull/715 publish only the start prefix during work.
+  // The existing held-Tool case has no intermediate updates; hold real execution and
+  // the destination independently to expose publication lag without timing a provider.
+  it(
+    "publishes ordered update waves during a held tool without gating native completion",
+    () =>
+      withThread(async (thread, _now, advance) => {
+        const entered = latch();
+        const emit = latch();
+        const updated = latch();
+        const release = latch();
+        const acknowledgeStart = latch();
+        const acknowledgeCompletion = latch();
+        const summaries = Array.from({ length: 12 }, (_, index) => `progress-${index}`);
+
+        lifecyclePublicationControls.set(thread, { release: acknowledgeStart.promise });
+        bookToolHolds.set(
+          thread,
+          Effect.gen(function* () {
+            entered.resolve();
+            yield* Effect.promise(() => emit.promise);
+            for (const summary of summaries)
+              yield* AgentUpdates.emit(bookDefinition, summary, {
+                idempotencyKey: Schema.decodeSync(IdempotencyKey)(summary),
+              });
+            updated.resolve();
+            yield* Effect.promise(() => release.promise);
+          }),
+        );
+        await submit(thread, bookDefinition);
+        const running = alarm(thread);
+
+        try {
+          await entered.promise;
+          await vi.waitFor(() => expect(lifecycleBatches.get(thread)?.length).toBeGreaterThan(0));
+          // A five-second destination delay must not prevent the Tool from committing updates.
+          await advance(5_000);
+          emit.resolve();
+          await updated.promise;
+
+          const canonical = (await readCanonical(thread, namespace)).filter(
+            ({ record }) => record.payload._tag === "AgentUpdateEmitted",
+          );
+
+          expect(canonical).toHaveLength(12);
+          expect(await allSettled(thread, namespace)()).toBe(false);
+          lifecyclePublicationControls.delete(thread);
+          acknowledgeStart.resolve();
+          await vi.waitFor(
+            () => {
+              const updates = (lifecycleBatches.get(thread) ?? [])
+                .flat()
+                .filter(({ fact }) => fact._tag === "AgentUpdateEmitted");
+
+              expect(updates.map(({ id }) => id)).toEqual(
+                canonical.map(({ record }) => JSON.stringify([thread, "record", record.recordId])),
+              );
+            },
+            { timeout: 2_000 },
+          );
+          await vi.waitFor(async () => {
+            expect(
+              (await lifecycleRows(thread)).every(({ payload_json }) => payload_json === null),
+            ).toBe(true);
+          });
+          const progress = (lifecycleBatches.get(thread) ?? []).flat();
+
+          expect(
+            progress
+              .filter(({ fact }) => fact._tag === "AgentUpdateEmitted")
+              .map(({ fact }) =>
+                fact._tag === "AgentUpdateEmitted" ? fact.update.value : undefined,
+              ),
+          ).toEqual(summaries);
+          expect(progress.some(({ fact }) => fact._tag === "SubmissionSettled")).toBe(false);
+          expect((lifecycleBatches.get(thread) ?? []).every((batch) => batch.length <= 8)).toBe(
+            true,
+          );
+          expect(
+            (lifecycleBatches.get(thread) ?? []).filter((batch) =>
+              batch.some(({ fact }) => fact._tag === "AgentUpdateEmitted"),
+            ),
+          ).toHaveLength(2);
+          expect(progress.map(({ ordinal }) => ordinal)).toEqual(
+            progress.map(({ ordinal }) => ordinal).sort((a, b) => a - b),
+          );
+
+          lifecyclePublicationControls.set(thread, { release: acknowledgeCompletion.promise });
+          release.resolve();
+          await vi.waitFor(async () => expect(await allSettled(thread, namespace)()).toBe(true));
+          await vi.waitFor(() =>
+            expect(
+              (lifecycleBatches.get(thread) ?? [])
+                .flat()
+                .some(({ fact }) => fact._tag === "SubmissionSettled"),
+            ).toBe(true),
+          );
+          expect(
+            (await lifecycleRows(thread)).some(({ payload_json }) => payload_json !== null),
+          ).toBe(true);
+        } finally {
+          emit.resolve();
+          release.resolve();
+          acknowledgeStart.resolve();
+          acknowledgeCompletion.resolve();
+          await running;
+        }
+        await quiesce(thread, advance);
+        const facts = (lifecycleBatches.get(thread) ?? []).flat();
+
+        expect(new Set(facts.map(({ id }) => id)).size).toBe(facts.length);
+        expect(
+          (await lifecycleRows(thread)).every(({ payload_json }) => payload_json === null),
+        ).toBe(true);
+      }, true),
+    20_000,
+  );
+
+  // The user requested test-first recovery proof for retiring the persisted lane introduced by
+  // https://github.com/danieljvdm/effect-agent/pull/715. Ordinary fresh-Object checks cannot
+  // expose an unhandled old due row. Written and passed on the baseline before changing lanes.
+  it("recovers a pending start-only lane from an older Object incarnation", () =>
+    withThread(async (thread, _now, advance) => {
+      await submit(thread);
+      await quiesce(thread, advance);
+      const receipts = await lifecycleRows(thread);
+
+      await runInDurableObject(stub(thread), (_, state) => {
+        DueQueue.make(state.storage).dirty("effect-agent:lifecycle-start", 0);
+        state.abort("reopen with the previous lifecycle lane");
+      }).catch(() => undefined);
+      await alarm(thread);
+      await quiesce(thread, advance);
+      expect(await lifecycleRows(thread)).toEqual(receipts);
+      expect(await scheduledAlarm(thread, namespace)).toBeNull();
+    }, true));
+
   // Regression: 405916b0 cleared concurrent publication after the first eight-fact batch.
   // A single-admission Run cannot expose start progress hidden behind queued readiness facts.
   it("publishes start progress behind a queued backlog while the provider remains held", () =>
@@ -255,7 +398,7 @@ describe("durable host publication", () => {
         runInDurableObject(stub(thread), (_, state) =>
           DueQueue.make(state.storage)
             .read()
-            .find((row) => row.id === DueQueue.LifecycleStart),
+            .find((row) => row.id === DueQueue.Lifecycle),
         );
 
       let heldStateVerified = false;

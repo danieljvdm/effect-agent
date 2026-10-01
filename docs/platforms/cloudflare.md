@@ -494,8 +494,9 @@ const RuntimeLive = ThreadObject.layer(registrations, {
 
 Source transactions durably retain publication intent. A Run's start, or a Subagent's actual
 start, retains the ordered prefix through that record before execution continues. An independent
-maintenance wave publishes that prefix while native work runs; later canonical facts stay in the
-journal until the settlement wave materializes them together. Ledger and delivery facts retain
+maintenance lane publishes that prefix and subsequent progress while native work runs. Each finite
+wave materializes a bounded journal suffix and publishes ordered owner batches; committed debt
+and retry deadlines schedule continuation, with no idle polling. Ledger and delivery facts retain
 their own source receipts. Attempts, model calls, input joins, and handoffs continue while
 publication is pending or failing. Eviction reconstructs unmaterialized intent from the journal.
 
