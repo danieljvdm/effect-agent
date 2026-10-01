@@ -30,12 +30,12 @@ const stack = Effect.gen(function* () {
   const docs = yield* Cloudflare.Website.StaticSite("Docs", {
     name: "effect-agent-docs",
     command: "vp run docs:build",
-    outdir: "docs/.vitepress/dist",
+    outdir: "docs/dist",
     domain: "effect-agent.com",
     workersDev: false,
     dev: { command: "vp run docs:dev" },
-    // VitePress emits 404.html; its cleanUrls links match the default
-    // auto-trailing-slash HTML handling.
+    // Astro emits directory indexes and 404.html. Existing extensionless
+    // links redirect to the same page with a trailing slash.
     assets: { notFoundHandling: "404-page" },
     // The dist and cache directories are gitignored, so hashing docs/**
     // rebuilds exactly when a source page or the site config changes;

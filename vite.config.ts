@@ -96,6 +96,7 @@ const generatedPaths = [
   ".claude/**",
   // Local and CI output from scripts/build-action.ts.
   "action/dist/**",
+  "docs/.astro/**",
   "examples/travel-planner/src/routeTree.gen.ts",
 ];
 
