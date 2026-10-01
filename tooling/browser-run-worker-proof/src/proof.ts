@@ -2,6 +2,27 @@ import { Schema } from "effect";
 
 export const RunId = Schema.String.check(Schema.isPattern(/^[a-z0-9-]{1,24}$/));
 
+/** Source-authored diagnostics only; never publish provider text or session capabilities. */
+export const WorkerFailure = Schema.Literals([
+  "scrape:PageCaptureNavigationError",
+  "scrape:PageCaptureProtocolError",
+  "scrape:PageCaptureRateLimitedError",
+  "scrape:PageCaptureOutputLimitError",
+  "scrape:PageCaptureUnsupportedError",
+  "scrape:TimeoutError",
+  "scrape:assertion",
+  "authority",
+  "cleanup",
+  "InteractiveBrowserActionError",
+  "InteractiveBrowserProtocolError",
+  "InteractiveBrowserCapacityError",
+  "InteractiveBrowserPolicyDeniedError",
+  "BrowserRunCleanupError",
+  "AgentModelError",
+  "AgentBudgetExceeded",
+  "worker-failure",
+]);
+
 export const Receipt = Schema.Struct({
   buyer: Schema.String,
   product: Schema.String,

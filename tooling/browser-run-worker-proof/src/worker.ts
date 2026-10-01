@@ -29,7 +29,7 @@ import {
 import { Tool, Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 
-import { CheckoutError, Evidence, Receipt } from "./proof.ts";
+import { CheckoutError, Evidence, Receipt, WorkerFailure } from "./proof.ts";
 
 type Env = Cloudflare.Env;
 const buyer = "buyer@example.test";
@@ -200,7 +200,9 @@ export class CheckoutRun extends DurableObject<Env> {
         schedule: Schedule.exponential("2 seconds"),
         while: (error) => "cause" in error && transient(error.cause),
       }),
-      Effect.mapError((error) => CheckoutError.make({ stage: "scrape", message: error._tag })),
+      Effect.mapError((error) =>
+        CheckoutError.make({ stage: `scrape:${error._tag}`, message: error._tag }),
+      ),
     );
 
     if (
@@ -209,7 +211,10 @@ export class CheckoutRun extends DurableObject<Env> {
         group.results.some((item) => item.text.includes("checkout-proof-v2")),
       )
     )
-      return yield* CheckoutError.make({ stage: "scrape", message: "Fixture assertion failed" });
+      return yield* CheckoutError.make({
+        stage: "scrape:assertion",
+        message: "Fixture assertion failed",
+      });
     if (this.stopped)
       return yield* CheckoutError.make({
         stage: "authority",
@@ -606,7 +611,17 @@ export class CheckoutRun extends DurableObject<Env> {
             ? Schema.decodeOption(Schema.Struct({ _tag: Schema.String }))(found.success)
             : Option.none();
 
-          const tag = Option.isSome(error) ? error.value._tag : "Defect";
+          const code =
+            Result.isSuccess(found) && Schema.is(CheckoutError)(found.success)
+              ? found.success.stage
+              : Option.isSome(error)
+                ? error.value._tag
+                : "worker-failure";
+
+          const tag = Option.getOrElse(
+            Schema.decodeUnknownOption(WorkerFailure)(code),
+            () => "worker-failure",
+          );
 
           this.ctx.storage.kv.put("failure", tag);
 

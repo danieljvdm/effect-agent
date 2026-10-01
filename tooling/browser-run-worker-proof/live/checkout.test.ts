@@ -17,7 +17,7 @@ import {
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { Evidence, type Receipt, RunId } from "../src/proof.ts";
+import { Evidence, type Receipt, RunId, WorkerFailure } from "../src/proof.ts";
 import { checkoutStack } from "../src/stack.ts";
 
 const lifecycle = Test.make({ providers: Cloudflare.providers(), dev: false });
@@ -83,7 +83,13 @@ const publicEvidence = (evidence: typeof Evidence.Type): typeof Evidence.Type =>
   receipt: receiptMatches(evidence) ? evidence.receipt : null,
   closed: evidence.closed,
   scrapeAttempts: evidence.scrapeAttempts,
-  failure: evidence.failure === null ? null : "worker-failure",
+  failure:
+    evidence.failure === null
+      ? null
+      : Option.getOrElse(
+          Schema.decodeUnknownOption(WorkerFailure)(evidence.failure),
+          () => "worker-failure",
+        ),
 });
 
 const proof = Effect.gen(function* () {
@@ -351,7 +357,8 @@ const proof = Effect.gen(function* () {
     report = { ...report, evidence: publicEvidence(observed.evidence) };
     yield* save();
     if (Exit.isFailure(executed)) return yield* safeFailure(executed.cause);
-    if (executed.value.status !== 200) return yield* fail("run", executed.value.status);
+    if (executed.value.status !== 200)
+      return yield* fail("run:" + publicEvidence(observed.evidence).failure, executed.value.status);
     const evidence = observed.evidence;
 
     if (
