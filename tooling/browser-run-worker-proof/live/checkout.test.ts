@@ -333,7 +333,6 @@ const proof = Effect.gen(function* () {
       ),
       Effect.timeout("10 seconds"),
       Effect.retry({
-        times: 5,
         schedule: Schedule.spaced("2 seconds"),
         while: (error) =>
           error._tag === "TimeoutError" ||
