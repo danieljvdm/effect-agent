@@ -22,6 +22,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:",
     "@types/node": "catalog:",
+    "alchemy": "catalog:",
     "esbuild": "catalog:",
     "miniflare": "catalog:",
     "typescript": "catalog:",
