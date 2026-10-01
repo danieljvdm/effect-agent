@@ -39,7 +39,7 @@ const safeFailure = <E>(cause: Cause.Cause<E>) => {
 };
 
 const Report = Schema.Struct({
-  version: Schema.Literal(2),
+  version: Schema.Literal(3),
   runId: RunId,
   workerName: Schema.String,
   sourceCommit: Commit,
@@ -78,6 +78,7 @@ const receiptMatches = (evidence: typeof Evidence.Type) =>
 
 // Persist only known fixture values. A malformed receipt or free-form failure is never published.
 const publicEvidence = (evidence: typeof Evidence.Type): typeof Evidence.Type => ({
+  phase: evidence.phase,
   started: evidence.started,
   attempts: evidence.attempts,
   receipt: receiptMatches(evidence) ? evidence.receipt : null,
@@ -244,7 +245,7 @@ const proof = Effect.gen(function* () {
     if (status !== 404) return yield* fail("worker-name:unavailable", status);
     yield* fs.makeDirectory(directory, { recursive: true });
     report = {
-      version: 2,
+      version: 3,
       runId: run,
       workerName,
       sourceCommit,

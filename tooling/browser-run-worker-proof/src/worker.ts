@@ -29,7 +29,7 @@ import {
 import { Tool, Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 
-import { CheckoutError, Evidence, Receipt, WorkerFailure } from "./proof.ts";
+import { CheckoutError, CheckoutPhase, Evidence, Receipt, WorkerFailure } from "./proof.ts";
 
 type Env = Cloudflare.Env;
 const buyer = "buyer@example.test";
@@ -128,6 +128,9 @@ const transient = (cause: unknown): boolean => {
 
 /** One owner retains only the dispatch fence, receipt, and private exact-session cleanup ID. */
 export class CheckoutRun extends DurableObject<Env> {
+  private phase(value: typeof CheckoutPhase.Type) {
+    this.ctx.storage.kv.put("phase", value);
+  }
   private read = <S extends Schema.Top & { readonly DecodingServices: never }>(
     key: string,
     schema: S,
@@ -138,6 +141,7 @@ export class CheckoutRun extends DurableObject<Env> {
   }
   private evidence() {
     return Evidence.make({
+      phase: this.read("phase", CheckoutPhase, "idle"),
       started: this.read("started", Schema.Boolean, false),
       attempts: this.read("attempts", Schema.Natural, 0),
       receipt: this.read("receipt", Schema.NullOr(Receipt), null),
@@ -175,6 +179,7 @@ export class CheckoutRun extends DurableObject<Env> {
     if (this.evidence().started || this.stopped)
       return new Response("Attempt already started; never replay it", { status: 409 });
     this.ctx.storage.kv.put("started", true);
+    this.phase("scrape");
 
     const capture = browserQuickActionCaptureLayer().pipe(
       Layer.provide(BrowserQuickActionBrowserBinding.layer({ browser: this.env.BROWSER })),
@@ -234,6 +239,8 @@ export class CheckoutRun extends DurableObject<Env> {
       });
     }
 
+    this.phase("acquire");
+
     const acquired = yield* host.acquire(
       InteractiveBrowserPolicy.make({
         network: { _tag: "ExactHosts", allowedHosts: [new URL(origin).host] },
@@ -253,9 +260,11 @@ export class CheckoutRun extends DurableObject<Env> {
         message: "Run was closed during acquisition",
       });
     }
+    this.phase("connect");
     const session = yield* acquired.connect;
     const handle = session.handle;
 
+    this.phase("navigate");
     yield* handle.navigate(BrowserNavigateRequest.make({ url: `${origin}/shop/login` }));
     let raw: typeof BrowserRunPageObservation.Type | undefined;
     const refs = new Map<string, (typeof BrowserRunPageObservation.Type.controls)[number]>();
@@ -277,6 +286,8 @@ export class CheckoutRun extends DurableObject<Env> {
       });
 
     const observe = Effect.gen({ self: this }, function* () {
+      this.phase("observe");
+
       const result = yield* handle.readText(BrowserReadTextRequest.make({})).pipe(
         Effect.retry({
           times: 2,
@@ -495,6 +506,7 @@ export class CheckoutRun extends DurableObject<Env> {
       ),
     );
 
+    this.phase("agent");
     yield* AgentRuntime.run(agent, `Buy the approved test order. Ship to ${address}.`).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -505,9 +517,11 @@ export class CheckoutRun extends DurableObject<Env> {
         ),
       ),
     );
+    this.phase("close");
     yield* session.close;
     this.ctx.storage.kv.put("closed", true);
     yield* Effect.promise(() => this.ctx.storage.deleteAlarm());
+    this.phase("complete");
 
     return Response.json(this.evidence());
   }, Effect.scoped);
@@ -611,12 +625,20 @@ export class CheckoutRun extends DurableObject<Env> {
             ? Schema.decodeOption(Schema.Struct({ _tag: Schema.String }))(found.success)
             : Option.none();
 
+          const defect = Cause.findDefect(cause);
+
+          const defectName = Result.isSuccess(defect)
+            ? Schema.decodeUnknownOption(Schema.Struct({ name: WorkerFailure }))(defect.success)
+            : Option.none();
+
           const code =
             Result.isSuccess(found) && Schema.is(CheckoutError)(found.success)
               ? found.success.stage
               : Option.isSome(error)
                 ? error.value._tag
-                : "worker-failure";
+                : Option.isSome(defectName)
+                  ? defectName.value.name
+                  : "worker-failure";
 
           const tag = Option.getOrElse(
             Schema.decodeUnknownOption(WorkerFailure)(code),

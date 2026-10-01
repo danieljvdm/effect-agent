@@ -17,12 +17,38 @@ export const WorkerFailure = Schema.Literals([
   "InteractiveBrowserProtocolError",
   "InteractiveBrowserCapacityError",
   "InteractiveBrowserPolicyDeniedError",
+  "InteractiveBrowserBusyError",
+  "InteractiveBrowserExpiredError",
+  "InteractiveBrowserLimitError",
+  "InteractiveBrowserUnsupportedError",
   "BrowserRunCleanupError",
+  "BrowserUseError",
+  "SchemaError",
   "AiError",
   "AgentPolicyError",
   "AgentOutputError",
   "ModelProtocolError",
+  "TypeError",
+  "ReferenceError",
+  "RangeError",
+  "SyntaxError",
   "worker-failure",
+]);
+
+export const CheckoutPhase = Schema.Literals([
+  "idle",
+  "scrape",
+  "acquire",
+  "connect",
+  "navigate",
+  "agent",
+  "observe",
+  "act",
+  "credential",
+  "submit",
+  "receipt",
+  "close",
+  "complete",
 ]);
 
 export const Receipt = Schema.Struct({
@@ -42,6 +68,7 @@ export const Receipt = Schema.Struct({
 });
 
 export const Evidence = Schema.Struct({
+  phase: CheckoutPhase,
   started: Schema.Boolean,
   attempts: Schema.Natural,
   receipt: Schema.NullOr(Receipt),
