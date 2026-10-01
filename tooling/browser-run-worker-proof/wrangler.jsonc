@@ -9,4 +9,18 @@
   "browser": {
     "binding": "BROWSER",
   },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CHECKOUTS",
+        "class_name": "CheckoutRun",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["CheckoutRun"],
+    },
+  ],
 }

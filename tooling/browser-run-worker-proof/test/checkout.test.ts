@@ -1,260 +1,21 @@
 import { fileURLToPath } from "node:url";
 
-import { CredentialFillResult } from "@effect-agent/platform-cloudflare/browser-credentials";
-import {
-  BrowserSessionError,
-  BrowserSessionReference,
-  BrowserSessions,
-  type BrowserSession,
-} from "@effect-agent/platform-cloudflare/browser-session";
 import { assert, it } from "@effect/vitest";
-import { Cause, Effect, Exit, Redacted, Schema, Stream } from "effect";
+import { Effect, Schema } from "effect";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 
-import { buyerTools, CheckoutOwner, tools } from "../src/checkout-agent.ts";
-import { browserSessionFailure, RunEvidence, savedAddress } from "../src/checkout-contract.ts";
-import { assertPurchase, makeShop, quote, transition } from "../src/checkout-store.ts";
-import {
-  describeBrowserRunProofFailure,
-  describeBrowserRunProofFailureFromStream,
-} from "../src/contract.ts";
+import { Evidence } from "../src/proof.ts";
 
-it("retains safe failure stages and browser session reasons in checkout evidence", () => {
-  assert.strictEqual(
-    describeBrowserRunProofFailure(502, {
-      error: "The Browser Run binding proof failed",
-      stage: "handoff",
-      cleanupReason: "timeout",
-      cleanupStatus: 504,
-    }),
-    "HTTP 502; stage=handoff; cleanup=timeout; cleanupStatus=504",
-  );
-  assert.strictEqual(
-    describeBrowserRunProofFailure(502, {
-      error: "The Browser Run binding proof failed",
-      stage: "handoff",
-      cleanupStatus: 504,
-    }),
-    "HTTP 502; stage=handoff; cleanupStatus=504",
-  );
-  assert.strictEqual(
-    describeBrowserRunProofFailure(502, { error: "private provider response" }),
-    "HTTP 502",
-  );
-  assert.strictEqual(
-    browserSessionFailure(
-      Cause.fail(
-        BrowserSessionError.make({
-          reason: "busy",
-          dispatch: "not-dispatched",
-          cleanup: "unconfirmed",
-        }),
-      ),
-    ),
-    "BrowserSessionError reason=busy dispatch=not-dispatched cleanup=unconfirmed",
-  );
-});
-
-it.effect("bounds the binding failure response body", () =>
-  Effect.gen(function* () {
-    const response = (body: string) =>
-      describeBrowserRunProofFailureFromStream(502, Stream.make(new TextEncoder().encode(body)));
-
-    const fallback = "HTTP 502";
-
-    assert.strictEqual(
-      yield* response(
-        JSON.stringify({ error: "The Browser Run binding proof failed", stage: "handoff" }),
-      ),
-      "HTTP 502; stage=handoff",
-    );
-    assert.strictEqual(yield* response("x".repeat(4_097)), fallback);
-    assert.strictEqual(yield* response("{"), fallback);
-  }),
-);
-
-it.effect("preserves credential acknowledgement through read failure without retrying input", () =>
-  Effect.gen(function* () {
-    for (const outcome of ["provider"] as const) {
-      let fills = 0;
-      let reads = 0;
-      let released = 0;
-
-      const reference = BrowserSessionReference.make({
-        version: 1,
-        sessionId: Redacted.make("00000000-0000-4000-8000-000000000001"),
-        contextId: Redacted.make("saved-context"),
-        targetId: Redacted.make("saved-page"),
-        expiresAt: 1_900_000_000_000,
-        commandTimeoutMillis: 1_000,
-      });
-
-      const fill = CredentialFillResult.make({ dispatch: "dispatched", filled: 2 });
-      const unused = () => Effect.die("Only acknowledgement and post-action reading are exercised");
-
-      const session: BrowserSession = {
-        reference,
-        fillCredential: () =>
-          Effect.sync(() => {
-            fills++;
-
-            return fill;
-          }),
-        run: () =>
-          Effect.suspend(() => {
-            reads++;
-
-            return Effect.fail(
-              BrowserSessionError.make({
-                reason: outcome,
-                dispatch: "possibly-dispatched",
-                cleanup: "not-requested",
-              }),
-            );
-          }),
-        handoff: unused,
-        getLiveView: unused,
-        getReadOnlyLiveView: unused,
-        getHandoffState: unused,
-      };
-
-      const exit = yield* Effect.gen(function* () {
-        const handlers = yield* tools;
-
-        return yield* handlers
-          .handle("fill_credential", {
-            request: {
-              credential: "account",
-              kind: "login",
-              fields: [
-                { selector: "input[name=email]", role: "username" },
-                { selector: "input[name=password]", role: "password" },
-              ],
-            },
-          })
-          .pipe(Effect.flatMap(Stream.runCollect));
-      }).pipe(
-        Effect.provide(
-          buyerTools({
-            reference,
-            shopOrigin: "https://shop.test",
-            processorOrigin: "https://pay.test",
-          }),
-        ),
-        Effect.provideService(
-          BrowserSessions,
-          BrowserSessions.of({
-            create: unused,
-            createAttached: unused,
-            attach: () =>
-              Effect.acquireRelease(Effect.succeed(session), () => Effect.sync(() => released++)),
-            keepAlive: unused,
-            close: unused,
-          }),
-        ),
-        Effect.provideService(
-          CheckoutOwner,
-          CheckoutOwner.of({
-            authorize: Effect.void,
-            observe: unused,
-            record: () => Effect.void,
-            approval: unused(),
-            human: unused(),
-          }),
-        ),
-        Effect.exit,
-      );
-
-      assert.strictEqual(fills, 1);
-      assert.strictEqual(reads, 1);
-      assert.strictEqual(released, 1);
-      {
-        assert.isTrue(Exit.isSuccess(exit));
-        if (Exit.isFailure(exit)) return yield* Effect.die("Expected acknowledged input");
-        assert.isFalse(exit.value.at(-1)?.isFailure);
-        assert.deepStrictEqual(exit.value.at(-1)?.result, {
-          execution: "completed",
-          observation: null,
-          readFailure:
-            "The action completed but its observation failed. Use observe; do not repeat the action.",
-          fill,
-        });
-      }
-    }
-  }),
-);
-
-const checkout = Effect.fnUntraced(function* (scenario: "success" | "correction" | "ambiguous") {
-  let state = makeShop({ key: "test", flow: "embedded-card", scenario });
-
-  state = yield* transition(state, {
-    _tag: "login",
-    email: "alex@example.test",
-    password: "dummy-checkout-password",
-  });
-  state = yield* transition(state, {
-    _tag: "cart",
-    cart: { product: "everyday-shirt", color: "blue", size: "M", quantity: 1 },
-  });
-  state = yield* transition(state, { _tag: "address", address: savedAddress });
-  state = yield* transition(state, { _tag: "shipping", shipping: "standard" });
-  state = yield* transition(state, {
-    _tag: "card",
-    name: "Alex Example",
-    number: "4242424242424242",
-    expiry: "12/30",
-    cvc: "123",
-  });
-
-  return state;
-});
-
-it.effect(
-  "declines the primary card, requires a new approval, and exposes duplicate purchase dispatch",
-  () =>
-    Effect.gen(function* () {
-      let state = yield* checkout("correction");
-      const current = quote(state);
-
-      if (current === null) return yield* Effect.die("Expected a complete quote");
-      state = yield* transition(state, { _tag: "approve", quote: current });
-      state = yield* transition(state, { _tag: "pay" });
-      assert.strictEqual(state.inventory, 4);
-      assert.deepStrictEqual(
-        state.attempts.map((a) => a.outcome),
-        ["declined"],
-      );
-      state = yield* transition(state, {
-        _tag: "card",
-        name: "Alex Example",
-        number: "5555555555554444",
-        expiry: "12/30",
-        cvc: "123",
-      });
-      assert.isNull(state.approval);
-      state = yield* transition(state, { _tag: "approve", quote: current });
-      state = yield* transition(state, { _tag: "pay" });
-      yield* assertPurchase(state);
-      assert.strictEqual(state.orders[0]?.payment, "backup");
-      state = yield* transition(state, { _tag: "pay" });
-      assert.deepStrictEqual(
-        state.attempts.map((a) => a.outcome),
-        ["declined", "paid", "duplicate"],
-      );
-      assert.strictEqual(state.orders.length, 1);
-      assert.strictEqual(state.inventory, 3);
-      assert.strictEqual((yield* assertPurchase(state).pipe(Effect.flip)).stage, "assertion");
-    }),
-);
-
+// Retain the real receiver boundary: wrong buyer credentials and duplicate submissions
+// must remain observable independently of the agent and its claimed completion.
 it.live(
-  "preserves the durable dispatch fence after a workerd failure",
+  "authenticates only the test buyer and records duplicate purchase submissions",
   () =>
     Effect.gen(function* () {
       const bundle = yield* Effect.promise(() =>
         build({
-          entryPoints: [fileURLToPath(new URL("../src/checkout-worker.ts", import.meta.url).href)],
+          entryPoints: [fileURLToPath(new URL("../src/worker.ts", import.meta.url))],
           bundle: true,
           write: false,
           format: "esm",
@@ -266,67 +27,95 @@ it.live(
         }),
       );
 
-      const script = bundle.outputFiles[0]?.text;
-
-      if (script === undefined) return yield* Effect.die("No worker bundle");
-
       const runtime = yield* Effect.acquireRelease(
         Effect.sync(
           () =>
             new Miniflare(
               convertV4MiniflareOptions({
                 modules: true,
-                script,
+                script: bundle.outputFiles[0]!.text,
                 modulesRoot: "/",
-                compatibilityDate: "2026-08-01",
+                compatibilityDate: "2026-03-24",
                 compatibilityFlags: ["nodejs_compat"],
                 durableObjects: { CHECKOUTS: { className: "CheckoutRun", useSQLite: true } },
-                bindings: {
-                  CHECKOUT_TOKEN: "runner-secret",
-                  OPENAI_API_KEY: "not-used",
-                  CHECKOUT_MODEL: "not-used",
-                  PROCESSOR_ORIGIN: "https://processor.test",
-                  CLOUDFLARE_ACCOUNT_ID: "a".repeat(32),
-                  BROWSER_RENDERING_API_TOKEN: "not-used",
-                },
-                serviceBindings: {
-                  BROWSER: () =>
-                    new Response("No browser in offline fixture test", { status: 503 }),
-                },
+                bindings: { CHECKOUT_TOKEN: "control-secret", CHECKOUT_PASSWORD: "buyer-secret" },
               }),
             ),
         ),
         (runtime) => Effect.promise(() => runtime.dispose()),
       );
 
-      const control = (key: string, operation: string, body?: unknown) =>
+      const request = (
+        path: string,
+        body?: Record<string, string>,
+        headers: Record<string, string> = {},
+      ) =>
         Effect.promise(() =>
-          runtime.dispatchFetch(`https://shop.test/_control/${key}/${operation}`, {
+          runtime.dispatchFetch(`https://shop.test${path}`, {
             method: body === undefined ? "GET" : "POST",
-            headers: { authorization: "Bearer runner-secret", "content-type": "application/json" },
-            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+            redirect: "manual",
+            headers,
+            ...(body === undefined ? {} : { body: new URLSearchParams(body) }),
           }),
         );
 
-      yield* control("other", "seed", { key: "other", flow: "accelerated", scenario: "success" });
-      // A fault after the durable dispatch fence cannot admit a second agent request.
-      yield* control("other", "fault", { location: "after:control" });
+      assert.strictEqual((yield* request("/evidence")).status, 401);
+      assert.strictEqual((yield* request("/shop/pay", {})).status, 401);
       assert.strictEqual(
-        (yield* control("other", "run", { message: "Buy the shirt" })).status,
-        500,
-      );
-      assert.strictEqual((yield* control("other", "run", { message: "Try again" })).status, 500);
-      const fenced = yield* control("other", "evidence");
-
-      const retained = yield* Effect.promise(() => fenced.json()).pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(RunEvidence)),
+        (yield* request("/shop/login", { email: "buyer@example.test", password: "wrong" })).status,
+        403,
       );
 
-      assert.strictEqual(retained.control.requests, 1);
-      assert.isTrue(retained.control.running);
-      assert.deepStrictEqual(retained.shop.attempts, []);
-      assert.strictEqual((yield* control("other", "close", {})).status, 200);
-      assert.strictEqual((yield* control("other", "close", {})).status, 200);
+      const login = yield* request("/shop/login", {
+        email: "buyer@example.test",
+        password: "buyer-secret",
+      });
+
+      assert.strictEqual(login.status, 303);
+      const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
+
+      assert.isFalse(cookie.includes("buyer-secret"));
+      const browserHeaders = { cookie };
+
+      assert.strictEqual(
+        (yield* request(
+          "/shop/product",
+          { color: "blue", size: "M", quantity: "1" },
+          browserHeaders,
+        )).status,
+        303,
+      );
+      assert.strictEqual((yield* request("/shop/pay", {}, browserHeaders)).status, 503);
+      assert.strictEqual((yield* request("/shop/pay", {}, browserHeaders)).status, 409);
+
+      const response = yield* request("/evidence", undefined, {
+        authorization: "Bearer control-secret",
+      });
+
+      const evidence = yield* Effect.promise(() => response.json()).pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(Evidence)),
+      );
+
+      assert.deepStrictEqual(evidence.receipt, {
+        buyer: "buyer@example.test",
+        product: "everyday-shirt",
+        color: "blue",
+        size: "M",
+        quantity: 1,
+        address: "123 Test Street, San Francisco, CA 94107, US",
+        shipping: "standard",
+        subtotal: 3400,
+        shippingCents: 500,
+        tax: 312,
+        total: 4212,
+        currency: "USD",
+        paid: true,
+      });
+      assert.strictEqual(evidence.attempts, 2);
+      assert.isFalse(JSON.stringify(evidence).includes("buyer-secret"));
+      const orders = yield* request("/shop/orders", undefined, browserHeaders);
+
+      assert.include(yield* Effect.promise(() => orders.text()), "Payment received");
     }).pipe(Effect.scoped),
   60_000,
 );
