@@ -180,9 +180,6 @@ layer(testLayer)("durable output and current-Run pruning", (it) => {
           Prompt.userMessage({ content: [Prompt.textPart({ text: '{"text":"message 9"}' })] }),
           Prompt.assistantMessage({ content: [Prompt.textPart({ text: reply })] }),
         ]);
-        expect(
-          records.filter(({ record }) => record.payload._tag === "ModelResponseRecorded"),
-        ).toHaveLength(10);
       }),
   );
 

@@ -2,4 +2,4 @@
 "effect-agent": patch
 ---
 
-Keep user inputs with their replies when selecting the recent context tail so durable chats continue through summary compaction.
+Keep user inputs with their replies during summary compaction so durable chats continue successfully.

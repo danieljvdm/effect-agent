@@ -419,8 +419,6 @@ export const chooseSummarizeCut = (
     }
   }
   // Durable responses commit pending input and the assistant reply together.
-  // Retain that input with the reply, including when a tool result pulls the
-  // cut back to its declaring assistant. Moving backward preserves the tail.
   while (
     cut > 0 &&
     (source[cut]?.role === "tool" ||
