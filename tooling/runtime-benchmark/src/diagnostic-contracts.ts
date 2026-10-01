@@ -49,6 +49,10 @@ export class DiagnosticProgress extends Context.Service<
 
 export const DiagnosticWorkerOptions = Schema.Struct({
   output: Schema.String,
+  mode: Schema.optionalKey(Schema.Literals(["comparison", "cpu-profile"])),
+  cases: Schema.optionalKey(
+    Schema.Array(Name).check(Schema.isMinLength(1), Schema.isMaxLength(64)),
+  ),
   warmups: Schema.Natural.check(Schema.isLessThanOrEqualTo(2)),
   samples: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 5 })),
   timeoutMs: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 120_000 })),
@@ -83,6 +87,8 @@ export type DiagnosticSample = typeof DiagnosticSample.Type;
 
 export const DiagnosticWorkerReport = Schema.Struct({
   fixture: Schema.Literal(DIAGNOSTIC_VERSION),
+  mode: DiagnosticWorkerOptions.fields.mode,
+  cases: DiagnosticWorkerOptions.fields.cases,
   runtime: Schema.String,
   platform: Schema.String,
   architecture: Schema.String,
@@ -99,6 +105,19 @@ export const completeDiagnosticBatch = (
   options: DiagnosticWorkerOptions,
   workloads: ReadonlyArray<DiagnosticCase>,
 ): boolean => {
+  if (
+    workloads.length === 0 ||
+    new Set(workloads.map(({ name }) => name)).size !== workloads.length ||
+    (options.mode !== undefined && report.mode !== options.mode) ||
+    (options.cases !== undefined &&
+      (options.cases.length !== workloads.length ||
+        report.cases?.length !== workloads.length ||
+        !workloads.every(
+          ({ name }, index) => options.cases?.includes(name) && report.cases?.[index] === name,
+        )))
+  )
+    return false;
+
   const expected = new Set(
     workloads.flatMap((workload) =>
       Array.from(

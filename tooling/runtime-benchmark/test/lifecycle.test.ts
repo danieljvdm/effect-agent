@@ -3,9 +3,16 @@ import { Clock, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Schema } from 
 import { expect, it } from "vite-plus/test";
 
 import { subprocess } from "../../../scripts/runtime-benchmark.ts";
-import { casesFor, completeBatch, WorkerReport, type Sample } from "../src/contracts.ts";
+import {
+  casesFor,
+  completeBatch,
+  WorkerOptions,
+  WorkerReport,
+  type Sample,
+} from "../src/contracts.ts";
 import { BenchmarkProgress } from "../src/evidence.ts";
 import { BenchmarkRunner, runSample, SeedInitializerLive } from "../src/fixture.ts";
+import { BenchmarkIdsLive } from "../src/ids.ts";
 import { SeedInitializer, SeedTemplates } from "../src/seeds.ts";
 import { runWorker } from "../src/worker.ts";
 
@@ -32,6 +39,41 @@ const sample = (ordinal: number): Sample => ({
   outputBytes: 15,
   status: "passed",
   failure: null,
+});
+
+it("completes selected workloads in fixture order regardless of request order", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const directory = yield* fs.makeTempDirectoryScoped();
+
+      const options = Schema.decodeSync(WorkerOptions)({
+        profile: "smoke",
+        cold: false,
+        cases: ["small-stream", "small-run"],
+        warmups: 0,
+        samples: 1,
+        output: `${directory}/worker.json`,
+      });
+
+      yield* runWorker(options);
+
+      const report = yield* Schema.decodeEffect(Schema.fromJsonString(WorkerReport))(
+        yield* fs.readFileString(options.output),
+      );
+
+      expect(report.cases).toEqual(["small-run", "small-stream"]);
+      expect(completeBatch(report, options)).toBe(true);
+      expect(completeBatch(report, { ...options, cases: ["small-run", "small-run"] })).toBe(false);
+      expect(completeBatch({ ...report, cases: ["small-stream", "small-run"] }, options)).toBe(
+        false,
+      );
+      expect(completeBatch({ ...report, samples: report.samples.slice(1) }, options)).toBe(false);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(services, BenchmarkRunner.layer, BenchmarkIdsLive)),
+    ),
+  );
 });
 
 it("keeps phase evidence writes outside the operation clock", async () => {

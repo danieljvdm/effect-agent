@@ -33,25 +33,61 @@ changing their implementations. Workers explicitly provide the same Effect AI id
 to both revisions so releases predating default IDs remain runnable. These compatibility choices
 apply only to the comparison fixtures; they add no published export aliases or runtime fallbacks.
 
-The workflow runs on pushes to `main`, comparing the most recently published
-`effect-agent@…` release tag against the triggering `main` commit. It includes beta
-prereleases, excludes drafts and sibling-package/Action releases, and resolves the tag to
-an exact commit before checkout. It does not compare the Changesets version bump against
-its own parent. Manual dispatch must select `main` and uses the same release baseline;
-local `--base-dir` comparisons remain available for exact-revision investigations.
-Use `--base-tag effect-agent@<version>` to name the release in a local report.
+The performance workflow runs only by manual dispatch. Select exact base/head refs, a fixed
+profile, optional comma-separated case IDs, and optional CPU profiling. A blank base defaults
+to the most recently published `effect-agent@…` release, including beta prereleases and excluding
+drafts and sibling-package/Action releases; head defaults to `main`. Refs are resolved to exact
+commits before checkout. Local `--base-dir` comparisons remain available for exact-revision
+investigations. Use `--base-tag effect-agent@<version>` to name a release in a local report.
 
 The workflow uses Node 24.20.0 and sequential production builds.
-It runs three sequential cohorts (base/head, head/base, base/head). Each warm cohort retains two
+The default `pr` profile runs three sequential cohorts (base/head, head/base, base/head). Each warm cohort retains two
 warmups and three measured samples per case: nine measured samples per revision. Alternating
 the order gives each revision a turn first; with three cohorts, Base runs first twice. Keeping
 three cohorts preserves the existing sample count and correctness coverage. Workload order
-reverses between samples. Each cohort also runs one cold process per revision.
-All warmups, measured samples, slow values, and failures remain in JSON artifacts. The trusted
-comment workflow validates artifact data, the current `main` commit, and the latest release
-tag's commit without executing candidate code. Successful push runs update the open Changesets
-release PR when one exists; every run retains its Actions summary and artifact. Superseded
-`main` commits, newer releases, and moved release tags cannot publish stale comments.
+reverses between samples. With the full selection, each cohort also runs one cold process per revision.
+All warmups, measured samples, slow values, and failures remain in JSON artifacts. Every manual
+run retains its Actions summary and artifact; manual runs do not publish release-PR comments.
+
+## Select cases and profile CPU
+
+Both commands list their exact case IDs without a base checkout, installation of a comparison
+revision, or a build. Runtime IDs depend on the fixed profile:
+
+```sh
+vp run perf:compare --profile archive --list-cases
+vp run perf:diagnose --list-cases
+vp run perf:compare --base-dir /tmp/effect-agent-base --profile archive --case durable-fresh-100000 --case checkpoint-recovery-100000 --out-dir /tmp/archive-selected-001
+vp run perf:diagnose --base-dir /tmp/effect-agent-base --case history-single --out-dir /tmp/history-selected-001
+```
+
+Repeat `--case` for multiple IDs. Unknown or repeated IDs fail before staging or creating an
+output directory. Omit it to retain the full matrix. Selection preserves fixture order and the
+profile's existing warmup/sample counts; it does not define a new workload. Reports retain the
+selected identities and reject missing, duplicated, or unselected samples. Cold subprocesses
+run only when `small-run` is selected. Run the same selection on both revisions and retain every
+cohort, including slow samples. Selecting cases changes shared-process warmup and cache history;
+compare only matched selections, not selected runs against historical full-matrix timings.
+
+Add `--cpu-profile` in a separate diagnostic run, with a new output directory:
+
+```sh
+vp run perf:compare --base-dir /tmp/effect-agent-base --profile smoke --case small-run --cpu-profile --out-dir /tmp/small-run-profile-001
+vp run perf:diagnose --base-dir /tmp/effect-agent-base --case history-single --cpu-profile --out-dir /tmp/history-profile-001
+```
+
+Each controller-launched Node worker writes its own `.cpuprofile` alongside the JSON report.
+Open these files in a CPU-profile viewer such as Chrome DevTools. Profiles sample the whole child,
+including startup, imports, seed/setup work, warmups, operations, verification, reporting, and
+shutdown. They do not isolate operation CPU, include CPU from other processes (such as the
+diagnostic SQLite lock writer), or measure Cloudflare billing CPU. A missing requested profile
+makes the batch incomplete; a force-killed child may not flush a profile.
+
+Profiling mode is explicit in JSON and Markdown. Instrumented elapsed samples remain raw
+diagnostic evidence, and Markdown omits comparison timing tables. Use profiles to locate work,
+then run a separate unprofiled matched comparison to assess a change; profiled timings are never
+ordinary before/after acceptance measurements. Without `--cpu-profile`, execution and timing
+boundaries remain unchanged.
 
 `--profile smoke` exercises every workload family with one sample and 16 retained records;
 it checks the command, not statistical confidence. `extended` takes 30 samples per revision and
@@ -65,7 +101,7 @@ partial evidence and fail correctness. No scheduled or paid execution is configu
 | Case                      | Completed work and timing boundary                                                                                                                                                                                                                                                                                                                        |
 | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Small run/stream          | One validated final answer and exactly one model invocation; warm operation begins after application Layer acquisition.                                                                                                                                                                                                                                   |
-| Fragmentation             | Exactly 65,536 JSON response bytes in 1/64/1,024/4,096 deltas. Stream delivery must reproduce every chunk and the final answer. All four sizes run on PRs.                                                                                                                                                                                                |
+| Fragmentation             | Exactly 65,536 JSON response bytes in 1/64/1,024/4,096 deltas. Stream delivery must reproduce every chunk and the final answer. All four sizes are in the default `pr` profile.                                                                                                                                                                           |
 | Prompt history            | A small answer with 64 KiB or 1 MiB of prior text. History creation occurs before timing.                                                                                                                                                                                                                                                                 |
 | Parallel tools and rounds | Eight 2 ms tools per round, concurrency four, one or four rounds. Subsequent normalized provider requests must contain every successful result. Actual overlap, call bounds, and finalizers are checked.                                                                                                                                                  |
 | Fresh durable submission  | A new Submission after 0/256/2,048 retained canonical records in a file-backed SQLite database. Each sample creates its own database; setup/seeding is excluded. Timing includes reopening the full Node durable runtime, admission, execution, and settlement.                                                                                           |
@@ -136,21 +172,19 @@ own installation. Reports identify exact commits, dirty state, lockfile hashes, 
 hashes, fixture hash/version, runtime, operating system, CPU, memory, sample counts, median,
 interquartile range, and process failures. The artifact includes the exact transpiled fixture.
 
-The `runtime-v3` artifact contract contains only Base and Head, with `baselineTag` naming
-the release (null for an unlabeled local comparison). The trusted publisher rejects
-older three-revision reports. Release PR tables name Latest release, Main, and Change and
-link the exact tag and commits. Both the comment and artifact show medians and Q1–Q3 spread.
+The `runtime-v3` artifact identifies Base and Head, the selected cases, and comparison or
+profiling mode. `baselineTag` names a release when one was selected; otherwise it is null.
+Ordinary comparison tables show medians and Q1–Q3 spread.
 The nine samples share three worker processes per revision; that spread is not a confidence
 interval, and runner/process variability has not been calibrated. Timing differences alone
 do not establish a regression. When built JavaScript and lockfile hashes match, reports
 explicitly identify identical builds and suppress percentage changes while preserving all
-timings and samples. Workloads,
-operation clocks, warmups, and measured samples per revision are unchanged from `runtime-v2`.
+timings and samples.
 Keep historical artifacts. Incompatible historical APIs must fail clearly rather than silently
 substituting source code or skipping cases. A new fixture changes the measurement definition and
 requires a version bump; report environment changes before interpreting across-run trends.
 
-The PR profile runs 12 child processes and 576 attempts: 19 cases × five warm attempts ×
+The full `pr` profile runs 12 child processes and 576 attempts: 19 cases × five warm attempts ×
 three cohorts × two revisions, plus six cold attempts. Millisecond operation medians do not
 represent CI duration: all attempts, warmups, seed creation, checkpoint preparation, assertions,
 cleanup, imports, and report writes take wall time. The worker-time table retains attempt and
@@ -183,8 +217,8 @@ Run this command from the candidate checkout, with no concurrent builds, tests, 
 vp run perf:diagnose --base-dir /tmp/effect-agent-base --require-clean --out-dir /tmp/diagnostic-001
 ```
 
-The manual workflow's `diagnostic` choice runs the same command. Ordinary PRs run the
-`runtime-v3` matrix and trusted report validator.
+The manual workflow's `diagnostic` choice runs the same command. Both benchmark fixtures are
+manual; neither introduces scheduled or pull-request timing runs.
 Diagnostics run base/head followed by head/base, with two warmups and five measured samples per
 cohort: ten measured samples per case and revision. They use the same production-package staging,
 published manifests, own-lockfile dependencies, built-artifact identities, and identical unbundled
@@ -245,7 +279,7 @@ as well as framework dispatch and bounded scheduling. Use the final authorizatio
 batch to derive wait after the whole barrier; neither interval isolates semaphore wait.
 Native subagent span offsets flush at Run exit, including failure, so mark array order need not be
 chronological; use their operation-relative monotonic offsets.
-No diagnostic reports CPU time. Compare matched medians and interquartile ranges, including the
+The diagnostic intervals report elapsed time, not CPU time. Compare matched unprofiled medians and interquartile ranges, including the
 retained slow samples, and preserve the complete environment and exact revision identities.
 
 Each sample, including fixture setup, is bounded to two minutes, each child to five minutes, and the controller to nineteen

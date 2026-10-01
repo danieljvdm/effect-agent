@@ -467,19 +467,34 @@ The comment workflow becomes active after it is merged into the default branch.
 
 ## Runtime performance comparisons
 
-Pull requests run the **Runtime performance** workflow against the exact base and head commits.
-The [scripted benchmark](../tooling/runtime-benchmark/README.md) runs identical
-fixture bytes against production builds and each revision's own lockfile on the same Node runtime.
-Run `vp run perf:compare --help` for local reproduction. Timing tasks bypass the task cache; keep
-other builds, tests, and benchmarks idle during measurement.
+Run the **Runtime performance** workflow manually from Actions. Choose baseline and candidate
+refs, a workload profile, and optionally individual cases. Refs resolve to exact commits before
+checkout; leaving the baseline blank compares the latest published release with the candidate
+(main by default). The candidate supplies the shared benchmark fixture. There are no scheduled
+or push-triggered performance runs.
 
-The PR profile covers small runs and streams, fixed-size responses with increasing fragmentation,
+The [scripted benchmark](../tooling/runtime-benchmark/README.md) runs identical fixture bytes
+against production builds and each revision's own lockfile on the same Node runtime. Locally,
+`vp run perf:compare --list-cases` and `vp run perf:diagnose --list-cases` list the workloads without
+running them. Repeat `--case` to focus a comparison on the component under investigation:
+
+```sh
+vp run perf:compare --base-dir /path/to/base --case checkpoint-recovery-2048 --out-dir /tmp/recovery-comparison
+vp run perf:compare --base-dir /path/to/base --case checkpoint-recovery-2048 --cpu-profile --out-dir /tmp/recovery-profile
+```
+
+CPU profiles cover the whole child process, including imports and setup. Use them to find work
+to investigate, then rerun without profiling to measure a change. Profiled reports keep raw
+samples but suppress timing comparisons. Timing tasks bypass the task cache; keep other builds,
+tests, and benchmarks idle during measurement.
+
+The bounded `pr` profile covers small runs and streams, fixed-size responses with increasing fragmentation,
 growing prompts, parallel tools and repeated rounds, file-backed SQLite history, checkpoint
 recovery, and settled Submission ledgers. Fresh durable startup includes reopening the host and
 admission; recovery of an existing Run is a separate case. First-model timing ends in the actual
 provider callback. A separate subprocess measurement includes startup and fixture imports.
 Retain raw samples, failures, environment metadata, fixture and artifact hashes, and exact SHAs.
-The trusted comment workflow becomes active after it reaches the default branch.
+Manual workflow results appear in the run summary and downloadable artifact.
 
 Latency reports are informational until repeated CI runs establish variance and useful absolute
 and relative thresholds. Deterministic call, concurrency, ownership, tracing, and history-work

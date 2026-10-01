@@ -7,6 +7,7 @@ import {
   BenchmarkError,
   casesFor,
   FIXTURE_VERSION,
+  selectCaseNames,
   WorkerOptions,
   WorkerReport,
   type Sample,
@@ -25,9 +26,16 @@ export const runWorker = Effect.fn("benchmark.runWorker")(function* (
   let active: SampleProgress | null = null;
   let failure: string | null = null;
 
-  const workloads = options.cold
+  const available = options.cold
     ? casesFor(options.profile).slice(0, 1)
     : casesFor(options.profile);
+
+  const cases = yield* selectCaseNames(
+    available.map(({ name }) => name),
+    options.cases,
+  );
+
+  const workloads = available.filter(({ name }) => cases.includes(name));
 
   const persist = () =>
     writeEvidence(
@@ -35,6 +43,8 @@ export const runWorker = Effect.fn("benchmark.runWorker")(function* (
       Schema.encodeSync(Schema.fromJsonString(WorkerReport))({
         fixture: FIXTURE_VERSION,
         profile: options.profile,
+        mode: options.mode ?? "comparison",
+        cases,
         runtime: process.version,
         platform: process.platform,
         architecture: process.arch,

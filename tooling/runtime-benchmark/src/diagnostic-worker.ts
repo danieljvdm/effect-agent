@@ -3,7 +3,7 @@ import process from "node:process";
 import { NodeCrypto, NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Cause, Clock, Config, Context, Effect, Exit, FileSystem, Layer, Schema } from "effect";
 
-import { BenchmarkError, check } from "./contracts.js";
+import { BenchmarkError, check, selectCaseNames } from "./contracts.js";
 import { runCapabilityCase } from "./diagnostic-capabilities.js";
 import { diagnosticCases } from "./diagnostic-cases.js";
 import {
@@ -46,12 +46,21 @@ export const runDiagnosticWorker = Effect.fn("diagnostic.runWorker")(function* (
   options: DiagnosticWorkerOptions,
 ) {
   const runner = yield* DiagnosticRunner;
+
+  const cases = yield* selectCaseNames(
+    diagnosticCases.map(({ name }) => name),
+    options.cases,
+  );
+
+  const workloads = diagnosticCases.filter(({ name }) => cases.includes(name));
   const samples: Array<DiagnosticSample> = [];
   let active: DiagnosticActive | null = null;
   let failure: string | null = null;
 
   const report = (): DiagnosticWorkerReport => ({
     fixture: DIAGNOSTIC_VERSION,
+    mode: options.mode ?? "comparison",
+    cases,
     runtime: process.version,
     platform: process.platform,
     architecture: process.arch,
@@ -82,7 +91,7 @@ export const runDiagnosticWorker = Effect.fn("diagnostic.runWorker")(function* (
     );
 
     for (let ordinal = 0; ordinal < options.warmups + options.samples; ordinal++) {
-      const ordered = ordinal % 2 === 0 ? diagnosticCases : [...diagnosticCases].reverse();
+      const ordered = ordinal % 2 === 0 ? workloads : [...workloads].reverse();
 
       for (const workload of ordered) {
         const started = yield* Clock.monotonicTimeNanos;
@@ -166,7 +175,7 @@ export const runDiagnosticWorker = Effect.fn("diagnostic.runWorker")(function* (
       }
     }
     yield* check(
-      completeDiagnosticBatch(report(), options, diagnosticCases),
+      completeDiagnosticBatch(report(), options, workloads),
       "Diagnostic correctness failed; inspect retained samples",
     );
   }).pipe(

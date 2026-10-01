@@ -20,11 +20,13 @@ import { build, version as esbuildVersion } from "esbuild";
 
 import {
   BenchmarkError,
+  Case,
   casesFor,
   check,
   completeBatch,
   FIXTURE_VERSION,
   Profile,
+  selectCaseNames,
   summary,
   WorkerOptions,
   WorkerReport,
@@ -51,6 +53,7 @@ const Batch = Schema.Struct({
   subprocessMs: Schema.Finite,
   exitCode: Schema.Int,
   complete: Schema.Boolean,
+  cpuProfile: Schema.optionalKey(Schema.String),
   report: Schema.NullOr(WorkerReport),
   failure: Schema.NullOr(Schema.String),
 });
@@ -63,6 +66,8 @@ export const PerformanceReport = Schema.Struct({
   fixtureSha256: Schema.String,
   transpiler: Schema.String,
   profile: Profile,
+  mode: WorkerOptions.fields.mode,
+  cases: Schema.optionalKey(Schema.Array(Case)),
   environment: Schema.Struct({
     platform: Schema.String,
     release: Schema.String,
@@ -78,7 +83,7 @@ export const PerformanceReport = Schema.Struct({
     samplesPerBatch: Schema.Natural,
     production: Schema.Literal(true),
     execution: Schema.Literal("unbundled published ESM"),
-    timingGate: Schema.Literal("informational"),
+    timingGate: Schema.Literals(["informational", "profiling only"]),
   }),
   revisions: Schema.Array(Revision),
   batches: Schema.Array(Batch),
@@ -245,6 +250,34 @@ export const stageCheckout = Effect.fn("benchmark.stageCheckout")(function* (
 export const renderPerformanceReport = (report: PerformanceReport): string => {
   const baseline = report.revisions.find((revision) => revision.role === "base");
   const candidate = report.revisions.find((revision) => revision.role === "head");
+  const workloads = report.cases ?? casesFor(report.profile);
+
+  const expectedBatches =
+    report.settings.batches * (workloads.some(({ name }) => name === "small-run") ? 4 : 2);
+
+  if (report.mode === "cpu-profile" || report.settings.timingGate === "profiling only")
+    return [
+      "CPU profiling mode. Profiles cover each whole Node child: startup, imports, setup, warmups, operations, verification, reporting, and shutdown.",
+      "Instrumented elapsed timings remain in raw JSON for diagnosis only; they are not before/after acceptance measurements. No comparison timing table is produced.",
+      `Selected cases: ${workloads.map(({ name }) => name).join(", ")}.`,
+      `Complete batches: ${report.batches.filter((batch) => batch.complete && batch.exitCode === 0).length}/${expectedBatches}.`,
+      ...report.batches.map(
+        (batch) =>
+          `${batch.role}/${batch.cohort}/${batch.cold ? "cold" : "warm"}: ${batch.cpuProfile ?? "missing profile"}${batch.failure === null ? "" : `; ${batch.failure.split("\n")[0]}`}`,
+      ),
+      ...(report.activeBatch === null
+        ? []
+        : [
+            `Interrupted active batch: ${report.activeBatch.role}/${report.activeBatch.cohort}/${report.activeBatch.cold ? "cold" : "warm"}.`,
+          ]),
+      ...(report.failure === null ? [] : [`Profiling failure: ${report.failure.split("\n")[0]}`]),
+      `Fixture ${report.fixture} (${report.fixtureSha256}); Node ${report.environment.node}.`,
+      ...report.revisions.map(
+        (revision) =>
+          `${revision.role}: ${revision.revision}${revision.dirty ? " (dirty working tree)" : ""}; artifacts ${revision.builtArtifactsSha256}; lock ${revision.lockfileSha256}`,
+      ),
+      "",
+    ].join("\n");
 
   const identical =
     baseline !== undefined &&
@@ -276,7 +309,7 @@ export const renderPerformanceReport = (report: PerformanceReport): string => {
       ? "n/a"
       : `${value.median.toFixed(2)} [${value.q1.toFixed(2)}–${value.q3.toFixed(2)}]`;
 
-  for (const workload of casesFor(report.profile)) {
+  for (const workload of workloads) {
     const samples = (role: Revision["role"]) =>
       report.batches
         .filter(
@@ -297,16 +330,15 @@ export const renderPerformanceReport = (report: PerformanceReport): string => {
 
     lines.push(`| ${workload.name} | ${format(base)} | ${format(head)} | ${delta(base)} |`);
   }
-  lines.push(
-    "",
-    "Inline checkpoint construction and save (outside recovery total):",
-    "",
-    "| Workload | Base | Head |",
-    "| --- | ---: | ---: |",
-  );
-  for (const workload of casesFor(report.profile).filter(
-    (workload) => workload.kind === "recovery",
-  )) {
+  if (workloads.some((workload) => workload.kind === "recovery"))
+    lines.push(
+      "",
+      "Inline checkpoint construction and save (outside recovery total):",
+      "",
+      "| Workload | Base | Head |",
+      "| --- | ---: | ---: |",
+    );
+  for (const workload of workloads.filter((workload) => workload.kind === "recovery")) {
     const checkpoints = (role: Revision["role"]) =>
       summary(
         report.batches
@@ -327,14 +359,16 @@ export const renderPerformanceReport = (report: PerformanceReport): string => {
       `| ${workload.name} | ${format(checkpoints("base"))} | ${format(checkpoints("head"))} |`,
     );
   }
-  lines.push(
-    "",
-    "Cold subprocess totals include Node startup, imports, one small run, assertions, and process shutdown:",
-  );
-  for (const role of ["base", "head"] as const)
+  if (workloads.some(({ name }) => name === "small-run")) {
     lines.push(
-      `${role}: ${format(summary(report.batches.filter((batch) => batch.role === role && batch.cold && batch.complete && batch.exitCode === 0).map((batch) => batch.subprocessMs)))}`,
+      "",
+      "Cold subprocess totals include Node startup, imports, one small run, assertions, and process shutdown:",
     );
+    for (const role of ["base", "head"] as const)
+      lines.push(
+        `${role}: ${format(summary(report.batches.filter((batch) => batch.role === role && batch.cold && batch.complete && batch.exitCode === 0).map((batch) => batch.subprocessMs)))}`,
+      );
+  } else lines.push("", "Cold subprocesses omitted: small-run was not selected.");
 
   const failures = report.batches.flatMap(
     (batch) => batch.report?.samples.filter((sample) => sample.status === "failed") ?? [],
@@ -346,7 +380,7 @@ export const renderPerformanceReport = (report: PerformanceReport): string => {
   lines.push(
     "",
     `Correctness failures: ${failures.length}; failed subprocesses: ${failedProcesses}.`,
-    `Invalid/incomplete batches: ${incomplete.length}; processes recorded: ${report.batches.length}/${report.settings.batches * 4}. Incomplete batches are excluded from comparison summaries.`,
+    `Invalid/incomplete batches: ${incomplete.length}; processes recorded: ${report.batches.length}/${expectedBatches}. Incomplete batches are excluded from comparison summaries.`,
     ...(report.activeBatch === null
       ? []
       : [
@@ -397,11 +431,21 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
   profile: Profile;
   requireClean: boolean;
   baselineTag: string | null;
+  cases?: ReadonlyArray<string>;
+  cpuProfile?: boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const root = path.resolve(options.root);
   const output = path.resolve(options.output);
+
+  const cases = yield* selectCaseNames(
+    casesFor(options.profile).map(({ name }) => name),
+    options.cases,
+  );
+
+  const workloads = casesFor(options.profile).filter(({ name }) => cases.includes(name));
+  const temperatures = cases.includes("small-run") ? [true, false] : [false];
 
   yield* fs.makeDirectory(output, { recursive: true });
   yield* check(
@@ -480,6 +524,8 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
     fixtureSha256: sha256(fixtureBytes.join("\n")),
     transpiler: `esbuild ${esbuildVersion} (fixture syntax only; no bundling)`,
     profile: options.profile,
+    mode: options.cpuProfile ? "cpu-profile" : "comparison",
+    cases: workloads,
     environment: {
       platform: platform(),
       release: release(),
@@ -493,7 +539,7 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
       ...sizes,
       production: true,
       execution: "unbundled published ESM",
-      timingGate: "informational",
+      timingGate: options.cpuProfile ? "profiling only" : "informational",
     },
     revisions: stages.map((stage) => stage.revision),
     batches,
@@ -520,20 +566,31 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
       // Three cohorts necessarily give one revision the first slot twice. Keep measurements sequential.
       const ordered = cohort % 2 === 0 ? stages : [...stages].reverse();
 
-      for (const cold of [true, false])
+      for (const cold of temperatures)
         for (const stage of ordered) {
           const name = `${cohort}-${stage.revision.role}-${cold ? "cold" : "warm"}`;
           const outputFile = path.join(output, `${name}.json`);
           const logFile = path.join(output, `${name}.log`);
+          const cpuProfile = options.cpuProfile ? `${name}.cpuprofile` : undefined;
+
+          if (cpuProfile !== undefined)
+            yield* check(
+              !(yield* fs.exists(path.join(output, cpuProfile))),
+              `CPU profile already exists: ${cpuProfile}`,
+            );
 
           activeBatch = { role: stage.revision.role, cohort, cold };
           yield* persist;
 
-          yield* Console.error(`Measuring ${name} (${options.profile})`);
+          yield* Console.error(
+            `${options.cpuProfile ? "Profiling" : "Measuring"} ${name} (${options.profile})`,
+          );
 
-          const workerOptions = {
+          const workerOptions: typeof WorkerOptions.Type = {
             cold,
             profile: options.profile,
+            mode: options.cpuProfile ? "cpu-profile" : "comparison",
+            cases: cold ? ["small-run"] : cases,
             warmups: cold ? 0 : sizes.warmupsPerBatch,
             samples: cold ? 1 : sizes.samplesPerBatch,
             output: outputFile,
@@ -546,7 +603,16 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
               const childExit = yield* restore(
                 subprocess(
                   "node",
-                  [path.join(stage.stage, "fixture/worker.js")],
+                  [
+                    ...(cpuProfile === undefined
+                      ? []
+                      : [
+                          "--cpu-prof",
+                          `--cpu-prof-dir=${output}`,
+                          `--cpu-prof-name=${cpuProfile}`,
+                        ]),
+                    path.join(stage.stage, "fixture/worker.js"),
+                  ],
                   stage.stage,
                   {
                     NODE_ENV: "production",
@@ -588,6 +654,9 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
 
               const workMatches = childReport !== null && completeBatch(childReport, workerOptions);
 
+              const profileExists =
+                cpuProfile === undefined || (yield* fs.exists(path.join(output, cpuProfile)));
+
               const environmentMatches =
                 childReport !== null &&
                 childReport.runtime === report.environment.node &&
@@ -600,7 +669,8 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
                 cold,
                 subprocessMs: result.subprocessMs,
                 exitCode: result.exitCode,
-                complete: workMatches && environmentMatches,
+                complete: workMatches && environmentMatches && profileExists,
+                ...(cpuProfile === undefined ? {} : { cpuProfile }),
                 report: childReport,
                 failure:
                   decodedReport !== null && Exit.isFailure(decodedReport)
@@ -611,7 +681,9 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
                         ? "Missing, duplicated, failed, or unfinalized workload samples"
                         : !environmentMatches
                           ? "Worker runtime/platform/architecture differs from the controller"
-                          : null,
+                          : !profileExists
+                            ? "Requested CPU profile was not written"
+                            : null,
               });
               activeBatch = null;
               yield* persist;
@@ -635,7 +707,7 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
   yield* withPublishManifests(base.stage, () => withPublishManifests(head.stage, () => measure));
   yield* Console.log(renderPerformanceReport(report));
   yield* check(
-    batches.length === sizes.batches * 4 &&
+    batches.length === sizes.batches * temperatures.length * 2 &&
       batches.every((batch) => batch.exitCode === 0 && batch.complete),
     "Benchmark correctness failed; timings are informational but incomplete work is rejected",
   );
@@ -650,6 +722,7 @@ export const command = Command.make(
       Flag.withDescription(
         "Exact base checkout, installed with its lockfile and production packages built.",
       ),
+      Flag.optional,
     ),
     baselineTag: Flag.String("base-tag").pipe(
       Flag.withSchema(
@@ -674,8 +747,45 @@ export const command = Command.make(
       Flag.withDefault(false),
       Flag.withDescription("Reject modified or untracked files in any checkout (required by CI)."),
     ),
+    cases: Flag.String("case").pipe(
+      Flag.atLeast(0),
+      Flag.withDescription(
+        "Exact case ID; repeat to select multiple cases. Omit for the full profile.",
+      ),
+    ),
+    listCases: Flag.Boolean("list-cases").pipe(
+      Flag.withDefault(false),
+      Flag.withDescription(
+        "List exact case IDs for --profile without building or requiring --base-dir.",
+      ),
+    ),
+    cpuProfile: Flag.Boolean("cpu-profile").pipe(
+      Flag.withDefault(false),
+      Flag.withDescription(
+        "Write whole-child Node CPU profiles; instrumented timings are diagnostic only.",
+      ),
+    ),
   },
-  Effect.fn(function* ({ base, baselineTag, output, profile, requireClean }) {
+  Effect.fn(function* ({
+    base,
+    baselineTag,
+    output,
+    profile,
+    requireClean,
+    cases,
+    listCases,
+    cpuProfile,
+  }) {
+    const selected = yield* selectCaseNames(
+      casesFor(profile).map(({ name }) => name),
+      cases,
+    );
+
+    if (listCases) return yield* Console.log(selected.join("\n"));
+    if (Option.isNone(base))
+      return yield* BenchmarkError.make({
+        message: "--base-dir is required unless --list-cases is used",
+      });
     const path = yield* Path.Path;
 
     const root = path.resolve(
@@ -685,11 +795,13 @@ export const command = Command.make(
 
     yield* compareRuntime({
       root,
-      base,
+      base: base.value,
       baselineTag: Option.getOrNull(baselineTag),
       output,
       profile,
       requireClean,
+      cases: selected,
+      cpuProfile,
     });
   }),
 ).pipe(
