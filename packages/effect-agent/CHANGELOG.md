@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.163
+
+### Patch Changes
+
+- [#738](https://github.com/danieljvdm/effect-agent/pull/738) [`58f80d2`](https://github.com/danieljvdm/effect-agent/commit/58f80d2c1d2a832eba47176e24cc05010ee056a8) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reduce persistence-validation CPU for ASCII JSON while preserving byte and structure limits.
+
 ## 0.1.0-beta.162
 
 ### Patch Changes

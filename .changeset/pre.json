@@ -136,6 +136,7 @@
     "engine-preserve-run-policy-compaction",
     "explicit-browser-network-policy",
     "fair-recovery-status",
+    "faster-persisted-json-bytes",
     "faster-sql-memory-receipts",
     "filter-worker-completion",
     "finite-cloudflare-maintenance",
