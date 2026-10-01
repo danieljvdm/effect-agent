@@ -1,5 +1,18 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.162
+
+### Patch Changes
+
+- [#737](https://github.com/danieljvdm/effect-agent/pull/737) [`aa50237`](https://github.com/danieljvdm/effect-agent/commit/aa502375beb6e45a0979cb46a8324dccf6c22304) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Batch changed maintenance lanes within each source transaction while preserving revision fences and committed retry budgets. Skip inferred publication enrollment for the empty default handler while preserving custom publication barriers.
+
+- [#736](https://github.com/danieljvdm/effect-agent/pull/736) [`472f3d1`](https://github.com/danieljvdm/effect-agent/commit/472f3d1f90b9d4041a18766b54f366740ff613c4) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Publish intermediate worker updates in bounded asynchronous batches while native execution continues, preserving ordered receipts and retries across Object eviction.
+
+- Updated dependencies [[`aa50237`](https://github.com/danieljvdm/effect-agent/commit/aa502375beb6e45a0979cb46a8324dccf6c22304)]:
+  - effect-agent@0.1.0-beta.162
+  - @effect-agent/storage-sql@0.1.0-beta.162
+  - @effect-agent/storage-cloudflare@0.1.0-beta.162
+
 ## 0.1.0-beta.161
 
 ### Patch Changes
