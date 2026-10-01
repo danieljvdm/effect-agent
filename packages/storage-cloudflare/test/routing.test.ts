@@ -20,6 +20,7 @@ import { runInDurableObject } from "cloudflare:test";
 import type { Crypto } from "effect";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { digestJson, EMPTY_TAIL_DIGEST } from "effect-agent/digest";
+import { lifecyclePublicationLayer } from "effect-agent/lifecycle-publication";
 import { MessageDeliveryStore, readPending } from "effect-agent/message-delivery";
 import { type PersistedJson } from "effect-agent/records";
 import {
@@ -201,6 +202,53 @@ const claimedLocalLane = Effect.fn("RoutingTest.claimedLocalLane")(function* (
 });
 
 describe("cross-DO port routing", () => {
+  // Requested wave authority seam: reject a mixed-owner acknowledgement before any local debt changes.
+  it("rejects a lifecycle acknowledgement wave containing a foreign owner", () => {
+    const name = `wave-authority-${crypto.randomUUID()}`;
+    const state = control();
+
+    return withThreadStorage(name, (storage) =>
+      Effect.gen(function* () {
+        const store = yield* ThreadStore;
+        const messages = yield* MessageDeliveryStore;
+
+        yield* messages.insert(yield* makeMessageDeliveryFixture("local", name));
+        yield* messages.insert(yield* makeMessageDeliveryFixture("foreign", `${name}:foreign`));
+        const publications = store.lifecyclePublications;
+        const acknowledgeMany = publications?.acknowledgeMany;
+
+        if (publications === undefined || acknowledgeMany === undefined)
+          return yield* Effect.fail("Missing lifecycle wave storage");
+        const pending = yield* publications.pending(0, 2);
+
+        expect(pending).toHaveLength(2);
+        expect(yield* acknowledgeMany(pending).pipe(Effect.flip)).toMatchObject({
+          reason: "unavailable",
+        });
+        expect(yield* publications.pending(0, 2)).toEqual(pending);
+        expect(state.calls).toBe(0);
+      }).pipe(
+        Effect.provide(
+          routedThreadStoreLayer({ ownsThread: (target) => target === thread(name) }).pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(storeLayer({ storage }), doMessageDeliveryStoreLayer()).pipe(
+                Layer.provide([
+                  SqliteClient.layer({ storage }),
+                  storageConfigLayer({ storage }),
+                  DoStorageFailpoint.layer,
+                  lifecyclePublicationLayer.pipe(Layer.provide(BrowserCrypto.layer)),
+                ]),
+              ),
+            ),
+            Layer.provide(transportLayer(state)),
+          ),
+        ),
+        Effect.provide(BrowserCrypto.layer),
+        Effect.scoped,
+      ),
+    );
+  });
+
   // Regression: https://github.com/danieljvdm/effect-agent/commit/6a4f4f870
 
   // Regression: https://github.com/danieljvdm/effect-agent/commit/6a4f4f870

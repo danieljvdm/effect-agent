@@ -1266,6 +1266,15 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   bindings: ReadonlyArray<ResolvedBinding>,
 ) {
   const registeredBindings = [...bindings];
+  // Exact registration lookup is static metadata; routing and authorization still run per claim.
+  const bindingsByDefinition = new Map<Agent.AnyDefinition, Array<ResolvedBinding>>();
+
+  for (const binding of registeredBindings) {
+    const entries = bindingsByDefinition.get(binding.definition);
+
+    if (entries === undefined) bindingsByDefinition.set(binding.definition, [binding]);
+    else entries.push(binding);
+  }
   const bindingSelection = yield* CurrentBindingSelection;
   const workerAdmissionPort = yield* WorkerAdmissionPort;
   const ledger = yield* SubmissionLedger;
@@ -1325,9 +1334,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   const withCrypto = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>): Effect.Effect<A, E> =>
     Effect.provideService(effect, Crypto.Crypto, crypto);
 
-  const contractsFor = (definition: Agent.AnyDefinition) => {
-    const registered = registeredBindings.filter(
-      (binding) => binding.agentId === definition.id && Object.is(binding.definition, definition),
+  const contractsFor = (definition: Agent.AnyDefinition, admissionDigests?: DefinitionDigests) => {
+    const registered = (bindingsByDefinition.get(definition) ?? []).filter(
+      (binding) => binding.agentId === definition.id,
     );
 
     const current = registered.length === 1 ? registered[0] : undefined;
@@ -1335,7 +1344,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
     return contracts === undefined
       ? withCrypto(
-          toolReplayContracts(definition, undefined, current?.digests.tools ?? config.deploymentId),
+          toolReplayContracts(
+            definition,
+            undefined,
+            current?.digests.tools ?? config.deploymentId,
+            current?.digests ?? admissionDigests,
+          ),
         )
       : Effect.succeed(contracts);
   };
@@ -8542,7 +8556,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       // Restoring the accepted child policy changes no Tool declarations. Retain the
       // selected registration's contracts instead of resolving the copied Definition.
-      const currentContracts = yield* contractsFor(registeredAgent.definition);
+      const currentContracts = yield* contractsFor(
+        registeredAgent.definition,
+        submission.agentDigests,
+      );
 
       const evidence = yield* evidenceFor(records, submissionId, true, snapshot.hostSubmissionId);
       const knownIds = knownRecordIdsOf(records);

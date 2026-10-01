@@ -11,7 +11,30 @@ import { DurableObjectContext } from "../src/CloudflareBindings.ts";
 import * as DueQueue from "../src/internal/due-queue.ts";
 import { stubFor } from "./harness.ts";
 
-// Requested scheduler seam: one write per changed lane in a source transaction.
+// The library's empty required-publication handler has no debt to enroll.
+// Custom handlers still use the publication and retry-barrier workflows.
+it("keeps an idle default publication lane idle across source progress", () =>
+  runInDurableObject(stubFor(`empty-publication-${crypto.randomUUID()}`), (instance, state) =>
+    instance[DurableObject.RunSymbol](
+      Effect.gen(function* () {
+        const gate = yield* ThreadMutationGate;
+        const queue = DueQueue.make(state.storage);
+        const row = queue.read().find((lane) => lane.id === DueQueue.Publication);
+
+        if (row === undefined) return yield* Effect.fail("Missing publication lane");
+        yield* Effect.promise(() => queue.transaction(async () => queue.complete(row, null)));
+        const idle = queue.read().find((lane) => lane.id === DueQueue.Publication);
+
+        yield* gate.withMutation(
+          gate.withTransaction(gate.recordProgress([DueQueue.Native, DueQueue.Publication])),
+        );
+        expect(queue.read().find((lane) => lane.id === DueQueue.Publication)).toEqual(idle);
+        expect(queue.read().find((lane) => lane.id === DueQueue.Native)?.state).toBe("pending");
+      }).pipe(Effect.ensuring(Effect.promise(() => state.storage.deleteAlarm()))),
+    ),
+  ));
+
+// Requested scheduler seam: one write for changed lanes in a source transaction.
 // Real SQLite is needed to distinguish speculative scheduling from committed recovery state.
 it("coalesces source intent and reads it once even above the warm cache limit", () =>
   runInDurableObject(stubFor(`queue-coalesce-${crypto.randomUUID()}`), (instance, state) =>
@@ -70,6 +93,7 @@ it("coalesces source intent and reads it once even above the warm cache limit", 
                     .find((row) => row.id === "test:coalesced"),
                 ).toMatchObject({ dueAt: future + 1_000, progressKey: "4" });
                 yield* gate.schedule("test:coalesced", future + 500);
+                yield* gate.schedule("test:second", future + 700, 1n);
                 expect(
                   DueQueue.make(storage)
                     .read()
@@ -77,9 +101,14 @@ it("coalesces source intent and reads it once even above the warm cache limit", 
                 ).toMatchObject({ dueAt: future + 500, progressKey: "4" });
               }),
             );
-            expect(queries.filter((query) => /^(INSERT|UPDATE)/.test(query))).toHaveLength(1);
+            expect(queries.filter((query) => /\b(INSERT|UPDATE)\b/.test(query))).toHaveLength(1);
             expect(queries.filter((query) => query.startsWith("SELECT"))).toHaveLength(1);
             DueQueue.invalidate(storage);
+            expect(
+              DueQueue.make(storage)
+                .read()
+                .find((row) => row.id === "test:second"),
+            ).toMatchObject({ dueAt: future + 700, progressKey: "1" });
             expect(
               DueQueue.make(storage)
                 .read()
@@ -160,7 +189,27 @@ it("discards aborted intent and preserves parent intent across child rollback", 
           )
           .pipe(Effect.exit);
         expect(queue.read().find((row) => row.id === "test:raw-parent")).toBeUndefined();
+        yield* gate.withTransaction(gate.schedule("test:stale", future + 900, 1n));
+
+        const conflict = yield* gate
+          .withTransaction(
+            Effect.gen(function* () {
+              yield* gate.schedule("test:atomic-new", future + 100, 1n);
+              yield* gate.schedule("test:stale", future + 100, 2n);
+              // A revision changed outside the buffered view rejects the entire source commit.
+              yield* sql`UPDATE platform_cloudflare_due_queue SET revision = revision + 1 WHERE id = ${"test:stale"}`;
+            }),
+          )
+          .pipe(Effect.exit);
+
+        expect(Exit.isFailure(conflict)).toBe(true);
         DueQueue.invalidate(state.storage);
+        expect(queue.read().find((row) => row.id === "test:atomic-new")).toBeUndefined();
+        expect(queue.read().find((row) => row.id === "test:stale")).toMatchObject({
+          dueAt: future + 900,
+          progressKey: "1",
+          revision: 1,
+        });
         expect(queue.read().find((row) => row.id === "test:parent")).toMatchObject({
           dueAt: future + 700,
           progressKey: "5",

@@ -60,14 +60,20 @@ const Attempts = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 8 }));
 
 const PendingRow = Schema.Struct({
   ...Row.fields,
-  attempts: SqlInteger.pipe(Schema.decodeTo(Attempts)),
+  attempts: Schema.NullOr(SqlInteger.pipe(Schema.decodeTo(Attempts))),
+});
+
+const HeadRow = Schema.Struct({
+  owner_thread_id: Row.fields.owner_thread_id,
+  ordinal: Row.fields.ordinal,
+  due_at_millis: Row.fields.due_at_millis,
 });
 
 type OwnerView = {
   ordinal?: number;
   readonly rows: Map<string, typeof Row.Type>;
   readonly batches: Map<string, ReadonlyArray<string>>;
-  readonly attempts: Map<string, number>;
+  readonly attempts: Map<string, { readonly count: number; readonly persisted: boolean }>;
   complete: boolean;
   head?: number;
   headKnown: boolean;
@@ -75,6 +81,8 @@ type OwnerView = {
 
 type OwnedView = {
   readonly owners: Map<string, OwnerView>;
+  /** Undefined is unknown; null is an oversized inventory that must use SQL. */
+  heads?: Map<string, typeof HeadRow.Type> | null;
   deadline?: Option.Option<number>;
 };
 
@@ -91,6 +99,10 @@ const failure = (cause: unknown) =>
  * The additive table has its own closed Schema; it does not change a native format in place.
  * Selection reads sizes before payloads, with a 4 MiB budget across selected owners. An
  * individually larger valid fact runs alone; no pending tail is loaded or acknowledged early.
+ * Exclusive SQLite owners may retain a complete summary of up to 128 owner heads, including
+ * future and parked heads. Other SQL dialects keep their database's ordering and reads.
+ * Acknowledgement enrolls maintenance unless a complete summary proves no timed head remains.
+ * Producer retention continues to enroll newly committed source facts.
  */
 export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.make")(function* (
   namespace?: string,
@@ -127,12 +139,20 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
       namespaces.set(key, view);
       owner.invalidators.add(() => {
         view.owners.clear();
+        delete view.heads;
         delete view.deadline;
       });
     }
   }
 
   const read = <A, E>(body: Effect.Effect<A, E>) => owner?.read(body) ?? body;
+
+  const summarizeHeads =
+    owner !== undefined &&
+    sql.onDialectOrElse({
+      sqlite: () => true,
+      orElse: () => false,
+    });
 
   const transaction = <A, E>(body: Effect.Effect<A, E>) =>
     (owner === undefined ? sql.withTransaction(body) : owner.transaction(body)).pipe(
@@ -169,6 +189,8 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
         view.attempts.clear();
         view.complete = false;
         view.headKnown = false;
+        delete owned.heads;
+        delete owned.deadline;
       }
       for (const row of view.rows.values())
         bytes += new TextEncoder().encode(JSON.stringify(row)).byteLength;
@@ -180,6 +202,8 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
       for (const row of oldest[1].rows.values())
         bytes -= new TextEncoder().encode(JSON.stringify(row)).byteLength;
       owned.owners.delete(oldest[0]);
+      delete owned.heads;
+      delete owned.deadline;
     }
   };
 
@@ -219,7 +243,53 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
     if (owned !== undefined) delete owned.deadline;
   };
 
+  const completeHeads = Effect.fnUntraced(function* () {
+    if (!summarizeHeads || owned === undefined || owned.heads === null) return undefined;
+    if (owned.heads !== undefined) return owned.heads;
+
+    // The overflow sentinel prevents a bounded prefix from becoming false empty authority.
+    const rows = yield* sql`SELECT p.owner_thread_id, p.ordinal, p.due_at_millis FROM ${relation} p
+      WHERE p.payload_json IS NOT NULL AND NOT EXISTS (SELECT 1 FROM ${relation} before_p
+        WHERE before_p.owner_thread_id = p.owner_thread_id AND before_p.ordinal < p.ordinal AND before_p.payload_json IS NOT NULL)
+      ORDER BY p.owner_thread_id LIMIT 129`.pipe(
+      execute,
+      Effect.mapError(failure),
+      Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(HeadRow))),
+      Effect.mapError(failure),
+    );
+
+    owned.heads = rows.length > 128 ? null : new Map(rows.map((row) => [row.owner_thread_id, row]));
+
+    return owned.heads ?? undefined;
+  });
+
+  const headDeadline = (heads: ReadonlyMap<string, typeof HeadRow.Type>) => {
+    let deadline: number | undefined;
+
+    for (const head of heads.values())
+      if (head.due_at_millis !== null)
+        deadline = Math.min(deadline ?? head.due_at_millis, head.due_at_millis);
+
+    return Option.fromNullishOr(deadline);
+  };
+
+  // SQLite's default TEXT order compares UTF-8 bytes, not JavaScript's UTF-16 units.
+  const compareHeads = (left: typeof HeadRow.Type, right: typeof HeadRow.Type) => {
+    const due = (left.due_at_millis ?? 0) - (right.due_at_millis ?? 0);
+
+    if (due !== 0) return due;
+    const leftBytes = new TextEncoder().encode(left.owner_thread_id);
+    const rightBytes = new TextEncoder().encode(right.owner_thread_id);
+
+    for (let index = 0; index < Math.min(leftBytes.length, rightBytes.length); index++)
+      if (leftBytes[index] !== rightBytes[index])
+        return (leftBytes[index] ?? 0) - (rightBytes[index] ?? 0);
+
+    return leftBytes.length - rightBytes.length;
+  };
+
   // Additive retry state leaves existing payloads and acknowledgement receipts unchanged.
+  // Missing retry rows mean zero attempts, including supported operator-reset data.
   yield* sql`CREATE TABLE IF NOT EXISTS ${retries} (
     id TEXT PRIMARY KEY, attempts BIGINT NOT NULL
   )`.pipe(execute, Effect.mapError(failure));
@@ -345,11 +415,21 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
           Effect.mapError(failure),
         );
         for (const row of rows) {
+          const heads = owned?.heads;
+
+          if (heads !== undefined && heads !== null && !heads.has(row.owner_thread_id)) {
+            heads.set(row.owner_thread_id, {
+              owner_thread_id: row.owner_thread_id,
+              ordinal: row.ordinal,
+              due_at_millis: row.due_at_millis,
+            });
+            if (heads.size > 128 && owned !== undefined) owned.heads = null;
+          }
           const view = viewFor(row.owner_thread_id);
 
           if (view === undefined) continue;
           view.ordinal = row.ordinal;
-          view.attempts.set(row.id, 0);
+          view.attempts.set(row.id, { count: 0, persisted: false });
           if (view.headKnown && view.head === undefined) view.head = row.ordinal;
         }
         remember(rows);
@@ -425,6 +505,100 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
     return head;
   });
 
+  const acknowledgeMany = Effect.fn("SqlLifecyclePublication.acknowledgeMany")(function* (
+    input: ReadonlyArray<LifecyclePublicationBatch>,
+  ) {
+    const batches = yield* Schema.decodeEffect(
+      Schema.Array(Schema.toType(LifecyclePublicationBatch)).check(Schema.isMaxLength(100)),
+    )(input).pipe(Effect.mapError(() => LifecyclePublicationError.make({ reason: "conflict" })));
+
+    if (batches.length === 0) return;
+    for (const batch of batches) yield* verifyBatch(batch);
+
+    const ids = [
+      ...new Set(batches.flatMap((batch) => batch.map((publication) => publication.id))),
+    ];
+
+    const retryIds = new Set(
+      batches.flatMap((batch) =>
+        batch
+          .filter((publication) => {
+            const view = owned?.owners.get(publication.ownerThreadId);
+
+            return view?.attempts.get(publication.id)?.persisted !== false;
+          })
+          .map((publication) => publication.id),
+      ),
+    );
+
+    let acknowledged = 0;
+
+    // Each source wave commits together, including waves larger than the native
+    // 100-parameter statement ceiling. Verify all identities before the first write.
+    for (let index = 0; index < ids.length; index += 100) {
+      const selected = ids.slice(index, index + 100);
+
+      const rows = yield* sql`UPDATE ${relation} SET payload_json = NULL, due_at_millis = NULL
+          WHERE id IN ${sql.in(selected)} AND payload_json IS NOT NULL RETURNING id`.pipe(
+        execute,
+        Effect.mapError(failure),
+      );
+
+      acknowledged += rows.length;
+      const selectedRetries = selected.filter((id) => retryIds.has(id));
+
+      if (selectedRetries.length > 0)
+        yield* sql`DELETE FROM ${retries} WHERE id IN ${sql.in(selectedRetries)}`.pipe(
+          execute,
+          Effect.mapError(failure),
+        );
+    }
+    for (const batch of batches) {
+      const view = owned?.owners.get(batch[0].ownerThreadId);
+
+      if (view === undefined) {
+        if (owned !== undefined) delete owned.heads;
+        continue;
+      }
+      for (const publication of batch) {
+        const row = view.rows.get(publication.id);
+
+        if (row !== undefined)
+          view.rows.set(row.id, { ...row, payload_json: null, due_at_millis: null });
+        view.attempts.delete(publication.id);
+      }
+      if (view.complete) {
+        const next = [...view.rows.values()]
+          .filter((row) => row.payload_json !== null)
+          .sort((left, right) => left.ordinal - right.ordinal)[0];
+
+        view.head = next?.ordinal;
+        view.headKnown = true;
+        if (next === undefined) owned?.heads?.delete(batch[0].ownerThreadId);
+        else
+          owned?.heads?.set(next.owner_thread_id, {
+            owner_thread_id: next.owner_thread_id,
+            ordinal: next.ordinal,
+            due_at_millis: next.due_at_millis,
+          });
+      } else {
+        view.headKnown = false;
+        if (owned !== undefined) delete owned.heads;
+      }
+    }
+    invalidateDeadline();
+    if (acknowledged > 0) {
+      const heads = yield* completeHeads();
+
+      // A cleared or entirely parked retained inventory needs no renewed automatic lane.
+      // Unknown/shared inventories keep the original conservative enrollment.
+      if (heads === undefined || Option.isSome(headDeadline(heads)))
+        yield* progress
+          .committed("lifecycle-ack")
+          .pipe(Effect.catchCause((cause) => Effect.failCause(Cause.map(cause, failure))));
+    }
+  }, transaction);
+
   const storage: LifecyclePublicationStorage = {
     pending: (nowMillis, limit, options) =>
       Effect.gen(function* () {
@@ -439,19 +613,27 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
         );
 
         // A deferred or parked prefix blocks its whole owner. Select metadata before payloads.
-        const owners = yield* sql`SELECT p.owner_thread_id FROM ${relation} p
+        const heads = yield* completeHeads();
+
+        const owners =
+          heads === undefined
+            ? yield* sql`SELECT p.owner_thread_id FROM ${relation} p
           WHERE p.payload_json IS NOT NULL AND p.due_at_millis <= ${nowMillis}
           AND NOT EXISTS (SELECT 1 FROM ${relation} before_p WHERE before_p.owner_thread_id = p.owner_thread_id AND before_p.ordinal < p.ordinal AND before_p.payload_json IS NOT NULL)
           ORDER BY p.due_at_millis, p.owner_thread_id LIMIT ${limit}`.pipe(
-          execute,
-          Effect.mapError(failure),
-          Effect.flatMap(
-            Schema.decodeUnknownEffect(
-              Schema.Array(Schema.Struct({ owner_thread_id: Schema.String })),
-            ),
-          ),
-          Effect.mapError(failure),
-        );
+                execute,
+                Effect.mapError(failure),
+                Effect.flatMap(
+                  Schema.decodeUnknownEffect(
+                    Schema.Array(Schema.Struct({ owner_thread_id: Schema.String })),
+                  ),
+                ),
+                Effect.mapError(failure),
+              )
+            : [...heads.values()]
+                .filter((head) => head.due_at_millis !== null && head.due_at_millis <= nowMillis)
+                .sort(compareHeads)
+                .slice(0, limit);
 
         const batches: Array<LifecyclePublicationBatch> = [];
         let selectedBytes = 0;
@@ -507,7 +689,7 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
 
           const selected =
             cachedRows === undefined
-              ? yield* sql`SELECT p.id, p.owner_thread_id, p.ordinal, p.fingerprint, p.payload_json, p.due_at_millis, COALESCE(r.attempts, 0) AS attempts
+              ? yield* sql`SELECT p.id, p.owner_thread_id, p.ordinal, p.fingerprint, p.payload_json, p.due_at_millis, r.attempts
             FROM ${relation} p LEFT JOIN ${retries} r ON r.id = p.id WHERE p.owner_thread_id = ${owner.owner_thread_id}
             AND p.ordinal <= ${lastOrdinal} AND p.payload_json IS NOT NULL ORDER BY p.ordinal`.pipe(
                   execute,
@@ -517,9 +699,6 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
                 )
               : cachedRows.filter((row) => row.ordinal <= lastOrdinal);
 
-          for (const row of selected) {
-            if ("attempts" in row) viewFor(row.owner_thread_id)?.attempts.set(row.id, row.attempts);
-          }
           const rows = selected;
 
           const facts = yield* Effect.forEach(rows, (row) =>
@@ -532,6 +711,14 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
               );
 
               yield* verify(publication, row);
+              if ("attempts" in row) {
+                const view = viewFor(row.owner_thread_id);
+
+                view?.attempts.set(row.id, {
+                  count: row.attempts ?? 0,
+                  persisted: row.attempts !== null,
+                });
+              }
 
               return publication;
             }),
@@ -560,45 +747,8 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
 
         return batches;
       }).pipe(source === undefined ? read : transaction),
-    acknowledge: (batch) =>
-      transaction(
-        Effect.gen(function* () {
-          yield* verifyBatch(batch);
-
-          const acknowledged =
-            yield* sql`UPDATE ${relation} SET payload_json = NULL, due_at_millis = NULL WHERE owner_thread_id = ${batch[0].ownerThreadId} AND ordinal BETWEEN ${batch[0].ordinal} AND ${Array.lastNonEmpty(batch).ordinal} AND payload_json IS NOT NULL RETURNING id`.pipe(
-              execute,
-              Effect.mapError(failure),
-            );
-
-          if (acknowledged.length > 0)
-            yield* progress
-              .committed("lifecycle-ack")
-              .pipe(Effect.catchCause((cause) => Effect.failCause(Cause.map(cause, failure))));
-          yield* sql`DELETE FROM ${retries} WHERE id IN (
-            SELECT id FROM ${relation} WHERE owner_thread_id = ${batch[0].ownerThreadId}
-            AND ordinal BETWEEN ${batch[0].ordinal} AND ${Array.lastNonEmpty(batch).ordinal}
-          )`.pipe(execute, Effect.mapError(failure));
-          const view = owned?.owners.get(batch[0].ownerThreadId);
-
-          if (view !== undefined) {
-            for (const publication of batch) {
-              const row = view.rows.get(publication.id);
-
-              if (row !== undefined)
-                view.rows.set(row.id, { ...row, payload_json: null, due_at_millis: null });
-              view.attempts.delete(publication.id);
-            }
-            if (view.complete) {
-              view.head = [...view.rows.values()]
-                .filter((row) => row.payload_json !== null)
-                .sort((left, right) => left.ordinal - right.ordinal)[0]?.ordinal;
-              view.headKnown = true;
-            } else view.headKnown = false;
-          }
-          invalidateDeadline();
-        }),
-      ),
+    acknowledge: (batch) => acknowledgeMany([batch]),
+    acknowledgeMany,
     claim: (batch, nowMillis, timeoutMillis) =>
       transaction(
         Effect.gen(function* () {
@@ -615,26 +765,33 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
 
           const cachedAttempt = owned?.owners.get(first.ownerThreadId)?.attempts.get(first.id);
 
-          // Shared SQL still locks the retry row. A physical single-owner adapter already
-          // holds its transaction gate and can reuse the retry read with its pending prefix.
+          // SQLite's write transaction serializes this read without inserting a zero row.
+          // Other dialects retain the retry-row lock; an exclusive owner reuses its metadata.
           const attempts =
             cachedAttempt === undefined
-              ? yield* sql`INSERT INTO ${retries}(id, attempts) VALUES (${first.id}, 0)
-        ON CONFLICT(id) DO UPDATE SET attempts = ${retries}.attempts RETURNING attempts`.pipe(
-                  execute,
-                  Effect.mapError(failure),
-                  Effect.flatMap(
-                    Schema.decodeUnknownEffect(
-                      Schema.NonEmptyArray(
-                        Schema.Struct({
-                          attempts: SqlInteger.pipe(Schema.decodeTo(Attempts)),
-                        }),
+              ? yield* sql
+                  .onDialectOrElse({
+                    sqlite:
+                      () => sql`SELECT r.attempts FROM ${relation} p LEFT JOIN ${retries} r ON r.id = p.id
+                    WHERE p.id = ${first.id}`,
+                    orElse: () => sql`INSERT INTO ${retries}(id, attempts) VALUES (${first.id}, 0)
+                    ON CONFLICT(id) DO UPDATE SET attempts = ${retries}.attempts RETURNING attempts`,
+                  })
+                  .pipe(
+                    execute,
+                    Effect.mapError(failure),
+                    Effect.flatMap(
+                      Schema.decodeUnknownEffect(
+                        Schema.Array(
+                          Schema.Struct({
+                            attempts: Schema.NullOr(SqlInteger.pipe(Schema.decodeTo(Attempts))),
+                          }),
+                        ),
                       ),
                     ),
-                  ),
-                  Effect.mapError(failure),
-                )
-              : [{ attempts: cachedAttempt }];
+                    Effect.mapError(failure),
+                  )
+              : [{ attempts: cachedAttempt.count }];
 
           const head = yield* verifyBatch(batch);
 
@@ -647,16 +804,20 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
 
           const view = owned?.owners.get(first.ownerThreadId);
 
+          const heads = owned?.heads;
+
           const blocked =
-            view?.headKnown === true
-              ? view.head !== first.ordinal
-              : (yield* sql`SELECT id FROM ${relation} WHERE owner_thread_id = ${first.ownerThreadId} AND ordinal < ${first.ordinal} AND payload_json IS NOT NULL LIMIT 1`.pipe(
-                  execute,
-                  Effect.mapError(failure),
-                )).length > 0;
+            heads !== undefined && heads !== null
+              ? heads.get(first.ownerThreadId)?.ordinal !== first.ordinal
+              : view?.headKnown === true
+                ? view.head !== first.ordinal
+                : (yield* sql`SELECT id FROM ${relation} WHERE owner_thread_id = ${first.ownerThreadId} AND ordinal < ${first.ordinal} AND payload_json IS NOT NULL LIMIT 1`.pipe(
+                    execute,
+                    Effect.mapError(failure),
+                  )).length > 0;
 
           if (blocked) return false;
-          const attempt = attempts[0].attempts + 1;
+          const attempt = (attempts[0]?.attempts ?? 0) + 1;
 
           if (attempt > 8) return false;
 
@@ -665,19 +826,23 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
               ? null
               : nowMillis + timeoutMillis + Math.min(60_000, 1_000 * 2 ** (attempt - 1));
 
-          yield* (
-            cachedAttempt === undefined
-              ? sql`UPDATE ${retries} SET attempts = ${attempt} WHERE id = ${first.id}`
-              : sql`INSERT INTO ${retries}(id, attempts) VALUES (${first.id}, ${attempt}) ON CONFLICT(id) DO UPDATE SET attempts = excluded.attempts`
-          ).pipe(execute, Effect.mapError(failure));
+          yield* sql`INSERT INTO ${retries}(id, attempts) VALUES (${first.id}, ${attempt})
+            ON CONFLICT(id) DO UPDATE SET attempts = excluded.attempts`.pipe(
+            execute,
+            Effect.mapError(failure),
+          );
           yield* sql`UPDATE ${relation} SET due_at_millis = ${deadline} WHERE owner_thread_id = ${first.ownerThreadId} AND ordinal BETWEEN ${first.ordinal} AND ${Array.lastNonEmpty(batch).ordinal} AND payload_json IS NOT NULL`.pipe(
             execute,
             Effect.mapError(failure),
           );
+          const retainedHead = owned?.heads?.get(first.ownerThreadId);
+
+          if (retainedHead?.ordinal === first.ordinal)
+            owned?.heads?.set(first.ownerThreadId, { ...retainedHead, due_at_millis: deadline });
           const retained = owned?.owners.get(first.ownerThreadId);
 
           if (retained !== undefined) {
-            retained.attempts.set(first.id, attempt);
+            retained.attempts.set(first.id, { count: attempt, persisted: true });
             for (const publication of batch) {
               const row = retained.rows.get(publication.id);
 
@@ -691,26 +856,29 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
         }),
       ),
     pendingDeadline: read(
-      Effect.suspend(() =>
-        owned?.deadline !== undefined
-          ? Effect.succeed(owned.deadline)
-          : sql`SELECT MIN(due_at_millis) AS deadline FROM ${relation} p WHERE p.due_at_millis IS NOT NULL AND p.payload_json IS NOT NULL AND NOT EXISTS (SELECT 1 FROM ${relation} before_p WHERE before_p.owner_thread_id = p.owner_thread_id AND before_p.ordinal < p.ordinal AND before_p.payload_json IS NOT NULL)`.pipe(
-              execute,
-              Effect.mapError(failure),
-              Effect.flatMap(
-                Schema.decodeUnknownEffect(
-                  Schema.Array(Schema.Struct({ deadline: Schema.NullOr(SqlInteger) })),
-                ),
-              ),
-              Effect.mapError(failure),
-              Effect.map((rows) => Option.fromNullishOr(rows[0]?.deadline)),
-              Effect.tap((deadline) =>
-                Effect.sync(() => {
-                  if (owned !== undefined) owned.deadline = deadline;
-                }),
-              ),
+      Effect.gen(function* () {
+        const heads = yield* completeHeads();
+
+        if (heads !== undefined) return headDeadline(heads);
+        if (owned?.deadline !== undefined) return owned.deadline;
+
+        return yield* sql`SELECT MIN(due_at_millis) AS deadline FROM ${relation} p WHERE p.due_at_millis IS NOT NULL AND p.payload_json IS NOT NULL AND NOT EXISTS (SELECT 1 FROM ${relation} before_p WHERE before_p.owner_thread_id = p.owner_thread_id AND before_p.ordinal < p.ordinal AND before_p.payload_json IS NOT NULL)`.pipe(
+          execute,
+          Effect.mapError(failure),
+          Effect.flatMap(
+            Schema.decodeUnknownEffect(
+              Schema.Array(Schema.Struct({ deadline: Schema.NullOr(SqlInteger) })),
             ),
-      ),
+          ),
+          Effect.mapError(failure),
+          Effect.map((rows) => Option.fromNullishOr(rows[0]?.deadline)),
+          Effect.tap((deadline) =>
+            Effect.sync(() => {
+              if (owned !== undefined) owned.deadline = deadline;
+            }),
+          ),
+        );
+      }),
     ),
     retryParked: (ownerThreadId, nowMillis) =>
       transaction(
@@ -735,10 +903,14 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
             execute,
             Effect.mapError(failure),
           );
+          const retainedHead = owned?.heads?.get(ownerThreadId);
+
+          if (retainedHead !== undefined)
+            owned?.heads?.set(ownerThreadId, { ...retainedHead, due_at_millis: nowMillis });
           const view = owned?.owners.get(ownerThreadId);
 
           if (view !== undefined) {
-            view.attempts.set(head.id, 0);
+            view.attempts.set(head.id, { count: 0, persisted: false });
             for (const row of view.rows.values()) {
               if (row.payload_json !== null)
                 view.rows.set(row.id, { ...row, due_at_millis: nowMillis });

@@ -1,16 +1,226 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Context, DateTime, Effect, Layer, Option, Tracer, Schema } from "effect";
-import { Toolkit } from "effect/unstable/ai";
+import {
+  Context,
+  Crypto,
+  DateTime,
+  Effect,
+  Layer,
+  Option,
+  PlatformError,
+  Tracer,
+  Schema,
+} from "effect";
+import { Tool, Toolkit } from "effect/unstable/ai";
 
 import * as Agent from "../../src/core/Agent.ts";
 import { AttemptId, SubmissionId, ThreadId } from "../../src/core/Identifiers.ts";
 import { DurableWorkerBinding } from "../../src/durable/AgentRegistration.ts";
+import { DigestError } from "../../src/durable/Digest.ts";
+import {
+  compileBindingContracts,
+  toolReplayContracts,
+} from "../../src/durable/internal/agent-registration.ts";
 import { DefinitionDigests, Digest, ProducerEpoch } from "../../src/durable/Records.ts";
 import { Claim, OwnershipToken } from "../../src/durable/SubmissionLedger.ts";
+import { ToolExecutionClass } from "../../src/engine/DurableStep.ts";
 
 class Dependency extends Context.Service<Dependency, string>()("test/registered-dependency") {}
 
-// https://reve-r6.sentry.io/explore/traces/trace/09c140a052588528d87d0ab131c5cbcc
+// Explicit failure-first request: stable-identity invalidation and reuse across runtime rebuilds.
+// Final output cannot reveal repeated contract hashing, so count the real Crypto operations here.
+it.effect(
+  "reuses replay contracts across identities and invalidates changed declaration inputs",
+  () =>
+    Effect.gen(function* () {
+      const crypto = yield* Crypto.Crypto;
+      let hashes = 0;
+
+      const counted = {
+        ...crypto,
+        digest: (algorithm: Crypto.DigestAlgorithm, bytes: Uint8Array) => {
+          hashes++;
+
+          return crypto.digest(algorithm, bytes);
+        },
+      };
+
+      const cached = toolReplayContracts;
+
+      const tool = Tool.make("lookup", {
+        parameters: Schema.Struct({ id: Schema.String }),
+        success: Schema.String,
+      });
+
+      const definition = Agent.make("cache-identity", {
+        input: Schema.String,
+        output: Schema.String,
+        instructions: "Answer",
+        toolkit: Toolkit.make(tool),
+      });
+
+      const digest = Digest.make("a".repeat(64));
+      const digests = DefinitionDigests.make({ agent: digest, model: digest, tools: digest });
+
+      const get = (value: Agent.AnyDefinition, version = "v1", identity = digests) =>
+        cached(value, undefined, version, identity).pipe(
+          Effect.provideService(Crypto.Crypto, counted),
+        );
+
+      const original = yield* get(definition);
+      const reconstructed = { ...definition, toolkit: Toolkit.make(tool) };
+
+      expect(yield* get(reconstructed)).toEqual(original);
+      expect(hashes).toBe(1);
+
+      const changedTools = [
+        Tool.make("lookup", {
+          parameters: Schema.Struct({ id: Schema.Number }),
+          success: Schema.String,
+        }),
+        tool.annotate(ToolExecutionClass, "readonly"),
+      ];
+
+      for (const changed of changedTools) {
+        const before = hashes;
+        const contracts = yield* get({ ...definition, toolkit: Toolkit.make(changed) });
+
+        expect(contracts.lookup).not.toBe(original.lookup);
+        expect(hashes).toBe(before + 1);
+      }
+      expect((yield* get(definition, "v2")).lookup).not.toBe(original.lookup);
+      expect(
+        (yield* get({ ...definition, completion: { tool: "lookup", project: () => "done" } }))
+          .lookup,
+      ).not.toBe(original.lookup);
+      expect(yield* get({ ...definition, toolkit: Toolkit.empty })).toEqual({});
+      const args = { region: "one" };
+
+      const hosted = Tool.providerDefined({
+        id: "test.hosted",
+        customName: "hosted",
+        providerName: "hosted",
+        args: Schema.Struct({ region: Schema.String }),
+      })(args);
+
+      const providerDefinition = { ...definition, toolkit: Toolkit.make(hosted) };
+      const providerOriginal = yield* get(providerDefinition);
+
+      args.region = "two";
+      expect((yield* get(providerDefinition)).hosted).not.toBe(providerOriginal.hosted);
+      yield* get(definition);
+      const beforeDigestChange = hashes;
+
+      yield* get(definition, "v1", { ...digests, tools: Digest.make("b".repeat(64)) });
+      expect(hashes).toBe(beforeDigestChange + 1);
+
+      // Rebuilt registrations reuse static metadata; captured services remain outside the compiler.
+      const definitions = { agent: "v1", model: "model", tools: "v1" };
+
+      const compiled = yield* compileBindingContracts(definition, definitions).pipe(
+        Effect.provideService(Crypto.Crypto, counted),
+      );
+
+      const beforeRebuild = hashes;
+
+      expect(
+        yield* compileBindingContracts(definition, { ...definitions }).pipe(
+          Effect.provideService(Crypto.Crypto, counted),
+        ),
+      ).toEqual(compiled);
+      expect(hashes).toBe(beforeRebuild);
+      yield* cached(definition, {
+        tools: { lookup: { release: "v1", options: { region: "one", limit: 2 } } },
+      }).pipe(Effect.provideService(Crypto.Crypto, counted));
+      const beforeReordering = hashes;
+
+      yield* cached(definition, {
+        tools: { lookup: { options: { limit: 2, region: "one" }, release: "v1" } },
+      }).pipe(Effect.provideService(Crypto.Crypto, counted));
+      expect(hashes).toBe(beforeReordering);
+    }).pipe(Effect.provide(NodeCrypto.layer)),
+);
+
+it.effect("retains typed contract failures without caching failed compilation", () =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto;
+    const cached = toolReplayContracts;
+
+    const definition = Agent.make("cache-failure", {
+      input: Schema.String,
+      output: Schema.String,
+      instructions: "Answer",
+      toolkit: Toolkit.make(
+        Tool.make("lookup", { parameters: Schema.Struct({}), success: Schema.String }),
+      ),
+    });
+
+    const get = (version: string) => cached(definition, undefined, version);
+    const original = yield* get("v1");
+
+    expect(yield* cached(definition, { tools: {} }).pipe(Effect.flip)).toBeInstanceOf(DigestError);
+
+    const cause = PlatformError.badArgument({
+      module: "Crypto",
+      method: "digest",
+      description: "unavailable",
+    });
+
+    const failed = yield* get("v2").pipe(
+      Effect.provideService(Crypto.Crypto, { ...crypto, digest: () => Effect.fail(cause) }),
+      Effect.flip,
+    );
+
+    expect(failed).toBeInstanceOf(DigestError);
+    expect(failed.cause).toBe(cause);
+    expect((yield* get("v2")).lookup).not.toBe(original.lookup);
+    expect(yield* get("v1")).toEqual(original);
+  }).pipe(Effect.provide(NodeCrypto.layer)),
+);
+
+it.effect("hashes the serialized replay snapshot when inputs change during compilation", () =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto;
+    const first = Tool.make("first", { parameters: Schema.Struct({}), success: Schema.String });
+    const second = Tool.make("second", { parameters: Schema.Struct({}), success: Schema.String });
+
+    const make = (id: string, toolkit: Agent.AnyDefinition["toolkit"]) =>
+      Agent.make(id, {
+        input: Schema.String,
+        output: Schema.String,
+        instructions: "Answer",
+        toolkit,
+      });
+
+    const version = { release: "v1" };
+    const versions = { tools: { first: "v1", second: version } };
+
+    const expected = yield* toolReplayContracts(
+      make("snapshot-reference", Toolkit.make(second)),
+      versions,
+    );
+
+    const definition = make("snapshot-compilation", Toolkit.make(first, second));
+    let calls = 0;
+
+    const compiled = yield* toolReplayContracts(definition, versions).pipe(
+      Effect.provideService(Crypto.Crypto, {
+        ...crypto,
+        digest: (algorithm, bytes) => {
+          if (++calls === 1) version.release = "v2";
+
+          return crypto.digest(algorithm, bytes);
+        },
+      }),
+    );
+
+    version.release = "v1";
+    expect(compiled.second).toBe(expected.second);
+    expect((yield* toolReplayContracts(definition, versions)).second).toBe(expected.second);
+  }).pipe(Effect.provide(NodeCrypto.layer)),
+);
+
+// Registration captures dependencies while each Attempt inherits its current trace and sampling.
 it.effect(
   "registered attempts use the current trace and sampling without losing dependencies",
   () =>
