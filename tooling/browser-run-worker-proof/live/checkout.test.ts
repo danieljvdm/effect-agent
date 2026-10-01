@@ -209,8 +209,11 @@ const proof = Effect.gen(function* () {
     if (response.status !== 200 && !(operation === "run" && response.status === 502))
       return yield* fail(operation, response.status);
 
-    const evidence = yield* response.json.pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(Evidence)),
+    const body = yield* response.text.pipe(
+      Effect.mapError(() => fail(operation + ":transport-or-timeout", response.status)),
+    );
+
+    const evidence = yield* Schema.decodeEffect(Schema.fromJsonString(Evidence))(body).pipe(
       Effect.mapError(() => fail(operation + ":invalid-evidence", response.status)),
     );
 
@@ -310,20 +313,34 @@ const proof = Effect.gen(function* () {
 
     if (deployed.workerName !== workerName || deployed.url !== origin)
       return yield* fail("deployment:origin-mismatch");
-    yield* client.get(origin + "/health").pipe(
+    // Static health bypasses the fresh namespace; wait for its authenticated receiver.
+    yield* request("evidence").pipe(
       Effect.filterOrFail(
-        (response) => response.status === 200,
-        () => fail("readiness"),
-      ),
-      Effect.flatMap((response) => response.text),
-      Effect.filterOrFail(
-        (body) => body.includes("checkout-proof-v2"),
-        () => fail("readiness"),
+        ({ evidence }) =>
+          !evidence.started &&
+          evidence.attempts === 0 &&
+          evidence.receipt === null &&
+          evidence.closed &&
+          evidence.scrapeAttempts === 0 &&
+          evidence.failure === null,
+        () => fail("readiness:owner-not-pristine"),
       ),
       Effect.timeout("10 seconds"),
-      Effect.retry({ schedule: Schedule.spaced("2 seconds") }),
-      Effect.timeout("2 minutes"),
-      Effect.mapError(() => fail("readiness")),
+      Effect.retry({
+        times: 5,
+        schedule: Schedule.spaced("2 seconds"),
+        while: (error) =>
+          error._tag === "TimeoutError" ||
+          (error._tag === "CheckoutGateFailure" &&
+            (error.stage === "evidence:transport-or-timeout" ||
+              (error.stage === "evidence" &&
+                error.status !== null &&
+                (error.status === 404 || (error.status >= 500 && error.status <= 599))))),
+      }),
+      Effect.timeout("1 minute"),
+      Effect.mapError((error) =>
+        fail("readiness", error._tag === "CheckoutGateFailure" ? error.status : null),
+      ),
     );
     // Persist before sending. A lost response must never cause another /run.
     report = { ...report, dispatched: true };
