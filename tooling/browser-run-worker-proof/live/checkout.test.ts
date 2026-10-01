@@ -39,7 +39,7 @@ const safeFailure = <E>(cause: Cause.Cause<E>) => {
 };
 
 const Report = Schema.Struct({
-  version: Schema.Literal(2),
+  version: Schema.Literal(3),
   runId: RunId,
   workerName: Schema.String,
   sourceCommit: Commit,
@@ -78,11 +78,13 @@ const receiptMatches = (evidence: typeof Evidence.Type) =>
 
 // Persist only known fixture values. A malformed receipt or free-form failure is never published.
 const publicEvidence = (evidence: typeof Evidence.Type): typeof Evidence.Type => ({
+  phase: evidence.phase,
   started: evidence.started,
   attempts: evidence.attempts,
   receipt: receiptMatches(evidence) ? evidence.receipt : null,
   closed: evidence.closed,
   scrapeAttempts: evidence.scrapeAttempts,
+  loginRequests: evidence.loginRequests,
   failure:
     evidence.failure === null
       ? null
@@ -244,7 +246,7 @@ const proof = Effect.gen(function* () {
     if (status !== 404) return yield* fail("worker-name:unavailable", status);
     yield* fs.makeDirectory(directory, { recursive: true });
     report = {
-      version: 2,
+      version: 3,
       runId: run,
       workerName,
       sourceCommit,
@@ -328,6 +330,7 @@ const proof = Effect.gen(function* () {
           evidence.receipt === null &&
           evidence.closed &&
           evidence.scrapeAttempts === 0 &&
+          evidence.loginRequests === 0 &&
           evidence.failure === null,
         () => fail("readiness:owner-not-pristine"),
       ),
@@ -357,7 +360,10 @@ const proof = Effect.gen(function* () {
     yield* save();
     if (Exit.isFailure(executed)) return yield* safeFailure(executed.cause);
     if (executed.value.status !== 200)
-      return yield* fail("run:" + publicEvidence(observed.evidence).failure, executed.value.status);
+      return yield* fail(
+        `run:${observed.evidence.phase}:${publicEvidence(observed.evidence).failure}`,
+        executed.value.status,
+      );
     const evidence = observed.evidence;
 
     if (
@@ -369,6 +375,7 @@ const proof = Effect.gen(function* () {
       return yield* fail("receipt:mismatch");
     if (evidence.scrapeAttempts < 1 || evidence.scrapeAttempts > 3 || evidence.failure !== null)
       return yield* fail("checkout:worker-failure");
+    if (evidence.loginRequests < 2) return yield* fail("readiness:login-not-recovered");
   });
 
   yield* checkout.pipe(

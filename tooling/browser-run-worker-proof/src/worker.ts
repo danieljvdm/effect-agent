@@ -29,7 +29,7 @@ import {
 import { Tool, Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 
-import { CheckoutError, Evidence, Receipt, WorkerFailure } from "./proof.ts";
+import { CheckoutError, CheckoutPhase, Evidence, Receipt, WorkerFailure } from "./proof.ts";
 
 type Env = Cloudflare.Env;
 const buyer = "buyer@example.test";
@@ -128,6 +128,9 @@ const transient = (cause: unknown): boolean => {
 
 /** One owner retains only the dispatch fence, receipt, and private exact-session cleanup ID. */
 export class CheckoutRun extends DurableObject<Env> {
+  private phase(value: typeof CheckoutPhase.Type) {
+    this.ctx.storage.kv.put("phase", value);
+  }
   private read = <S extends Schema.Top & { readonly DecodingServices: never }>(
     key: string,
     schema: S,
@@ -138,11 +141,13 @@ export class CheckoutRun extends DurableObject<Env> {
   }
   private evidence() {
     return Evidence.make({
+      phase: this.read("phase", CheckoutPhase, "idle"),
       started: this.read("started", Schema.Boolean, false),
       attempts: this.read("attempts", Schema.Natural, 0),
       receipt: this.read("receipt", Schema.NullOr(Receipt), null),
       closed: this.read("closed", Schema.Boolean, true),
       scrapeAttempts: this.read("scrapeAttempts", Schema.Natural, 0),
+      loginRequests: this.read("loginRequests", Schema.Natural, 0),
       failure: this.read("failure", Schema.NullOr(Schema.String), null),
     });
   }
@@ -175,6 +180,7 @@ export class CheckoutRun extends DurableObject<Env> {
     if (this.evidence().started || this.stopped)
       return new Response("Attempt already started; never replay it", { status: 409 });
     this.ctx.storage.kv.put("started", true);
+    this.phase("scrape");
 
     const capture = browserQuickActionCaptureLayer().pipe(
       Layer.provide(BrowserQuickActionBrowserBinding.layer({ browser: this.env.BROWSER })),
@@ -234,10 +240,13 @@ export class CheckoutRun extends DurableObject<Env> {
       });
     }
 
+    this.phase("acquire");
+
     const acquired = yield* host.acquire(
       InteractiveBrowserPolicy.make({
         network: { _tag: "ExactHosts", allowedHosts: [new URL(origin).host] },
-        maxActions: 60,
+        // Reserve up to 60 read-only operations for one minute of login readiness.
+        maxActions: 120,
         maxElapsedMillis: 240_000,
         maxReturnedBytes: 16_384,
       }),
@@ -253,16 +262,71 @@ export class CheckoutRun extends DurableObject<Env> {
         message: "Run was closed during acquisition",
       });
     }
+    this.phase("connect");
     const session = yield* acquired.connect;
     const handle = session.handle;
 
-    yield* handle.navigate(BrowserNavigateRequest.make({ url: `${origin}/shop/login` }));
+    this.phase("login-readiness");
+    // The runner's /evidence route can be ready before this browser's route.
+    // Navigation accepts HTTP error pages; prove the login controls before any input.
+    yield* Effect.gen({ self: this }, function* () {
+      if (this.stopped)
+        return yield* CheckoutError.make({
+          stage: "authority",
+          message: "Run was closed during browser readiness",
+        });
+      yield* handle.navigate(BrowserNavigateRequest.make({ url: `${origin}/shop/login` }));
+      const result = yield* handle.readText(BrowserReadTextRequest.make({}));
+      const page = yield* Schema.decodeEffect(BrowserRunPageObservation)(result.text);
+
+      if (this.stopped)
+        return yield* CheckoutError.make({
+          stage: "authority",
+          message: "Run was closed during browser readiness",
+        });
+      if (
+        !["email", "password"].every((kind) =>
+          page.controls.some(
+            (control) =>
+              control.kind.startsWith("input:") && control.inputType === kind && !control.disabled,
+          ),
+        ) ||
+        !page.controls.some(
+          (control) =>
+            control.kind === "button" && control.label === "Sign in" && !control.disabled,
+        )
+      )
+        return yield* CheckoutError.make({
+          stage: "login-readiness",
+          message: "The browser has not reached the login fixture",
+        });
+    }).pipe(
+      Effect.retry({
+        schedule: Schedule.spaced("2 seconds"),
+        while: (error) =>
+          (error._tag === "CheckoutError" && error.stage === "login-readiness") ||
+          (error._tag === "InteractiveBrowserActionError" &&
+            error.operation === "read-text" &&
+            error.evidence?.session === "attached"),
+      }),
+      Effect.timeoutOrElse({
+        duration: "1 minute",
+        orElse: () =>
+          Effect.fail(
+            CheckoutError.make({
+              stage: "login-readiness",
+              message: "The browser login fixture did not become ready",
+            }),
+          ),
+      }),
+    );
     let raw: typeof BrowserRunPageObservation.Type | undefined;
     const refs = new Map<string, (typeof BrowserRunPageObservation.Type.controls)[number]>();
     let sequence = 0;
     let blocked = false;
     let submitted = false;
     const isStopped = () => this.stopped;
+    const phase = (value: typeof CheckoutPhase.Type) => this.phase(value);
 
     const invalid = () =>
       BrowserUse.BrowserUseError.make({
@@ -277,6 +341,8 @@ export class CheckoutRun extends DurableObject<Env> {
       });
 
     const observe = Effect.gen({ self: this }, function* () {
+      this.phase("observe");
+
       const result = yield* handle.readText(BrowserReadTextRequest.make({})).pipe(
         Effect.retry({
           times: 2,
@@ -364,6 +430,7 @@ export class CheckoutRun extends DurableObject<Env> {
                   }),
                 );
 
+          phase("act");
           const result = yield* input.pipe(Effect.exit);
 
           if (Exit.isFailure(result)) {
@@ -416,6 +483,7 @@ export class CheckoutRun extends DurableObject<Env> {
             );
 
             if (control === undefined || raw === undefined) return yield* invalid();
+            this.phase("credential");
             yield* handle
               .fill(
                 BrowserFillRequest.make({
@@ -453,6 +521,7 @@ export class CheckoutRun extends DurableObject<Env> {
 
           if (control === undefined || raw === undefined) return yield* invalid();
           submitted = true; // Fence before dispatch, including a lost reply.
+          this.phase("submit");
           yield* handle
             .click(
               BrowserClickRequest.make({
@@ -473,6 +542,7 @@ export class CheckoutRun extends DurableObject<Env> {
           const observation = yield* observe;
           const receipt = this.evidence().receipt;
 
+          this.phase("receipt");
           if (
             receipt === null ||
             this.evidence().attempts !== 1 ||
@@ -495,6 +565,7 @@ export class CheckoutRun extends DurableObject<Env> {
       ),
     );
 
+    this.phase("agent");
     yield* AgentRuntime.run(agent, `Buy the approved test order. Ship to ${address}.`).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -505,9 +576,11 @@ export class CheckoutRun extends DurableObject<Env> {
         ),
       ),
     );
+    this.phase("close");
     yield* session.close;
     this.ctx.storage.kv.put("closed", true);
     yield* Effect.promise(() => this.ctx.storage.deleteAlarm());
+    this.phase("complete");
 
     return Response.json(this.evidence());
   }, Effect.scoped);
@@ -520,10 +593,18 @@ export class CheckoutRun extends DurableObject<Env> {
       new Response(null, { status: 303, headers: { location, ...headers } });
 
     if (path === "/shop/login") {
-      if (request.method === "GET")
+      if (request.method === "GET") {
+        // Regression #752: the browser's fresh route can still serve a startup error
+        // after the runner can reach /evidence. Exercise that path on every hosted proof.
+        const requests = this.read("loginRequests", Schema.Natural, 0) + 1;
+
+        this.ctx.storage.kv.put("loginRequests", requests);
+        if (requests === 1) return html("<h1>Store starting</h1>", 503);
+
         return html(
           '<h1>Sign in</h1><form id="login" method="post" action="/shop/login"><label>Email<input name="email" type="email" required></label><label>Password<input name="password" type="password" required></label><button>Sign in</button></form>',
         );
+      }
       const form = yield* Effect.promise(() => request.formData());
 
       if (
@@ -608,14 +689,22 @@ export class CheckoutRun extends DurableObject<Env> {
           const found = Cause.findError(cause);
 
           const error = Result.isSuccess(found)
-            ? Schema.decodeOption(Schema.Struct({ _tag: Schema.String }))(found.success)
-            : Option.none();
+            ? found.success
+            : Result.getOrElse(Cause.findDefect(cause), () => undefined);
 
-          const code =
-            Result.isSuccess(found) && Schema.is(CheckoutError)(found.success)
-              ? found.success.stage
-              : Option.isSome(error)
-                ? error.value._tag
+          const detail = Schema.decodeUnknownOption(
+            Schema.Struct({
+              _tag: Schema.optionalKey(Schema.String),
+              name: Schema.optionalKey(Schema.String),
+            }),
+          )(error);
+
+          const code = Schema.is(CheckoutError)(error)
+            ? error.stage
+            : Schema.is(BrowserUse.BrowserUseError)(error)
+              ? `BrowserUseError:${error.code}`
+              : Option.isSome(detail)
+                ? (detail.value._tag ?? detail.value.name ?? "worker-failure")
                 : "worker-failure";
 
           const tag = Option.getOrElse(

@@ -35,6 +35,12 @@ Durable Object, retrying fresh-route 404 and transient 5xx/transport failures ev
 two seconds for up to one minute.
 Authentication failures, invalid evidence, and nonpristine owners fail immediately.
 
+The browser then reloads the initial login GET until it observes the email, password,
+and Sign in controls, every two seconds for up to one minute. Model execution and
+credential input begin only after that check. The fixture deliberately serves a 503
+on its first login GET; independent evidence must show a subsequent login request.
+This covers startup error pages that browser navigation accepts as completed loads.
+
 A read-only scrape of inline fixture HTML runs before browser creation, avoiding
 propagation of a new public route to the Quick Actions browser. Transient 5xx/reset
 failures of that preflight may retry, at most twice. Read-only browser observations
@@ -86,12 +92,17 @@ The runner records its identity and pending report before provisioning the stage
 
 The ignored `.checkout-proof/<run>/report.json` in this workspace retains the commit,
 Worker name, dispatch status, sanitized independent evidence, allowlisted Worker failure codes,
-failure stage/status,
+the last checkout operation, login request count, failure stage/status,
 cleanup result, and total, checkout, and cleanup milliseconds. Total time includes
 deployment and retirement. Checkout time measures the single run request; cleanup time
 measures closure, its independent confirmation, and Worker retirement. Evidence is
 written atomically. A mismatched receipt is omitted rather than publishing unexpected
 identity or payload values.
+
+Failure codes distinguish invalid helper calls from browser failures and retain known
+error tags even when a failure is carried as an Effect defect. The operation identifies
+whether it occurred during scraping, browser setup, model execution, input, or closure;
+unknown errors still use `worker-failure` without publishing their messages.
 
 ## Recovery
 
