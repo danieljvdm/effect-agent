@@ -240,7 +240,8 @@ vp run perf:cloudflare:cpu --baseline-dir /tmp/cpu-baseline --candidate-dir /tmp
 
 The builder runs the package builds and resolves the fixture's public imports to production
 exports. It retains source, fixture, lockfile and bundle identities and rejects changed source.
-The runner checks bundle digests and deployed identities before submitting work. Dry-run
+The runner checks bundle digests and deployed identities before submitting work. New Worker
+routes get up to 15 read-only readiness probes; benchmark operations are never retried. Dry-run
 validates the bundles and prints the experiment; it creates no cloud resources or output files.
 
 The fixed experiment has three deployment rounds, four matched cohorts per round and two

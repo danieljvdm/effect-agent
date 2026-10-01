@@ -184,6 +184,7 @@ const command = Command.make(
       url: string,
       file: string,
       body?: Schema.Json,
+      readiness = false,
     ) {
       yield* requireReplayCpu((yield* now) < deadline, "Workload deadline reached");
       yield* requireReplayCpu(
@@ -221,9 +222,12 @@ const command = Command.make(
         cfRay: response.headers["cf-ray"],
         response: data,
       });
-      yield* requireReplayCpu(response.status === 200, `Request failed; inspect ${file}`);
+      yield* requireReplayCpu(
+        response.status === 200 || (readiness && [404, 502, 503, 504].includes(response.status)),
+        `Request failed; inspect ${file}`,
+      );
 
-      return { data, elapsed };
+      return { data, elapsed, status: response.status };
     });
 
     yield* Effect.gen(function* () {
@@ -242,11 +246,22 @@ const command = Command.make(
 
         for (const role of block.deploymentOrder) {
           const target = yield* deployment.deploy(block.block, role);
-          const file = path.join(output, `block-${block.block}`, role, "identity.json");
+          const directory = path.join(output, `block-${block.block}`, role);
+          let identity: typeof ReplayCpuIdentity.Type | undefined;
 
-          const identity = yield* Schema.decodeUnknownEffect(ReplayCpuIdentity)(
-            (yield* request(`${target.url}/identity`, file)).data,
-          );
+          for (let attempt = 0; attempt < 15; attempt++) {
+            const file = path.join(directory, `readiness-${attempt}.json`);
+            const receipt = yield* request(`${target.url}/identity`, file, undefined, true);
+
+            if (receipt.status === 200) {
+              identity = yield* Schema.decodeUnknownEffect(ReplayCpuIdentity)(receipt.data);
+              yield* fs.copyFile(file, path.join(directory, "identity.json"));
+              break;
+            }
+            if (attempt < 14) yield* Effect.sleep("2 seconds");
+          }
+          if (identity === undefined)
+            return yield* new ReplayCpuError({ message: "New Worker route did not become ready" });
 
           const expected = builds[role === "candidate" ? "candidate" : "baseline"];
 
