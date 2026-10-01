@@ -1,3 +1,4 @@
+import type { Scope } from "effect";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -83,11 +84,18 @@ export class ThreadEncodingError extends Schema.TaggedError<ThreadEncodingError>
   { threadId: ThreadId, message: Schema.String },
 ) {}
 
+/** A scoped view cannot access another owner's history or be used after closure. */
+export class ThreadOwnershipError extends Schema.TaggedError<ThreadOwnershipError>()(
+  "ThreadOwnershipError",
+  { threadId: ThreadId, reason: Schema.Literals(["closed", "foreign"]), message: Schema.String },
+) {}
+
 export type ThreadError =
   | ThreadNotFound
   | ThreadLimitExceeded
   | ThreadHistoryDiverged
-  | ThreadEncodingError;
+  | ThreadEncodingError
+  | ThreadOwnershipError;
 
 /** Reconstruct exact Effect AI Prompt history, including tools, reasoning, files, and options. */
 export const toPrompt = (snapshot: Thread): Prompt.Prompt =>
@@ -99,32 +107,51 @@ export const toPrompt = (snapshot: Thread): Prompt.Prompt =>
  * ThreadHistory.layer uses this store for ordinary Runs and interactive history.
  * Scope closure releases all in-memory state.
  */
-export class Store extends Context.Service<
-  Store,
-  {
-    readonly create: (threadId: ThreadId) => Effect.Effect<Thread, ThreadLimitExceeded>;
-    readonly append: (
-      threadId: ThreadId,
-      message: ThreadAppend,
-    ) => Effect.Effect<Thread, ThreadNotFound | ThreadLimitExceeded | ThreadEncodingError>;
-    /**
-     * Record an engine-emitted full history only when it is an append-only
-     * extension of the exact official Prompt already stored. The entire
-     * suffix commits in one transaction or not at all: concurrent writers are
-     * serialized, a writer whose history no longer extends the committed
-     * official history fails with ThreadHistoryDiverged, and a limit
-     * failure inside the suffix records nothing. Earlier updates remain committed if the Run
-     * later fails or is interrupted; this transaction covers one update, not the whole Run.
-     */
-    readonly recordHistory: (
-      threadId: ThreadId,
-      runId: RunId,
-      history: Prompt.Prompt,
-    ) => Effect.Effect<Thread, ThreadError>;
-    readonly snapshot: (threadId: ThreadId) => Effect.Effect<Thread, ThreadNotFound>;
-    readonly export: (threadId: ThreadId) => Effect.Effect<ThreadExport, ThreadNotFound>;
-  }
->()("@effect-agent/capabilities/EphemeralThreads") {}
+interface StoreService {
+  /**
+   * Acquire an isolated ownership view over this same bounded store. Newly created Threads
+   * belong to the supplied Scope; closing it releases only that view's Threads and bytes.
+   * Supplied by layerMemory; custom stores may omit this capability.
+   * The view rejects foreign IDs and all access after closure. Keep its Scope open through
+   * all users, including streams, child Runs, snapshots and history hooks.
+   */
+  readonly scoped?: Effect.Effect<StoreService, never, Scope.Scope>;
+  readonly create: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Thread, ThreadLimitExceeded | ThreadOwnershipError>;
+  readonly append: (
+    threadId: ThreadId,
+    message: ThreadAppend,
+  ) => Effect.Effect<
+    Thread,
+    ThreadNotFound | ThreadLimitExceeded | ThreadEncodingError | ThreadOwnershipError
+  >;
+  /**
+   * Record an engine-emitted full history only when it is an append-only
+   * extension of the exact official Prompt already stored. The entire
+   * suffix commits in one transaction or not at all: concurrent writers are
+   * serialized, a writer whose history no longer extends the committed
+   * official history fails with ThreadHistoryDiverged, and a limit
+   * failure inside the suffix records nothing. Earlier updates remain committed if the Run
+   * later fails or is interrupted; this transaction covers one update, not the whole Run.
+   */
+  readonly recordHistory: (
+    threadId: ThreadId,
+    runId: RunId,
+    history: Prompt.Prompt,
+  ) => Effect.Effect<Thread, ThreadError>;
+  readonly snapshot: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Thread, ThreadNotFound | ThreadOwnershipError>;
+  readonly export: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ThreadExport, ThreadNotFound | ThreadOwnershipError>;
+}
+
+/** Process-local conversation store supplied by layerMemory. */
+export class Store extends Context.Service<Store, StoreService>()(
+  "@effect-agent/capabilities/EphemeralThreads",
+) {}
 
 const encodeMessage = (
   threadId: ThreadId,
@@ -140,27 +167,71 @@ const encodeMessage = (
     ),
   );
 
-const findSnapshot = (
-  state: ReadonlyMap<ThreadId, Thread>,
-  threadId: ThreadId,
-): Effect.Effect<Thread, ThreadNotFound> => {
-  const snapshot = state.get(threadId);
+interface Owner {
+  closed: boolean;
+  readonly parent?: Owner;
+}
 
-  return snapshot === undefined
-    ? Effect.fail(ThreadNotFound.make({ threadId }))
-    : Effect.succeed(snapshot);
+interface Entry {
+  readonly snapshot: Thread;
+  readonly owner: Owner;
+}
+
+interface State {
+  readonly threads: ReadonlyMap<ThreadId, Entry>;
+  readonly contentBytes: number;
+}
+
+const belongsTo = (owner: Owner, ancestor: Owner): boolean => {
+  for (let current: Owner | undefined = owner; current !== undefined; current = current.parent) {
+    if (current === ancestor) return true;
+  }
+
+  return false;
 };
 
-const totalStoreBytes = (threads: ReadonlyMap<ThreadId, Thread>): number => {
-  let total = 0;
+const access = (state: State, owner: Owner, threadId: ThreadId) => {
+  for (let current: Owner | undefined = owner; current !== undefined; current = current.parent) {
+    if (current.closed) {
+      return Effect.fail(
+        ThreadOwnershipError.make({
+          threadId,
+          reason: "closed",
+          message: "The in-memory conversation owner is closed",
+        }),
+      );
+    }
+  }
+  const entry = state.threads.get(threadId);
 
-  for (const snapshot of threads.values()) total += snapshot.contentBytes;
-
-  return total;
+  return entry !== undefined && entry.owner !== owner
+    ? Effect.fail(
+        ThreadOwnershipError.make({
+          threadId,
+          reason: "foreign",
+          message: "The Thread belongs to another in-memory conversation owner",
+        }),
+      )
+    : Effect.succeed(entry?.snapshot);
 };
+
+const findSnapshot = Effect.fnUntraced(function* (state: State, owner: Owner, threadId: ThreadId) {
+  const snapshot = yield* access(state, owner, threadId);
+
+  return snapshot === undefined ? yield* ThreadNotFound.make({ threadId }) : snapshot;
+});
+
+const put = (state: State, owner: Owner, snapshot: Thread): State => ({
+  threads: new Map(state.threads).set(snapshot.threadId, { snapshot, owner }),
+  contentBytes:
+    state.contentBytes +
+    snapshot.contentBytes -
+    (state.threads.get(snapshot.threadId)?.snapshot.contentBytes ?? 0),
+});
 
 const appendEncoded = Effect.fn("Thread.Store.appendEncoded")(function* (
-  threads: ReadonlyMap<ThreadId, Thread>,
+  state: State,
+  owner: Owner,
   current: Thread,
   append: ThreadAppend,
   encoded: string,
@@ -187,7 +258,7 @@ const appendEncoded = Effect.fn("Thread.Store.appendEncoded")(function* (
       observedValue: contentBytes,
     });
   }
-  const storeBytes = totalStoreBytes(threads) + messageBytes;
+  const storeBytes = state.contentBytes + messageBytes;
 
   if (storeBytes > MAX_STORE_CONTENT_BYTES) {
     return yield* ThreadLimitExceeded.make({
@@ -215,31 +286,52 @@ const appendEncoded = Effect.fn("Thread.Store.appendEncoded")(function* (
     messages: [...current.messages, message],
   });
 
-  return [next, new Map(threads).set(threadId, next)] as const;
+  return [next, put(state, owner, next)] as const;
 });
 
 /** In-memory storage shared for the consumer's Scope; it does not survive process loss. */
 export const layerMemory = Layer.effect(
   Store,
   Effect.gen(function* () {
-    const state = yield* SynchronizedRef.make<ReadonlyMap<ThreadId, Thread>>(new Map());
+    const state = yield* SynchronizedRef.make<State>({ threads: new Map(), contentBytes: 0 });
+    const root: Owner = { closed: false };
 
-    yield* Effect.addFinalizer(() => SynchronizedRef.set(state, new Map()));
+    const release = (owner: Owner) =>
+      SynchronizedRef.update(state, (current) => {
+        owner.closed = true;
+        const threads = new Map(current.threads);
+        let contentBytes = current.contentBytes;
 
-    return Store.of({
+        for (const [id, entry] of threads) {
+          if (belongsTo(entry.owner, owner)) {
+            threads.delete(id);
+            contentBytes -= entry.snapshot.contentBytes;
+          }
+        }
+
+        return { threads, contentBytes };
+      });
+
+    yield* Effect.addFinalizer(() => release(root));
+
+    const view = (owner: Owner): StoreService => ({
+      scoped: Effect.acquireRelease(
+        Effect.sync((): Owner => ({ closed: false, parent: owner })),
+        release,
+      ).pipe(Effect.map(view)),
       create: (threadId) =>
         SynchronizedRef.modifyEffect(
           state,
           Effect.fn(function* (threads) {
-            const existing = threads.get(threadId);
+            const existing = yield* access(threads, owner, threadId);
 
             if (existing !== undefined) return [existing, threads] as const;
-            if (threads.size >= MAX_THREADS) {
+            if (threads.threads.size >= MAX_THREADS) {
               return yield* ThreadLimitExceeded.make({
                 threadId,
                 limit: "threads",
                 limitValue: MAX_THREADS,
-                observedValue: threads.size + 1,
+                observedValue: threads.threads.size + 1,
               });
             }
 
@@ -251,7 +343,7 @@ export const layerMemory = Layer.effect(
               messages: [],
             });
 
-            return [created, new Map(threads).set(threadId, created)] as const;
+            return [created, put(threads, owner, created)] as const;
           }),
         ),
       append: Effect.fn("Thread.Store.append")(function* (threadId, message) {
@@ -261,9 +353,9 @@ export const layerMemory = Layer.effect(
         return yield* SynchronizedRef.modifyEffect(
           state,
           Effect.fn(function* (threads) {
-            const current = yield* findSnapshot(threads, threadId);
+            const current = yield* findSnapshot(threads, owner, threadId);
 
-            return yield* appendEncoded(threads, current, message, encoded, timestamp);
+            return yield* appendEncoded(threads, owner, current, message, encoded, timestamp);
           }),
         );
       }),
@@ -277,7 +369,7 @@ export const layerMemory = Layer.effect(
           return yield* SynchronizedRef.modifyEffect(
             state,
             Effect.fn(function* (threads) {
-              const current = yield* findSnapshot(threads, threadId);
+              const current = yield* findSnapshot(threads, owner, threadId);
 
               const currentEncoded = yield* Effect.forEach(current.messages, (entry) =>
                 encodeMessage(threadId, entry.message),
@@ -298,7 +390,7 @@ export const layerMemory = Layer.effect(
 
               const messages = [...current.messages];
               let contentBytes = current.contentBytes;
-              let storeBytes = totalStoreBytes(threads);
+              let storeBytes = threads.contentBytes;
               let nextSequence = current.nextSequence;
 
               for (const entry of incoming.slice(currentEncoded.length)) {
@@ -355,16 +447,18 @@ export const layerMemory = Layer.effect(
                 messages,
               });
 
-              return [snapshot, new Map(threads).set(threadId, snapshot)] as const;
+              return [snapshot, put(threads, owner, snapshot)] as const;
             }),
           );
         },
       ),
       snapshot: (threadId) =>
-        SynchronizedRef.get(state).pipe(Effect.flatMap((all) => findSnapshot(all, threadId))),
+        SynchronizedRef.get(state).pipe(
+          Effect.flatMap((all) => findSnapshot(all, owner, threadId)),
+        ),
       export: (threadId) =>
         Effect.gen(function* () {
-          const snapshot = yield* findSnapshot(yield* SynchronizedRef.get(state), threadId);
+          const snapshot = yield* findSnapshot(yield* SynchronizedRef.get(state), owner, threadId);
 
           return ThreadExport.make({
             format: "effect-agent/ephemeral-thread@1",
@@ -373,5 +467,7 @@ export const layerMemory = Layer.effect(
           });
         }),
     });
+
+    return view(root);
   }),
 );
