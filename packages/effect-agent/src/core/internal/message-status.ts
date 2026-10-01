@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 
 import { SettlementId, ThreadId } from "../Identifiers.ts";
 import { IdempotencyKey, Receipt } from "../Receipt.ts";

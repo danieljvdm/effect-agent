@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 
 import { AgentId, ThreadId } from "./Identifiers.ts";
 import { MessageRef } from "./internal/message-status.ts";

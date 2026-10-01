@@ -1,5 +1,6 @@
-import { Context, Schema } from "effect";
 import type { Effect } from "effect";
+import * as Context from "effect/Context";
+import * as Schema from "effect/Schema";
 
 import {
   type AgentId,

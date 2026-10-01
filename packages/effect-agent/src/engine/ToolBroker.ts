@@ -1,5 +1,6 @@
 import type { Effect } from "effect";
-import { Context, Schema } from "effect";
+import * as Context from "effect/Context";
+import * as Schema from "effect/Schema";
 import type { Tool, Toolkit } from "effect/unstable/ai";
 
 /**

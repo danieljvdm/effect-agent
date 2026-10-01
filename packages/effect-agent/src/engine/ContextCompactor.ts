@@ -1,5 +1,11 @@
-import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
-import { type LanguageModel, type Model, Prompt } from "effect/unstable/ai";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import type { LanguageModel, Model } from "effect/unstable/ai";
+import * as Prompt from "effect/unstable/ai/Prompt";
 
 import { type CompactionPolicy } from "../core/AgentPolicy.ts";
 import { type RunId, type ThreadId } from "../core/Identifiers.ts";

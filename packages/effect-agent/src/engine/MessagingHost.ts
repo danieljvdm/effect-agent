@@ -1,4 +1,5 @@
-import { Context, type Effect } from "effect";
+import type { Effect } from "effect";
+import * as Context from "effect/Context";
 
 import type { AnyDefinition } from "../core/Agent.ts";
 import type { ThreadId } from "../core/Identifiers.ts";

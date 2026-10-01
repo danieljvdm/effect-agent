@@ -1,4 +1,5 @@
-import { Context, Schema } from "effect";
+import * as Context from "effect/Context";
+import * as Schema from "effect/Schema";
 
 import { AgentId, ThreadId, DelegationId, RunId, ToolCallId, SubmissionId } from "./Identifiers.ts";
 

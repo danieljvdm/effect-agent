@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 
 /**
  * Cumulative policy accounting for one logical Run across replacement Attempts.

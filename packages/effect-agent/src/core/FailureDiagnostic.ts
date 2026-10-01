@@ -1,11 +1,9 @@
-import {
-  Cause as EffectCause,
-  Exit,
-  Predicate,
-  Redacted,
-  Schema,
-  SchemaTransformation,
-} from "effect";
+import * as EffectCause from "effect/Cause";
+import * as Exit from "effect/Exit";
+import * as Predicate from "effect/Predicate";
+import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import { strictSchema } from "./internal/strict-schema.ts";
 

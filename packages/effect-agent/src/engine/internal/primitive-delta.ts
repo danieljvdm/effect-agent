@@ -1,5 +1,6 @@
-import { Option, Schema } from "effect";
-import { Response } from "effect/unstable/ai";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as Response from "effect/unstable/ai/Response";
 
 import { utf8ByteLength } from "../../core/internal/utf8.ts";
 import { boundedValueFootprint } from "./bounded-value.ts";
