@@ -500,6 +500,13 @@ warm, and recovery cases assert consumed tool results, validated output, canonic
 same-thread continuity, and cleanup. Preserve failure artifacts and retry any recorded cleanup
 before closing an attempt. Offline workerd tests validate the harness, not deployed latency.
 
+For replay and compaction CPU without inference, use the separate
+[scripted Cloudflare comparison](../tooling/context-continuity-eval/README.md#scripted-cloudflare-cpu-comparison).
+`vp run perf:cloudflare:cpu:build` builds a clean revision; `vp run perf:cloudflare:cpu`
+compares two bundles through disposable Alchemy stages with an identical-code control,
+three deployment rounds, separate initial/warmed cycles and invocation CPU exports.
+This manual command has its own bounded workload and verified cleanup.
+
 Compare matched workloads and clock domains. Local scripted timings do not measure provider
 latency, Cloudflare CPU billing, or provider cache effects. A live report identifies what it can
 observe and must accompany claims about the exact candidate and configuration it measured.

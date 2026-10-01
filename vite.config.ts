@@ -215,6 +215,14 @@ export default defineConfig({
         cache: false,
         command: "bun tooling/context-continuity-eval/src/build-performance-cloudflare.ts",
       },
+      "perf:cloudflare:cpu:build": {
+        cache: false,
+        command: "bun tooling/context-continuity-eval/src/replay-cpu-build.ts",
+      },
+      "perf:cloudflare:cpu": {
+        cache: false,
+        command: "bun tooling/context-continuity-eval/src/replay-cpu-main.ts",
+      },
       "bundle:compare": {
         cache: false,
         command: "bun scripts/bundle-size.ts",

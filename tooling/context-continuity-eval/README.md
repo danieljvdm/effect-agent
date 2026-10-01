@@ -216,3 +216,78 @@ that cleanup command. Every owned target must have `cleanupComplete: true` befor
 Downloaded artifacts can be moved to another machine: cleanup resolves the candidate/reference
 folders beneath `--output-dir` and regenerates the fixed deletion configuration from validated
 Worker names, rather than using artifact-supplied executable/configuration content.
+
+## Scripted Cloudflare CPU comparison
+
+`vp run perf:cloudflare:cpu` measures replay and compaction without model inference. One
+Alchemy stack creates separate disposable baseline, candidate, and identical-code control
+stages. Each uses a prebuilt production bundle and its own SQLite Durable Object namespace.
+The control uploads the baseline bundle unchanged. This is a distinct workload from the
+live-model command above and is never selected by CI automatically.
+
+Build both clean checkouts using their installed lockfiles, then compare:
+
+```sh
+vp run perf:cloudflare:cpu:build --source-root ../baseline --output-dir /tmp/cpu-baseline
+vp run perf:cloudflare:cpu:build --source-root ../candidate --output-dir /tmp/cpu-candidate
+vp run perf:cloudflare:cpu --baseline-dir /tmp/cpu-baseline --candidate-dir /tmp/cpu-candidate \
+  --output-dir /tmp/cpu-comparison --dry-run
+
+# Requires CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN with Workers/DO and log-query access.
+vp run perf:cloudflare:cpu --baseline-dir /tmp/cpu-baseline --candidate-dir /tmp/cpu-candidate \
+  --output-dir /tmp/cpu-comparison
+```
+
+The builder runs the package builds and resolves the fixture's public imports to production
+exports. It retains source, fixture, lockfile and bundle identities and rejects changed source.
+The runner checks bundle digests and deployed identities before submitting work. New Worker
+routes get up to 15 read-only readiness probes; benchmark operations are never retried. Dry-run
+validates the bundles and prints the experiment; it creates no cloud resources or output files.
+
+The fixed experiment has three deployment rounds, four matched cohorts per round and two
+starting archive sizes: 10 and 1,000 canonical records. Its 72 Objects each run two identical
+five-step cycles: compaction/reply, fresh reply, fresh reply, compaction/reply, fresh reply.
+Each operation uses a 400 KB active context, two scripted model callbacks and two small tools.
+A retained random seed determines deployment and sample order before deployment. The run
+permits one active operation and stops workload dispatch after 45 minutes. There are 720
+measured RPCs and no provider API calls; Cloudflare storage, execution and logs remain billable.
+The deadline is a workload bound, not an account billing cap.
+
+The first cycle is **initial after seed**, not a guaranteed cold isolate. The second is
+**warmed, same observed incarnation**: module and runtime IDs must stay unchanged. These
+IDs do not establish JIT tier, physical host, placement or cache state. Objects can share an
+isolate, so phases and Objects are not independent deployment samples. Twenty raw provider
+prompts are retained per Object until its final audit; both cycles use this same bounded
+retention policy. The warmed cycle also includes the first cycle's canonical records and
+retained captures, so it does not isolate JIT warm-up from that accumulated state.
+
+No archive exports, prompt encoding, hashes or checkpoint inspections run between measured
+operations. The final audit verifies canonical append digests, retained context, exact finite
+model/tool/finalizer counts, settlements and checkpoint presence. Normalized captured prompts
+must agree across all roles and archive sizes. This proves durable cross-Run continuity;
+existing recovery checks separately cover crashes and ownership loss.
+
+`report.json`, `samples.json`, `table.md`, operation receipts and sanitized invocation exports
+retain the results. CPU means Cloudflare's `cpuTimeMs` for the uniquely matched Object RPC
+through settlement; ingress CPU and client elapsed time are separate. Missing, duplicate,
+truncated or failed invocations cannot become valid samples. Alarm and evidence invocations
+remain in the exports and are not added to reply CPU. The primary comparison sums the two
+compaction RPCs per Object, with initial and warmed cycles reported separately. Results include
+ranges, matched candidate/control ratios and each deployment round. The prespecified comparison
+criterion requires a 10% reduction in all three rounds exceeding each identical-code control
+shift. Meeting that criterion is not a statistical confidence guarantee; three rounds do not
+establish a precise population effect.
+
+Alchemy state and authentication files contain secrets and live in a private temporary
+directory outside the artifacts. Ownership is recorded before upload. Success, failure and
+interruption destroy recorded stages, then independently verify both Worker and namespace
+absence before deleting private state. A hard process kill or failed cleanup can leave that
+state and its recovery pointer in `resources.json`; keep them together on the original machine:
+
+```sh
+vp run perf:cloudflare:cpu --cleanup --output-dir /tmp/cpu-comparison
+```
+
+Close the run only when `cleanup.json` records verified completion. Never upload the private
+state directory. Failed samples and incomplete exports remain evidence; the runner does not
+replace them or reuse an existing output directory.
