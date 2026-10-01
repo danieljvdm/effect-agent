@@ -122,7 +122,7 @@ const makeStorageOperation = Effect.map(
       run(operation, Effect.tryPromise({ try: execute, catch: alarmFailure(operation) })),
 );
 
-/** `ctx.storage` alarm slot as an Effect service; storage is truth, never a memory field. */
+/** Native `ctx.storage` alarm slot owned by ThreadMaintenance; storage is truth. */
 export class DurableAlarmService extends Context.Service<
   DurableAlarmService,
   {

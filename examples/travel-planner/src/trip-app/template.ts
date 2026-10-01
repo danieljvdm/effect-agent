@@ -89,7 +89,7 @@ export default defineConfig({
   "dependencies": {
     "@trip/contracts": "workspace:*",
     "effect": "4.0.0",
-    "effect-cf": "0.43.0"
+    "effect-cf": "0.53.0"
   }
 }
 `,

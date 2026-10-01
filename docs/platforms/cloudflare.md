@@ -834,6 +834,13 @@ Alarms recover pending work after eviction without another user request.
 The host owns the Object's [single alarm](https://developers.cloudflare.com/durable-objects/api/alarms/);
 do not replace its handler or schedule unrelated alarms on that Object.
 
+Schedule Owners and Subscription Partitions use `effect-cf` logical alarms. Failed handlers and
+self-rearms use exponential backoff with a one-second minimum; after eight attempts without
+reported source progress, recovery runs hourly. Deadline changes and retry counters do not reset
+that budget. See the [logical alarm recovery guide](https://github.com/danieljvdm/effect-cf/blob/main/docs/durable-object-wakeups.md)
+for configuration and persisted schedule upgrades. Thread Objects retain their own native alarm
+policy described below.
+
 Each Thread alarm grants an initial head Attempt and can advance further heads while auxiliary
 delivery remains in flight. Recovery precedes each claim, and all Attempts share the event's
 original ten-minute yield deadline. Accepted input can still join the active Run at normal turn

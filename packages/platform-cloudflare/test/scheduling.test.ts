@@ -147,7 +147,7 @@ describe("Cloudflare Schedule Owner", () => {
             state.storage.sql.exec(
               "UPDATE effect_agent_schedules SET deadline_at_millis = 0, record_json = json_set(record_json, '$.nextAtMillis', 0)",
             );
-            state.storage.sql.exec("UPDATE effect_cf_scheduled_alarms SET run_at = 0");
+            state.storage.sql.exec("UPDATE effect_cf_scheduled_alarms SET run_at = 0, wake_at = 0");
             for (const entry of broken) {
               state.storage.sql.exec(
                 "UPDATE effect_agent_schedules SET record_json = ? WHERE schedule_id = ?",
@@ -199,7 +199,7 @@ describe("Cloudflare Schedule Owner", () => {
             state.storage.sql.exec(
               "UPDATE effect_agent_schedules SET deadline_at_millis = 0, record_json = json_set(record_json, '$.nextAtMillis', 0)",
             );
-            state.storage.sql.exec("UPDATE effect_cf_scheduled_alarms SET run_at = 0");
+            state.storage.sql.exec("UPDATE effect_cf_scheduled_alarms SET run_at = 0, wake_at = 0");
           }),
         );
         yield* TestClock.setTime(Date.now() + 3_600_000);
@@ -242,6 +242,7 @@ describe("Cloudflare Schedule Owner", () => {
         ).toBeGreaterThan(before?.alarm_generation ?? 0);
         expect(yield* Effect.promise(() => alarmRows(data.owner))).toHaveLength(1);
         expect((yield* Effect.promise(() => snapshotFor(data))).lastReceipt).toBeNull();
+        yield* TestClock.adjust("1 second");
         yield* runPass();
         expect((yield* Effect.promise(() => snapshotFor(data))).lastReceipt).not.toBeNull();
         expect(yield* Effect.promise(() => laneRows(data.thread))).toHaveLength(1);
@@ -371,5 +372,5 @@ describe("Cloudflare Schedule Owner", () => {
     expect(recovered.lastReceipt).not.toBeNull();
     expect(await laneRows(data.thread)).toHaveLength(1);
     expect(await alarmRows(data.owner)).toEqual([]);
-  });
+  }, 100_000);
 });

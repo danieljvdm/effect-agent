@@ -393,7 +393,7 @@ export class BrowserRunInteractiveBinding extends Context.Service<
   }
 >()("@effect-agent/platform-cloudflare/BrowserRunInteractiveBinding") {
   static layer(options: {
-    readonly browser: BrowserRun;
+    readonly browser: Pick<BrowserRun, "fetch">;
     readonly viewport?: BrowserRunViewport;
   }): Layer.Layer<
     BrowserRunInteractiveBinding,
@@ -3251,7 +3251,7 @@ export const browserRunInteractiveLayer = (): Layer.Layer<
 
 /** Resolved Worker binding, cleanup credentials, and optional initial viewport. */
 export interface CloudflareInteractiveBrowserOptions extends BrowserRunLifecycleOptions {
-  readonly browser: BrowserRun;
+  readonly browser: Pick<BrowserRun, "fetch">;
   readonly viewport?: BrowserRunViewport;
 }
 

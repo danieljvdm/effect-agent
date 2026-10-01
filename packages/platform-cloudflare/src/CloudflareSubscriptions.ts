@@ -897,7 +897,6 @@ const alarmHandler = (limits: SubscriptionLimits) =>
         }
       }),
     {
-      mode: "isolated",
       limit: MAX_ALARMS_PER_INVOCATION,
       retryFailedAfter: limits.retryMillis,
       onFailure: () => Effect.logWarning("Subscription partition alarm retained for retry"),
