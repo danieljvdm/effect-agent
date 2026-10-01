@@ -143,7 +143,7 @@ import { ThreadHistory, ThreadHistoryError } from "../ThreadHistory.ts";
 import { CurrentToolCatalog, RunToolVisibility, type CatalogEntry } from "../ToolExposure.ts";
 import { boundedValueFootprint } from "./bounded-value.ts";
 import { isTextOutput, outputSchemaContract, prepareModelPrompt } from "./output-contract.ts";
-import { ownPrimitiveDelta } from "./primitive-delta.ts";
+import { ownPrimitiveTextPart } from "./primitive-delta.ts";
 import {
   boundedCanonicalJsonSnapshot,
   boundedJsonSnapshot,
@@ -995,12 +995,10 @@ const ownModelResponsePartGeneral = Effect.fnUntraced(function* <
   }
   const codec = modelResponseCodecFor(toolkit);
 
-  const encodingFailure = ModelProtocolError.make({
-    message: "Model response part failed canonical encoding",
-  });
-
   const encoded = yield* Schema.encodeUnknownEffect(codec)(part).pipe(
-    Effect.mapError(() => encodingFailure),
+    Effect.mapError(() =>
+      ModelProtocolError.make({ message: "Model response part failed canonical encoding" }),
+    ),
   );
 
   const retainedBytes = yield* inspectModelResponsePartCapacity(usage, encoded, limits);
@@ -1020,12 +1018,10 @@ const ownModelResponsePartGeneral = Effect.fnUntraced(function* <
       }),
   });
 
-  const decodingFailure = ModelProtocolError.make({
-    message: "Model response part failed canonical decoding",
-  });
-
   const ownedPart = yield* Schema.decodeUnknownEffect(codec)(ownedEncoded).pipe(
-    Effect.mapError(() => decodingFailure),
+    Effect.mapError(() =>
+      ModelProtocolError.make({ message: "Model response part failed canonical decoding" }),
+    ),
   );
 
   return { ownedPart, retainedBytes };
@@ -1040,7 +1036,7 @@ const ownModelResponsePart = <Tools extends Record<string, Tool.Any>>(
   Effect.suspend((): ReturnType<typeof ownModelResponsePartGeneral> => {
     const primitive =
       usage.responsePartCount < limits.maxModelResponseParts
-        ? ownPrimitiveDelta(part, limits.maxModelResponseBytes - usage.responsePartBytes)
+        ? ownPrimitiveTextPart(part, limits.maxModelResponseBytes - usage.responsePartBytes)
         : undefined;
 
     return primitive === undefined
