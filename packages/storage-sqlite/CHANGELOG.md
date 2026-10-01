@@ -1,5 +1,15 @@
 # @effect-agent/storage-sqlite
 
+## 0.1.0-beta.165
+
+### Patch Changes
+
+- [#757](https://github.com/danieljvdm/effect-agent/pull/757) [`041cb93`](https://github.com/danieljvdm/effect-agent/commit/041cb93d992681878350151cba32e5cf7f5bbd82) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Recover automatically managed Node hosts after process death without waiting for retained ownership leases. BEHAVIOR CHANGE: automatic hosts require existing databases to use WAL and exclusively own their SQLite database; use the host's services for live administration or stop it before opening a separate connection.
+
+- Updated dependencies [[`c426ed7`](https://github.com/danieljvdm/effect-agent/commit/c426ed78de30b9b186b4967e2e42bd19870ddc84), [`9d5f4d7`](https://github.com/danieljvdm/effect-agent/commit/9d5f4d7baac8e7311efa07b088f074406264bbc3), [`4ac924a`](https://github.com/danieljvdm/effect-agent/commit/4ac924aa14e3cfbfdac9ffaa7026164115943f11), [`656f964`](https://github.com/danieljvdm/effect-agent/commit/656f9643beecce1b6233e02672987ba413b5c5fc), [`de31c1e`](https://github.com/danieljvdm/effect-agent/commit/de31c1ece882beed14880628636c6bbd04f2ba52)]:
+  - effect-agent@0.1.0-beta.165
+  - @effect-agent/storage-sql@0.1.0-beta.165
+
 ## 0.1.0-beta.164
 
 ### Patch Changes
