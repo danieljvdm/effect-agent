@@ -9,8 +9,8 @@ import {
   type SubscriptionFailpointError,
   SubscriptionStore,
 } from "effect-agent/subscription";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
+import * as SqlClientService from "effect/sql/SqlClient";
+import type { SqlError } from "effect/sql/SqlError";
 
 const CURRENT_SUBSCRIPTION_STORE_VERSION = 3;
 

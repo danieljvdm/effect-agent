@@ -1,8 +1,8 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Effect } from "effect";
-import { Command } from "effect/unstable/cli";
-import { FetchHttpClient } from "effect/unstable/http";
-import { Socket } from "effect/unstable/socket";
+import { Command } from "effect/cli";
+import { FetchHttpClient } from "effect/http";
+import { Socket } from "effect/socket";
 
 import { command } from "./heap.ts";
 

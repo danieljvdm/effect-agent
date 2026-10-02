@@ -11,8 +11,8 @@ import type {
   SubagentHost,
 } from "effect-agent/subagent-host";
 import type { WorkerError } from "effect-agent/worker";
-import type { Tool } from "effect/unstable/ai";
-import { Toolkit } from "effect/unstable/ai";
+import type { Tool } from "effect/ai";
+import { Toolkit } from "effect/ai";
 
 import type { SubagentReservations } from "../../src/capabilities/SubagentReservations.ts";
 

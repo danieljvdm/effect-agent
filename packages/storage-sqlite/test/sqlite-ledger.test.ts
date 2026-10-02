@@ -102,9 +102,9 @@ import {
   FenceRejected,
   type AppendResult,
 } from "effect-agent/thread-store";
+import * as SqlClientService from "effect/sql/SqlClient";
+import { CurrentTransformer } from "effect/sql/Statement";
 import { TestClock } from "effect/testing";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
-import { CurrentTransformer } from "effect/unstable/sql/Statement";
 
 const id = <A>(schema: Schema.Codec<A, string>, value: string): A =>
   Schema.decodeSync(schema)(value);

@@ -1,7 +1,7 @@
 import type { Effect, Option } from "effect";
+import type { Tool } from "effect/ai";
 import * as Context from "effect/Context";
 import * as Schema from "effect/Schema";
-import type { Tool } from "effect/unstable/ai";
 
 import { ToolCallId } from "../core/Identifiers.ts";
 

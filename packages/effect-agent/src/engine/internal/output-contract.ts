@@ -1,6 +1,6 @@
+import * as Prompt from "effect/ai/Prompt";
+import * as Tool from "effect/ai/Tool";
 import * as Schema from "effect/Schema";
-import * as Prompt from "effect/unstable/ai/Prompt";
-import * as Tool from "effect/unstable/ai/Tool";
 
 import type * as Agent from "../../core/Agent.ts";
 

@@ -13,7 +13,7 @@ import {
   PreparedActivity,
 } from "effect-agent/activity-store";
 import { Digest } from "effect-agent/records";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import * as SqlClientService from "effect/sql/SqlClient";
 
 import { makeSqlQuery, SqlInteger, SqlNumber, type SqlWriteTransaction } from "./SqlStorage.ts";
 

@@ -26,7 +26,7 @@ import {
   submissionInputRecordId,
   submissionSettlementRecordId,
 } from "effect-agent/submission-ledger";
-import { Prompt } from "effect/unstable/ai";
+import { Prompt } from "effect/ai";
 
 import {
   BOOK_CALL_ID,

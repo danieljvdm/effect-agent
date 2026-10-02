@@ -6,7 +6,7 @@ import {
   ActivityProcessorStore,
   type ActivityStoreError,
 } from "effect-agent/activity-store";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import * as SqlClientService from "effect/sql/SqlClient";
 
 export type SqliteActivityInitializationError = ActivityStoreError | ActivityMutationFailure;
 

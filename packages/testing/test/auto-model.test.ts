@@ -12,7 +12,7 @@ import {
   type Prompt,
   type Response,
   Toolkit,
-} from "effect/unstable/ai";
+} from "effect/ai";
 import { expectTypeOf } from "vite-plus/test";
 
 const policy = AgentPolicy.make({

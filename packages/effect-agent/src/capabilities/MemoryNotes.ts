@@ -1,5 +1,5 @@
 import { Clock, Effect, Schema } from "effect";
-import { IdGenerator, Tool, Toolkit } from "effect/unstable/ai";
+import { IdGenerator, Tool, Toolkit } from "effect/ai";
 
 import { utf8ByteLength } from "../core/internal/utf8.ts";
 import { MemoryContent, MemorySourceReference } from "../core/MemoryReference.ts";

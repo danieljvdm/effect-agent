@@ -7,8 +7,8 @@ Framework packages live in `packages/*`; runnable examples live in `examples/*`.
 
 The root [package.json](../package.json) owns shared dependency versions.
 Workspace manifests use `catalog:` for those dependencies and `workspace:*` for internal packages.
-The travel planner is a release consumer: its Effect Agent dependencies and compatible
-`effect-cf` version pin exact npm versions and advance together after publication.
+The travel planner consumes explicit Effect Agent workspace dependencies and the shared
+Effect and `effect-cf` catalog versions, so it validates the current framework.
 `bunfig.toml` disables implicit workspace linking, so only explicit `workspace:` dependencies
 use local source; registry dependencies, including transitive ones, stay on published packages.
 Commit the Bun lockfile; CI installs with `--frozen-lockfile`.
@@ -18,39 +18,50 @@ Commit the Bun lockfile; CI installs with `--frozen-lockfile`.
 | Bun                                                     | `1.4.2`                                             |
 | Vite+                                                   | `0.3.3`                                             |
 | Alchemy and its Cloudflare runtime                      | `2.0.0-beta.77` with upstream compatibility patches |
-| Effect and its provider/platform/SQL/Atom/test packages | `4.0.0-rc.117`                                      |
-| `effect-cf`                                             | `0.44.1`                                            |
+| Effect and its provider/platform/SQL/Atom/test packages | `4.0.0`                                             |
+| `effect-cf`                                             | `0.53.0`                                            |
 | TypeScript                                              | `7.0.2`                                             |
 | `@effect/tsgo`                                          | `0.45.0`                                            |
 | Node.js                                                 | `22.18+` or `24.11+`                                |
 
-Public packages require `effect@^4.0.0-rc.117` as a peer. The exact catalog pin supplies the
+Public packages require `effect@^4.0.0` as a peer. The exact catalog pin supplies the
 development version. Raise the peer minimum when code needs a newer API.
 Private examples declare Effect as a regular dependency. Adapters depend on the platform and
 SQL implementations they use.
 
-`platform-cloudflare` requires `effect-cf@^0.44.1` and `effect@^4.0.0-rc.117` as host peers
+`platform-cloudflare` requires `effect-cf@^0.53.0` and `effect@^4.0.0` as host peers
 and uses the exact catalog versions for development. Supply Effect SQL packages compatible with
-rc.117 for `effect-cf`. Consumers provide the shared runtime.
+4.0.0 for `effect-cf`. Consumers provide the shared runtime.
 
 Root overrides keep Effect, its Node/browser platforms, shared SQL adapters, and test packages
-on the catalog versions, including dependencies of published consumers.
+on the catalog versions, including dependencies of published consumers. Published consumers must use Effect's current import paths;
+packages still importing `effect/unstable/*` cannot run on stable Effect.
 The root also installs Alchemy's optional `@effect/platform-bun` peer at the shared Effect
 version so its Bun entry points remain available.
 Vite+ supplies Vitest except in the two Cloudflare packages, whose Workers pool requires a
 direct catalog-pinned Vitest dependency and a Vite task. Run those tasks through `vp run`.
+The repository retains Vitest 4.1.11 for the Workers pool despite `@effect/vitest` declaring
+a Vitest 5 peer minimum, as it did on Effect rc.117. Verify this compatibility with the
+existing suites when either dependency changes.
 Operational harnesses under `tooling/*` also use Vite tasks for Miniflare tests.
 
 Astro uses its own Vite dependency. Keep the root Vite+ core alias required by Vite+;
 do not add a global Vite override.
 
+Alchemy is deployment tooling; framework packages do not depend on it at runtime.
 Alchemy and its Cloudflare runtime advance together. Their published beta.77 packages and
 Distilled rc.9 clients still use Effect APIs renamed in rc.113. The version-specific Bun
 patches backport [Alchemy's compatibility fix](https://github.com/alchemy-run/alchemy/pull/1562)
 and [Distilled's matching fix](https://github.com/alchemy-run/distilled/pull/575), including the
-published JavaScript entry points. The root declares `mime` because the Cloudflare runtime
+published JavaScript entry points. The patches also update the removed Effect import paths
+and URL-safe Base64 encoding for Effect 4.0.0, including Alchemy's Neon client. The root
+declares `mime` because the Cloudflare runtime
 imports it without declaring the dependency. Keep these corrections until a published upgrade
 includes them; verify that upgrade with a frozen install and `vp run check:deploy`.
+
+The demo uses Auth beta.11 and its compatible Drizzle, GitHub, and crypto companions,
+which support stable Effect directly. Verify auth upgrades with the existing integration checks
+and review their changelogs for API and stored-format changes.
 
 ## Current workspace
 
@@ -222,7 +233,7 @@ The travel planner is a private application with no package version. It does not
 changesets, version bumps, changelogs, package tags, or npm releases. Private-package versioning
 and tagging remain disabled in the Changesets configuration.
 Changesets updates internal dependency ranges only when they use `workspace:`. Exact registry
-pins, including the travel planner's published Effect Agent dependencies, stay unchanged during
+pins stay unchanged during
 versioning. Upgrade those consumers and their import paths separately after publication; otherwise the version task's
 install would request packages that have not been published yet.
 The project is in prerelease mode. Leaving it requires an explicit release decision and
@@ -432,6 +443,8 @@ lockfile. The comparison uses the PR's esbuild version and the same fixture sour
 Disposable comparison manifests alias historical PascalCase subpaths to their kebab-case names;
 staged modules also expose the former `Ephemeral` assembly as `InMemory`. The published packages
 retain only their canonical exports. Renamed modules remain comparable.
+For Effect prerelease baselines, the analyzer resolves the fixtures' `effect/ai`
+import to that checkout's original `effect/unstable/ai` implementation.
 
 The fixtures in `scripts/bundle` cover agent construction, importing the runtime's `run` function,
 the in-memory assembly, and loading the runtime on demand, through both root and direct module imports. The

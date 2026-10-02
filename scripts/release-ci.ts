@@ -2,8 +2,8 @@ import { Buffer } from "node:buffer";
 
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Config, Console, Effect, FileSystem, Schedule, Schema, Stream } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http";
-import { ChildProcess } from "effect/unstable/process";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
+import { ChildProcess } from "effect/process";
 
 const repository = "danieljvdm/effect-agent";
 const workflowPath = ".github/workflows/ci.yml";

@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { WebCapture } from "effect-agent";
-import { Toolkit } from "effect/unstable/ai";
+import { Toolkit } from "effect/ai";
 
 import { ReadTravelPage } from "../../src/research.ts";
 

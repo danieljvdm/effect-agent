@@ -44,8 +44,8 @@ import { ToolExecutionClass } from "effect-agent/durable-step";
 import { CloudflareCodeMode } from "@effect-agent/platform-cloudflare/cloudflare-code-mode";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Effect, Layer, Redacted, Schema } from "effect";
-import { Tool, Toolkit } from "effect/unstable/ai";
-import { FetchHttpClient } from "effect/unstable/http";
+import { Tool, Toolkit } from "effect/ai";
+import { FetchHttpClient } from "effect/http";
 import { WorkerEnvironment } from "effect-cf";
 
 // In an application, Wrangler generates these binding types.
@@ -152,7 +152,7 @@ tool. Discovery returns only matching, currently eligible methods and their enco
 import { Agent, CodeMode, ToolDiscovery } from "effect-agent";
 import { ToolExecutionClass } from "effect-agent/durable-step";
 import { Schema } from "effect";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 const ListInvoices = Tool.make("list_invoices", {
   description: "Read invoice amounts for a customer.",

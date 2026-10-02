@@ -1,6 +1,6 @@
 import { Effect, Exit, Layer, Schema, Scope, Stream } from "effect";
-import { HttpRouter } from "effect/unstable/http";
-import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import { HttpRouter } from "effect/http";
+import { RpcSerialization, RpcServer } from "effect/rpc";
 
 import type { AccountSession } from "../auth/account.ts";
 import { PlannerError, PlannerProgress, ProgressRpcs } from "../domain.ts";

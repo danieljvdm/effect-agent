@@ -48,9 +48,9 @@ import {
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
+import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 import { TestClock } from "effect/testing";
-import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
-import { Workflow, WorkflowEngine } from "effect/unstable/workflow";
+import { Workflow, WorkflowEngine } from "effect/workflow";
 
 const deploymentId = Schema.decodeSync(DeploymentId)("dispatch-tests");
 const definitions = DefinitionDigestInput.make({ agent: "v1", model: "v1", tools: "v1" });

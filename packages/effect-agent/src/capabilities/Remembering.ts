@@ -1,4 +1,5 @@
-import { Effect, Encoding, Schema } from "effect";
+import { Effect, Schema } from "effect";
+import { Hex } from "effect/encoding";
 
 import { utf8ByteLength } from "../core/internal/utf8.ts";
 import type * as MemoryNamespace from "../core/MemoryNamespace.ts";
@@ -91,10 +92,10 @@ const validateEvidence = Effect.fn("Remembering.validateEvidence")(function* (
   source: SourceSnapshot,
   proposal: Protocol.Proposal,
 ) {
-  const bytes = Encoding.encodeHex(source.text);
+  const bytes = Hex.encode(source.text);
 
   for (const evidence of proposal.evidence) {
-    const quote = Encoding.encodeHex(evidence.quote);
+    const quote = Hex.encode(evidence.quote);
 
     if (
       evidence.source.id !== source.source.key.id ||

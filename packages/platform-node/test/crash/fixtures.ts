@@ -21,7 +21,7 @@ import {
   ReconciliationUncertain,
   ToolReconciler,
 } from "effect-agent/tool-reconciler";
-import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 
 /**
  * Shared contract between the crash-harness test (`crash.test.ts`) and the child worker process

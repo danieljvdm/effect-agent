@@ -24,7 +24,7 @@ import {
   scheduleUsesCapacity,
   scheduleDeadline,
 } from "effect-agent/schedule-transition";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import * as SqlClientService from "effect/sql/SqlClient";
 
 const CURRENT_SCHEDULE_STORE_VERSION = 3;
 const MAX_STORED_SCHEDULE_BYTES = 1_900_000;

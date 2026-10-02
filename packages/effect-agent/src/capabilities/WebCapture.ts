@@ -1,5 +1,5 @@
 import { Effect, Option, Schema, type Layer } from "effect";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 import { ToolExecutionClass as ToolExecutionClassAnnotation } from "../engine/DurableStep.ts";
 import {

@@ -1,5 +1,5 @@
 import { Option, Schema } from "effect";
-import { Prompt } from "effect/unstable/ai";
+import { Prompt } from "effect/ai";
 
 import { RunId, SubmissionId } from "../../core/Identifiers.ts";
 import { RunPolicyUsage } from "../../core/RunPolicyUsage.ts";

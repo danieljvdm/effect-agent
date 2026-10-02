@@ -49,7 +49,7 @@ import {
 import { type ThreadStore } from "effect-agent/thread-store";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { type WakeScheduler } from "effect-agent/wake-scheduler";
-import type * as SqlClientService from "effect/unstable/sql/SqlClient";
+import type * as SqlClientService from "effect/sql/SqlClient";
 
 import { ExclusiveSqliteHost } from "./internal/exclusive-host.ts";
 import { NodeWakeSchedulerConfig, nodeWakeSchedulerLayer } from "./NodeWakeScheduler.ts";

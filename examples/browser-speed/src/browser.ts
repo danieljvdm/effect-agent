@@ -2,7 +2,7 @@ import type { BrowserSession } from "@effect-agent/platform-cloudflare/browser-s
 import { Context, Effect, Layer, Schema } from "effect";
 import * as BrowserUse from "effect-agent/browser-use";
 import { Action, Observation, ActionResult } from "effect-agent/browser-use";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 import type { Page } from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 
 import { Board, LabError, type Scenario } from "./contract.ts";

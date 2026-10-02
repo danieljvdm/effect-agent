@@ -1,6 +1,6 @@
 import type { Effect } from "effect";
 import { Context, Schema } from "effect";
-import { Rpc, RpcGroup } from "effect/unstable/rpc";
+import { Rpc, RpcGroup } from "effect/rpc";
 
 import { ConnectOpenAi, OpenAiConnection } from "./credential-domain.ts";
 import { TravelContent, TravelUrl } from "./travel-content.ts";

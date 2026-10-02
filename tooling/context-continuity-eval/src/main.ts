@@ -1,6 +1,6 @@
 import { NodeCrypto, NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, Layer, Schema } from "effect";
-import { Command } from "effect/unstable/cli";
+import { Command } from "effect/cli";
 
 import { command } from "./command.ts";
 import { EvaluationError } from "./contracts.ts";

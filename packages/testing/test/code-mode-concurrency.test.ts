@@ -17,7 +17,7 @@ import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import { ThreadHistory } from "effect-agent/thread-history";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
-import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 
 class WriteFailure extends Schema.TaggedError<WriteFailure>()("WriteFailure", {}) {}
 

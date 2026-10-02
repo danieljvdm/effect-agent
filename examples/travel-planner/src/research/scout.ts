@@ -3,7 +3,7 @@ import { OpenAiTool } from "@effect/ai-openai";
 import { Effect } from "effect";
 import { Subagent, Agent } from "effect-agent";
 import { SubagentGrant } from "effect-agent/subagent-contract";
-import { Toolkit } from "effect/unstable/ai";
+import { Toolkit } from "effect/ai";
 
 import { PlannerError } from "../domain.ts";
 import { ReadTravelPage } from "../research.ts";

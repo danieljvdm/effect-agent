@@ -1,6 +1,6 @@
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { DurableObject } from "effect-cf";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient } from "effect/sql/SqlClient";
 
 import { PlannerError, TripSiteStore } from "../../src/domain.ts";
 import { makeTravelPlannerThread, plannerApplication } from "../../src/server/cloudflare.ts";

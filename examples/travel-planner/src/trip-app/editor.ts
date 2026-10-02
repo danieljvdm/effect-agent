@@ -4,7 +4,7 @@ import { Effect, Schema } from "effect";
 import { Subagent, Agent, Output } from "effect-agent";
 import { ThreadId } from "effect-agent/identifiers";
 import { SubagentGrant } from "effect-agent/subagent-contract";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 import { DeliverResponse } from "../agent.ts";
 import { AdmittedPlannerSettings, PlannerError, Text, Trip, TripId } from "../domain.ts";

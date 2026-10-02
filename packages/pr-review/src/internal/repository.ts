@@ -1,5 +1,5 @@
 import { Context, Effect, Schema } from "effect";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 const Revision = Schema.Literals(["base", "head"]);
 const Path = Schema.NonEmptyString.check(Schema.isMaxLength(512));

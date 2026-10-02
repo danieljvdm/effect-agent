@@ -30,7 +30,7 @@ import {
 import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { WorkerCompletion, WorkerError } from "effect-agent/worker";
 import { WorkerHostAuthorizer } from "effect-agent/worker-host";
-import { LanguageModel, Model, Toolkit, type Response, type Tool } from "effect/unstable/ai";
+import { LanguageModel, Model, Toolkit, type Response, type Tool } from "effect/ai";
 
 const principal = Schema.decodeSync(Principal)("report-owner");
 const sourceThreadId = Schema.decodeSync(ThreadId)("report-source");

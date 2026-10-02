@@ -1,6 +1,6 @@
 import { Effect, Exit, Scheduler, Schema } from "effect";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
-import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
+import { SqlClient } from "effect/sql/SqlClient";
+import { SqlError, UnknownError } from "effect/sql/SqlError";
 
 export const LaneId = Schema.NonEmptyString.check(Schema.isMaxLength(256));
 

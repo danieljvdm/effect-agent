@@ -28,8 +28,8 @@ import { ApprovalDecisionCommand, IdempotencyKey, Principal } from "effect-agent
 import { readOutstanding, ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { AssignmentDisposition, WorkerError, type WorkerSummary } from "effect-agent/worker";
 import { WorkerHostAuthorizer } from "effect-agent/worker-host";
+import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 import { TestClock } from "effect/testing";
-import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 const principal = Schema.decodeSync(Principal)("worker-owner");
 const sourceThreadId = Schema.decodeSync(ThreadId)("background-source");

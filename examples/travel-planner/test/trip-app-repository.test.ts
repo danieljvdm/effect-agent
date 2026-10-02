@@ -52,7 +52,7 @@ beforeAll(async () => {
     import { DurableObject } from "cloudflare:workers";
     import { SqliteClient } from "@effect/sql-sqlite-do";
     import { Effect, Layer, Schema, Cause } from "effect";
-    import { SqlClient } from "effect/unstable/sql/SqlClient";
+    import { SqlClient } from "effect/sql/SqlClient";
     import { AppRepository, AppRepositoryLive } from "../src/trip-app/repository.ts";
     import { TripApp } from "../src/domain.ts";
     const Command = Schema.Struct({ kind: Schema.String, app: Schema.optionalKey(TripApp), expected: Schema.optionalKey(Schema.NullOr(Schema.Number)) });

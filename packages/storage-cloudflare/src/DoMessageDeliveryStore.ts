@@ -6,7 +6,7 @@ import {
   type MessageDeliveryStoreLimits,
 } from "effect-agent/message-delivery";
 import { SqlStorageOwner } from "effect-agent/sql-memory-store";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { DoStorageConfig } from "./DoStorageConfig.ts";
 import { DoStorageFailpoint } from "./DoStorageFailpoint.ts";

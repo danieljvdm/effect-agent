@@ -17,7 +17,7 @@ import {
   makeMessageDeliveryFixture,
   messageDeliveryStoreConformanceCases,
 } from "effect-agent/testing/message-delivery-store-conformance";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient } from "effect/sql/SqlClient";
 
 import { messageDeliveryStoreLayer } from "../src/SqliteMessageDeliveryStore.ts";
 import { SqliteStorageFailpoint } from "../src/SqliteStorageFailpoint.ts";

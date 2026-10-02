@@ -1,6 +1,7 @@
-import type { Scope } from "effect";
-import { Context, Crypto, Effect, Encoding, Layer, Option, Schema, Stream } from "effect";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import type { Brand, Scope } from "effect";
+import { Context, Crypto, Effect, Layer, Option, Schema, Stream } from "effect";
+import { Tool, Toolkit } from "effect/ai";
+import { Hex } from "effect/encoding";
 
 import type { AnyDefinition } from "../../core/Agent.ts";
 import type { Update } from "../../core/AgentUpdates.ts";
@@ -87,13 +88,13 @@ type WorkerDeclaration<Name extends string> = {
 
 /** Portable identity checked against this declaration; possession grants no authority. */
 export const Worker = <const Name extends string>(declaration: WorkerDeclaration<Name>) =>
-  WorkerRef.check(
-    Schema.makeFilter(
-      (worker) =>
+  WorkerRef.pipe(
+    Schema.refine(
+      (worker): worker is WorkerRef & Brand.Brand<`@effect-agent/Worker/${Name}`> =>
         worker.delegationId === declaration.delegationId &&
         worker.targetAgentId === declaration.target.id,
     ),
-  ).pipe(Schema.brand(`@effect-agent/Worker/${declaration.name}`));
+  );
 
 export type Worker<Name extends string> = ReturnType<typeof Worker<Name>>["Type"];
 
@@ -1062,7 +1063,7 @@ const modelKey = Effect.fn("Subagent.workerToolKey")(function* (operation: "star
     .digest("SHA-256", bytes)
     .pipe(Effect.mapError(() => WorkerError.make({ operation, reason: "unavailable" })));
 
-  return yield* Schema.decodeEffect(IdempotencyKey)(`worker:${Encoding.encodeHex(digest)}`).pipe(
+  return yield* Schema.decodeEffect(IdempotencyKey)(`worker:${Hex.encode(digest)}`).pipe(
     Effect.mapError(() => WorkerError.make({ operation, reason: "unavailable" })),
   );
 });

@@ -15,8 +15,8 @@ import { SqliteMigrator } from "@effect/sql-sqlite-node";
 import { Effect, Schema } from "effect";
 import { ScheduleFailpoint, ScheduleFailpointError } from "effect-agent/schedule";
 import { SubscriptionFailpoint, SubscriptionFailpointError } from "effect-agent/subscription";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { isSqlError, type SqlError } from "effect/unstable/sql/SqlError";
+import * as SqlClient from "effect/sql/SqlClient";
+import { isSqlError, type SqlError } from "effect/sql/SqlError";
 
 import { SqliteStorageConfig } from "../SqliteStorageConfig.ts";
 import {

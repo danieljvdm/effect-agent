@@ -6,9 +6,9 @@ import { connectMcp, McpConnectionRequest } from "effect-agent/mcp";
 import * as McpClient from "effect-agent/mcp-client";
 import type { McpToolCallFailed, McpToolResult } from "effect-agent/mcp-client";
 import { McpHttpTransport, McpStdioTransport } from "effect-agent/mcp-client";
-import { Toolkit } from "effect/unstable/ai";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
-import type { ChildProcessSpawner } from "effect/unstable/process";
+import { Toolkit } from "effect/ai";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import type { ChildProcessSpawner } from "effect/process";
 
 const request = McpConnectionRequest.make({
   serverId: "fixture",

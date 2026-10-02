@@ -1,6 +1,6 @@
 import { Context, DateTime, Effect, Layer, Option, Predicate, Redacted, Schema } from "effect";
 import { toolFailureObserverLayer } from "effect-agent/run-options";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient } from "effect/sql/SqlClient";
 
 import { PlannerError } from "../domain.ts";
 

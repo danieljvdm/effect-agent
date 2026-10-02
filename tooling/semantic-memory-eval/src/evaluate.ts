@@ -6,18 +6,7 @@ import { activityProcessorStoreLayer } from "@effect-agent/storage-sqlite/sqlite
 import { layer as sqliteThreadStoreLayer } from "@effect-agent/storage-sqlite/sqlite-thread-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
-import {
-  Clock,
-  Crypto,
-  DateTime,
-  Effect,
-  Encoding,
-  FileSystem,
-  Layer,
-  Option,
-  Path,
-  Schema,
-} from "effect";
+import { Clock, Crypto, DateTime, Effect, FileSystem, Layer, Option, Path, Schema } from "effect";
 import { ActivityProcessorKey, type PreparedActivity } from "effect-agent/activity-store";
 import { ActivityPassLimits, processCommittedActivity } from "effect-agent/committed-activity";
 import { ThreadId } from "effect-agent/identifiers";
@@ -57,7 +46,8 @@ import {
   ThreadStore,
   ThreadTailRequest,
 } from "effect-agent/thread-store";
-import { AiError, EmbeddingModel } from "effect/unstable/ai";
+import { AiError, EmbeddingModel } from "effect/ai";
+import { Hex } from "effect/encoding";
 
 import {
   CORPUS_SHA256,
@@ -134,7 +124,7 @@ const PROCESSOR_KEY = ActivityProcessorKey.make({
 });
 
 const ActivityOutput = Schema.Struct({ document: CorpusDocument, recordId: Schema.NonEmptyString });
-const byteLength = (text: string): number => Encoding.encodeHex(text).length / 2;
+const byteLength = (text: string): number => Hex.encode(text).length / 2;
 
 const elapsedMillis = (started: bigint, finished: bigint): number =>
   Number(finished - started) / 1_000_000;
@@ -589,7 +579,7 @@ const loadCorpus = Effect.fn("SemanticMemoryEvaluation.loadCorpus")(function* ()
 
   const digest = yield* crypto
     .digest("SHA-256", new TextEncoder().encode(raw))
-    .pipe(Effect.map(Encoding.encodeHex));
+    .pipe(Effect.map(Hex.encode));
 
   if (digest !== CORPUS_SHA256) return yield* evalError("verify corpus", `SHA-256 ${digest}`);
 

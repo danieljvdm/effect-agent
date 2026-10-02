@@ -22,7 +22,7 @@ import {
   type PageCaptureRequest,
 } from "effect-agent/page-capture";
 import { SandboxImplementation } from "effect-agent/sandbox";
-import { HttpClient, HttpClientRequest, type HttpClientError } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest, type HttpClientError } from "effect/http";
 
 import {
   BrowserQuickActionWorkersAi,

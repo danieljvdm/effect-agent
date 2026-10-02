@@ -13,8 +13,8 @@ import { AgentId, SubmissionId, ThreadId } from "effect-agent/identifiers";
 import { IdempotencyKey, Principal } from "effect-agent/receipt";
 import { DefinitionDigestInput, DeploymentId } from "effect-agent/records";
 import { AdmissionRequest, SubmissionLedger } from "effect-agent/submission-ledger";
-import { Statement } from "effect/unstable/sql";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { Statement } from "effect/sql";
+import { SqlClient } from "effect/sql/SqlClient";
 import { expect, it } from "vite-plus/test";
 
 import { stubFor } from "./harness.ts";

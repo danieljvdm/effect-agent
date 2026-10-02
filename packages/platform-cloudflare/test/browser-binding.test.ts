@@ -1,7 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import { Cause, Deferred, Effect, ErrorReporter, Fiber, Layer, Redacted, Schema } from "effect";
+import { FetchHttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
-import { FetchHttpClient } from "effect/unstable/http";
 
 import {
   BrowserSessionError,

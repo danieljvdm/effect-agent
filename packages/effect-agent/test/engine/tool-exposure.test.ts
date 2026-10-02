@@ -16,7 +16,7 @@ import {
   CurrentToolCatalog,
   RunToolVisibility,
 } from "effect-agent/tool-exposure";
-import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
+import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/ai";
 
 let threadSequence = 0;
 

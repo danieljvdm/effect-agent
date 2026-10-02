@@ -252,7 +252,7 @@ model turn. The projector receives decoded tool parameters and result:
 ```ts twoslash
 import { Agent } from "effect-agent";
 import { Effect, Schema } from "effect";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 const Answer = Schema.Struct({ answer: Schema.String });
 const Complete = Tool.make("complete", { parameters: Answer, success: Schema.Void });

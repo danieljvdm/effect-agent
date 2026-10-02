@@ -1,6 +1,6 @@
 import { LanguageModelDecisionModel } from "@effect-agent/ai-decision";
 import { Effect, Schema } from "effect";
-import { Decision, DecisionModel } from "effect/unstable/ai";
+import { Decision, DecisionModel } from "effect/ai";
 
 export const Sentiment = Decision.make({
   input: Schema.String,

@@ -1,6 +1,6 @@
 import { Cause, Effect, Option, Predicate, Schema } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
-import { AsyncResult, Atom, AtomHttpApi, Reactivity } from "effect/unstable/reactivity";
+import { FetchHttpClient } from "effect/http";
+import { AsyncResult, Atom, AtomHttpApi, Reactivity } from "effect/reactivity";
 
 import { LabApi, Report, type BrowserEngine, type ModelId, type RunInput } from "./contract.ts";
 

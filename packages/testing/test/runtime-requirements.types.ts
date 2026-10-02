@@ -6,7 +6,7 @@ import * as AgentRuntime from "effect-agent/agent-runtime";
 import { type DurableWorkerRequirements } from "effect-agent/durable-agent-runtime";
 import { RunContextPreparationPassthrough, type RunOptions } from "effect-agent/run-options";
 import { ThreadHistory } from "effect-agent/thread-history";
-import { Model, Tool, Toolkit } from "effect/unstable/ai";
+import { Model, Tool, Toolkit } from "effect/ai";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2

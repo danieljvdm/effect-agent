@@ -24,7 +24,7 @@ Public beta: APIs and stored data may change before 1.0. Persistent adapters sup
 ```ts
 import { Effect, Schema } from "effect";
 import { Agent, AgentRuntime } from "effect-agent";
-import { Toolkit } from "effect/unstable/ai";
+import { Toolkit } from "effect/ai";
 
 const planner = Agent.make("travel-planner", {
   input: Schema.Struct({ city: Schema.String, days: Schema.Int }),
@@ -52,7 +52,7 @@ import { InMemory } from "effect-agent";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { BunRuntime } from "@effect/platform-bun";
 import { Config, Layer } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 const AppLive = Layer.mergeAll(OpenAiLanguageModel.model("gpt-6-astra"), InMemory.layer).pipe(
   Layer.provide(OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_API_KEY") })),
@@ -74,7 +74,7 @@ bun agent.ts
 Use native Effect AI tools with typed parameters, results, and Effect handlers:
 
 ```ts
-import { Tool } from "effect/unstable/ai";
+import { Tool } from "effect/ai";
 
 const SearchActivities = Tool.make("search_activities", {
   description: "Find activities in a city.",

@@ -17,7 +17,7 @@ import {
   makeMessageDeliveryFixture,
   messageDeliveryStoreConformanceCases,
 } from "effect-agent/testing/message-delivery-store-conformance";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import { expect, it } from "vite-plus/test";
 
 import { doMessageDeliveryStoreLayer } from "../src/DoMessageDeliveryStore.ts";

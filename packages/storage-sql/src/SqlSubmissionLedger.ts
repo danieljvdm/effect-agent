@@ -89,8 +89,8 @@ import {
   type ChildSettledOutcome,
   type SuspensionOutcome,
 } from "effect-agent/submission-ledger";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
+import * as SqlClientService from "effect/sql/SqlClient";
+import type { SqlError } from "effect/sql/SqlError";
 
 import type { SqlJournal } from "./SqlJournal.ts";
 import {

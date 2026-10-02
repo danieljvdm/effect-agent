@@ -1,7 +1,7 @@
 import { AnthropicClient } from "@effect/ai-anthropic";
 import { Config, Layer } from "effect";
 import { InMemory } from "effect-agent";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 import { TravelToolsLive } from "./tools";
 

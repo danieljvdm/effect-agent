@@ -68,8 +68,8 @@ import {
   ThreadStore,
   ThreadTailRequest,
 } from "effect-agent/thread-store";
-import type { LanguageModel } from "effect/unstable/ai";
-import { AiError, Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
+import type { LanguageModel } from "effect/ai";
+import { AiError, Model, Prompt, Tool, Toolkit } from "effect/ai";
 
 import { BenchmarkError, check, type Case, type Sample, type SamplePhase } from "./contracts.js";
 import { BenchmarkProgress } from "./evidence.js";

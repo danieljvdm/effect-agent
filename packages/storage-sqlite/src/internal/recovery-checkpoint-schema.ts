@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 /** One disposable recovery snapshot per Thread, independent of generic projections. */
 export const createRecoveryCheckpointTable = Effect.gen(function* () {

@@ -1,6 +1,7 @@
+import * as OAuthCrypto from "@yielded/auth-crypto/OAuth";
+import * as GitHub from "@yielded/auth-openid-client/GitHub";
 import * as Auth from "@yielded/auth/Auth";
 import * as Email from "@yielded/auth/Email";
-import * as GitHub from "@yielded/auth/GitHub";
 import * as AuthHttp from "@yielded/auth/Http";
 import * as OAuth from "@yielded/auth/OAuth";
 import { ProofKeys } from "@yielded/auth/Proofs";
@@ -98,7 +99,7 @@ export const makeAuth = (config: AuthConfiguration) => {
       lifetimeMillis: 600_000,
       keyring: keyring(config.AUTH_BINDING_KEY),
     }),
-    OAuth.OAuthTransactionProtector.xchacha20poly1305(keyring(config.AUTH_TRANSACTION_KEY)),
+    OAuthCrypto.transactionLayer(keyring(config.AUTH_TRANSACTION_KEY)),
     OAuth.OAuthReturnTargets.exactRoutes(["/"]),
     Email.EmailReturnTargets.exactRoutes(["/"]),
   );

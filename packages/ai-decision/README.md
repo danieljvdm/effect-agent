@@ -32,7 +32,7 @@ Durable hosts provide `AutoModel.SelectionStore` to atomically retain version 2 
 Wrong-thread, missing-profile, catalog-version, and record-version mismatches fail without
 reselection or mutation. Explicit `select`, `restore`, and `resolve` support host-owned admission.
 
-For ordinary assessments, import `Decision` and `DecisionModel` from `effect/unstable/ai`.
+For ordinary assessments, import `Decision` and `DecisionModel` from `effect/ai`.
 Use `LanguageModelDecisionModel.layer` to answer those decisions with any native language model
 that supports structured output. Provide your chosen model Layer to the adapter; provider clients
 and configuration remain application-owned. Its probabilities are LLM estimates, not calibrated

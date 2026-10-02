@@ -18,7 +18,7 @@ import { SubmissionLedger, SubmissionLookupById } from "effect-agent/submission-
 import { verifyThreadInvariants } from "effect-agent/thread-invariants";
 import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { DurableObject } from "effect-cf";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import * as SqlClientService from "effect/sql/SqlClient";
 import { expect } from "vite-plus/test";
 
 import { decodeThreadId, supplierCountsFor, supplierValuesFor } from "./fixtures.ts";

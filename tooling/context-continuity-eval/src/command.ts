@@ -10,9 +10,9 @@ import {
   Path,
   Schema,
 } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
-import { FetchHttpClient } from "effect/unstable/http";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { Command, Flag } from "effect/cli";
+import { FetchHttpClient } from "effect/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { runCloudflareEvaluation } from "./cloudflare.ts";
 import { EvaluationError, EvaluationReport } from "./contracts.ts";

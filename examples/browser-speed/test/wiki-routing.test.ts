@@ -1,7 +1,7 @@
 import { assert, expectTypeOf, it } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect";
+import { AiError, DecisionModel } from "effect/ai";
 import { TestClock } from "effect/testing";
-import { AiError, DecisionModel } from "effect/unstable/ai";
 
 import { type LabError } from "../src/contract.ts";
 import { makeTrace, Trace } from "../src/telemetry.ts";

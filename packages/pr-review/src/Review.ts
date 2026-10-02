@@ -24,7 +24,7 @@ import * as Subagent from "effect-agent/subagent";
 import { SubagentPolicy } from "effect-agent/subagent";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import { ThreadHistory } from "effect-agent/thread-history";
-import { type LanguageModel, type Model, Tool, Toolkit } from "effect/unstable/ai";
+import { type LanguageModel, type Model, Tool, Toolkit } from "effect/ai";
 
 import { reviewToolkit, reviewToolkitLayer } from "./internal/repository.ts";
 

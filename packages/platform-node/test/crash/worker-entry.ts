@@ -26,7 +26,7 @@ import {
   type Settlement,
   type SubmissionSnapshot,
 } from "effect-agent/submission-ledger";
-import type { Response } from "effect/unstable/ai";
+import type { Response } from "effect/ai";
 
 import {
   CHILD_ANSWER,

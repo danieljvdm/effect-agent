@@ -1,8 +1,8 @@
 import {
-  PersistenceMappingError,
   requiredProofConstraints,
   type ProofPersistenceMapping,
-} from "@yielded/auth-persistence/drizzle";
+} from "@yielded/auth-persistence-drizzle";
+import { PersistenceMappingError } from "@yielded/auth-persistence/Adapter";
 import {
   ProofBinding,
   ProofPurpose,

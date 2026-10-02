@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 import { Agent } from "effect-agent";
-import { Toolkit } from "effect/unstable/ai";
+import { Toolkit } from "effect/ai";
 
 import { Research } from "./delegation.ts";
 

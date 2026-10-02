@@ -1,6 +1,6 @@
 import { Effect, Layer, Schema } from "effect";
 import { ToolExecutionClass } from "effect-agent/durable-step";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 import {
   PlannerError,

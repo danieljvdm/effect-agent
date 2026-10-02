@@ -6,7 +6,7 @@ import {
   WorkflowRepairTrigger,
 } from "@effect-agent/workflow/workflow-dispatch";
 import { Cause, Duration, Effect, Layer, Option, Schema } from "effect";
-import { SqlClient } from "effect/unstable/sql";
+import { SqlClient } from "effect/sql";
 
 const StoredIntent = Schema.Struct({
   deployment_id: Schema.String,

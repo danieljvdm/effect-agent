@@ -1,6 +1,6 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Effect, FileSystem, Path } from "effect";
-import { ChildProcessSpawner, ChildProcess } from "effect/unstable/process";
+import { ChildProcessSpawner, ChildProcess } from "effect/process";
 import { build } from "esbuild";
 
 import { EvaluationError } from "./contracts.ts";

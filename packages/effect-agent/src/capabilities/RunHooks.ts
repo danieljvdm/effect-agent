@@ -1,5 +1,5 @@
 import { Clock, DateTime, Effect, Schema } from "effect";
-import type { Prompt } from "effect/unstable/ai";
+import type { Prompt } from "effect/ai";
 
 import {
   type ThreadEncodingError,

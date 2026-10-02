@@ -1,6 +1,6 @@
 import { Clock, Context, Effect, Layer, Schema } from "effect";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
+import * as SqlClientService from "effect/sql/SqlClient";
+import type { SqlError } from "effect/sql/SqlError";
 
 import { utf8ByteLength } from "../core/internal/utf8.ts";
 import { type Any as MemoryNamespace, MemoryNamespaceAddress } from "../core/MemoryNamespace.ts";

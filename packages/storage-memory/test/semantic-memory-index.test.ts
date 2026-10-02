@@ -3,7 +3,7 @@ import {
   inMemorySemanticIndexLayer,
 } from "@effect-agent/storage-memory/memory-semantic-index";
 import { describe, expect, it } from "@effect/vitest";
-import { Schema as NamespaceSchema, Effect, Encoding, Schema } from "effect";
+import { Schema as NamespaceSchema, Effect, Schema } from "effect";
 import * as MemoryNamespace from "effect-agent/memory-namespace";
 import {
   MemoryIndexQuery,
@@ -12,6 +12,7 @@ import {
   SemanticMemoryIndex,
   SemanticMemoryProfile,
 } from "effect-agent/semantic-memory-index";
+import { Hex } from "effect/encoding";
 
 const TestNamespace = MemoryNamespace.define({
   name: "test/memory",
@@ -55,7 +56,7 @@ const chunk = (
     passageId,
     ordinal,
     startByte,
-    endByte: startByte + Encoding.encodeHex(text).length / 2,
+    endByte: startByte + Hex.encode(text).length / 2,
     text,
     vector,
   });

@@ -1,5 +1,5 @@
 import { Context, Effect, Schema, Semaphore } from "effect";
-import { Decision, DecisionModel, Tool, Toolkit } from "effect/unstable/ai";
+import { Decision, DecisionModel, Tool, Toolkit } from "effect/ai";
 
 const Ref = Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9-]{0,50}$/));
 

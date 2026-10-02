@@ -1,8 +1,8 @@
 import type { Redacted } from "effect";
 import { Data, Effect, Exit, Layer, Option, Schedule, Schema, Semaphore, Stream } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { AsyncResult, Atom, AtomRpc, Reactivity } from "effect/unstable/reactivity";
-import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
+import { AsyncResult, Atom, AtomRpc, Reactivity } from "effect/reactivity";
+import { RpcClient, RpcSerialization } from "effect/rpc";
 
 import { AccountError, type AccountSession } from "./auth/account";
 import { runtime } from "./auth/client";

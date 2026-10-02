@@ -6,7 +6,7 @@ import * as AgentRuntime from "effect-agent/agent-runtime";
 import { ContextCompactor, type CompactionDecision } from "effect-agent/context-compactor";
 import { IdGenerator } from "effect-agent/id-generator";
 import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
-import { LanguageModel, Model, Prompt, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Prompt, Toolkit, type Response } from "effect/ai";
 
 import { RunContextPreparationPassthrough } from "../../src/engine/RunOptions.ts";
 import { ThreadHistory } from "../../src/engine/ThreadHistory.ts";

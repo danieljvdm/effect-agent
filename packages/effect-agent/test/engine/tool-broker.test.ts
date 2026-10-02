@@ -15,7 +15,7 @@ import {
   type ToolBrokerPass,
   type ToolBrokerPassOptions,
 } from "effect-agent/tool-broker";
-import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 
 import { RunContextPreparationPassthrough } from "../../src/engine/RunOptions.ts";
 import { ThreadHistory } from "../../src/engine/ThreadHistory.ts";

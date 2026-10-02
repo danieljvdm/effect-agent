@@ -8,8 +8,8 @@ import { assert, expectTypeOf, it } from "@effect/vitest";
 import type { Scope } from "effect";
 import { Config, Effect, Exit, Fiber, Layer, Option, Redacted, Schema } from "effect";
 import { InMemory } from "effect-agent";
-import { DecisionModel } from "effect/unstable/ai";
-import { FetchHttpClient } from "effect/unstable/http";
+import { DecisionModel } from "effect/ai";
+import { FetchHttpClient } from "effect/http";
 import puppeteer from "puppeteer-core";
 import browserPuppeteer from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 

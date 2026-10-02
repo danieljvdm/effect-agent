@@ -3,7 +3,7 @@ import { arch, cpus, platform, release, totalmem } from "node:os";
 
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Cause, Clock, Console, Effect, Exit, FileSystem, Option, Path, Schema } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
+import { Command, Flag } from "effect/cli";
 import { build, version as esbuildVersion } from "esbuild";
 
 import {

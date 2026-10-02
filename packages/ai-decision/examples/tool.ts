@@ -1,5 +1,5 @@
 import { Effect, Schema, Stream } from "effect";
-import { AiError, Decision, DecisionModel, Tool, Toolkit } from "effect/unstable/ai";
+import { AiError, Decision, DecisionModel, Tool, Toolkit } from "effect/ai";
 
 const Assessment = Decision.make({
   input: Schema.Struct({ message: Schema.String }),

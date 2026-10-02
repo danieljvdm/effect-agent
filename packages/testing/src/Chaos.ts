@@ -1,4 +1,5 @@
 import { Cause, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
+import { Arbitrary } from "effect";
 import { ObligationThresholds } from "effect-agent/admin";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
@@ -51,19 +52,11 @@ import {
 import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
 import { verifyThreadInvariants } from "effect-agent/thread-invariants";
 import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
-import {
-  LanguageModel,
-  Model,
-  Tool,
-  Toolkit,
-  type Prompt,
-  type Response,
-} from "effect/unstable/ai";
-import { Arbitrary } from "effect/unstable/arbitrary";
+import { LanguageModel, Model, Tool, Toolkit, type Prompt, type Response } from "effect/ai";
 
 /**
  * P7 WP4 chaos machinery (plan §5): a Schema-first `ChaosPlan`, a seeded generator over
- * `effect/unstable/arbitrary`, and a
+ * `effect/Arbitrary`, and a
  * deterministic runner that drives the durable coordinator over whatever adapter pair the test
  * provides. Every plan ends in the SAME claims the crash matrices make:
  *

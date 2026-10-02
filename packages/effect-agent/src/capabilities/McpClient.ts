@@ -10,17 +10,12 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { Tool, Toolkit } from "effect/unstable/ai";
-import * as McpProtocol from "effect/unstable/ai/McpProtocol";
-import * as McpSchema from "effect/unstable/ai/McpSchema";
-import {
-  Headers,
-  HttpClient,
-  HttpClientRequest,
-  type HttpClientResponse,
-} from "effect/unstable/http";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { RpcClient, RpcClientError, type RpcMessage, RpcSerialization } from "effect/unstable/rpc";
+import { Tool, Toolkit } from "effect/ai";
+import * as McpProtocol from "effect/ai/McpProtocol";
+import * as McpSchema from "effect/ai/McpSchema";
+import { Headers, HttpClient, HttpClientRequest, type HttpClientResponse } from "effect/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { RpcClient, RpcClientError, type RpcMessage, RpcSerialization } from "effect/rpc";
 
 import { utf8ByteLength } from "../core/internal/utf8.ts";
 import { ToolExecutionClass, type ToolExecutionClassValue } from "../engine/DurableStep.ts";

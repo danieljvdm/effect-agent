@@ -8,13 +8,7 @@ import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { DefinitionDigestInput } from "effect-agent/records";
 import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import { DurableObject } from "effect-cf";
-import {
-  LanguageModel,
-  Model,
-  Tool,
-  Toolkit,
-  type Response as AiResponse,
-} from "effect/unstable/ai";
+import { LanguageModel, Model, Tool, Toolkit, type Response as AiResponse } from "effect/ai";
 
 import { ObjectStatus } from "./heap-contracts.ts";
 

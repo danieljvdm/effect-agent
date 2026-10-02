@@ -75,7 +75,7 @@ import {
   type ReconciliationDecision,
 } from "effect-agent/tool-reconciler";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
-import { Prompt, LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
+import { Prompt, LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable-tools");

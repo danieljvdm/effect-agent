@@ -52,7 +52,7 @@ import {
   MAX_THREAD_EXPORT_RECORDS,
   type ThreadRecoveryCheckpoints,
 } from "effect-agent/thread-store";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import * as SqlClientService from "effect/sql/SqlClient";
 
 import {
   DEFAULT_MAX_STORED_VALUE_BYTES,

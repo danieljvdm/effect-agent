@@ -14,8 +14,8 @@ import {
   Redacted,
   Schema,
 } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { Command, Flag } from "effect/cli";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 import { requireReplayCpu, sha256 } from "./replay-cpu-build.ts";
 import type { ReplayCpuRole } from "./replay-cpu-contracts.ts";

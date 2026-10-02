@@ -1,6 +1,6 @@
 import { Effect } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
-import { AsyncResult, Atom, AtomHttpApi, Reactivity } from "effect/unstable/reactivity";
+import { FetchHttpClient } from "effect/http";
+import { AsyncResult, Atom, AtomHttpApi, Reactivity } from "effect/reactivity";
 
 import { runtime } from "./auth/client";
 import { FundingApi, type GrantFunding, type RevokeFunding } from "./funding-domain";

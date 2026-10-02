@@ -2,8 +2,8 @@ import { gzip } from "node:zlib";
 
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
-import { ChildProcess } from "effect/unstable/process";
+import { Command, Flag } from "effect/cli";
+import { ChildProcess } from "effect/process";
 import { analyzeMetafile, build, version as esbuildVersion } from "esbuild";
 
 import { comparisonExports, stageComparisonModules } from "./internal/comparison-exports.ts";
@@ -81,6 +81,7 @@ const measureBundle = Effect.fn("bundleSize.measureBundle")(function* (options: 
   readonly entry: string;
   readonly dependencies: string;
   readonly output: string;
+  readonly alias: Readonly<Record<string, string>>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -96,6 +97,7 @@ const measureBundle = Effect.fn("bundleSize.measureBundle")(function* (options: 
         outdir: "output",
         outExtension: { ".js": ".mjs" },
         nodePaths: [options.dependencies],
+        alias: options.alias,
         bundle: true,
         treeShaking: true,
         minify: true,
@@ -292,6 +294,26 @@ const measureCheckout = Effect.fn("bundleSize.measureCheckout")(function* (
   const available = new Set<string>();
   const decodeManifest = Schema.decodeUnknownEffect(Schema.fromJsonString(PublishManifest));
 
+  const effect = yield* Schema.decodeEffect(
+    Schema.fromJsonString(
+      Schema.Struct({
+        version: Schema.String,
+        exports: Schema.Struct({
+          "./ai": Schema.optionalKey(Schema.String),
+          "./unstable/ai": Schema.optionalKey(Schema.String),
+        }),
+      }),
+    ),
+  )(yield* fs.readFileString(path.join(root, "node_modules", "effect", "package.json")));
+
+  // Keep the same consumer behavior when comparing against pre-stable Effect.
+  // Resolve the renamed namespace to this checkout's installed implementation.
+  const alias: Record<string, string> = {};
+
+  if (effect.exports["./ai"] === undefined && effect.exports["./unstable/ai"] !== undefined) {
+    alias["effect/ai"] = path.resolve(root, "node_modules/effect", effect.exports["./unstable/ai"]);
+  }
+
   yield* fs.copyFile(path.join(root, "package.json"), path.join(stage, "package.json"));
   yield* fs.copy(fixtureDirectory, path.join(stage, "fixtures"));
 
@@ -345,6 +367,7 @@ const measureCheckout = Effect.fn("bundleSize.measureCheckout")(function* (
           entry: path.join(stage, "fixtures", fixture.name + ".ts"),
           dependencies: path.join(root, "node_modules"),
           output: path.join(output, fixture.name),
+          alias,
         });
 
         return { name: fixture.name, size, missing };
@@ -361,10 +384,6 @@ const measureCheckout = Effect.fn("bundleSize.measureCheckout")(function* (
       ),
     ),
   );
-
-  const effect = yield* Schema.decodeEffect(
-    Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
-  )(yield* fs.readFileString(path.join(root, "node_modules", "effect", "package.json")));
 
   return { results, environment: { revision: yield* revision(root), effect: effect.version } };
 });

@@ -1,5 +1,5 @@
 diff --git a/lib/credentials.js b/lib/credentials.js
-index 41902261cfd447cbe3887a8d2c2596f2da3c557c..6e2c030bacba7bcbf8e85781ce0d3920245734ec 100644
+index 4190226..6e2c030 100644
 --- a/lib/credentials.js
 +++ b/lib/credentials.js
 @@ -91,10 +91,10 @@ const fromConfigError = (message) => () => new ConfigError({
@@ -17,8 +17,31 @@ index 41902261cfd447cbe3887a8d2c2596f2da3c557c..6e2c030bacba7bcbf8e85781ce0d3920
  });
  export const resolveFromEnv = Effect.gen(function* () {
      const config = yield* envConfig.pipe(Effect.mapError(fromConfigError("Failed to load Cloudflare credentials from config")));
+diff --git a/lib/protocol.d.ts b/lib/protocol.d.ts
+index 45ef414..2ee6656 100644
+--- a/lib/protocol.d.ts
++++ b/lib/protocol.d.ts
+@@ -1,6 +1,6 @@
+ import * as Layer from "effect/Layer";
+-import type * as HttpClient from "effect/unstable/http/HttpClient";
+-import type * as HttpClientError from "effect/unstable/http/HttpClientError";
++import type * as HttpClient from "effect/http/HttpClient";
++import type * as HttpClientError from "effect/http/HttpClientError";
+ import * as API from "@distilled.cloud/core/api";
+ import { ConfigError } from "@distilled.cloud/core/errors";
+ import { Credentials, type OAuthRefreshError } from "./credentials.ts";
+diff --git a/lib/traits.d.ts b/lib/traits.d.ts
+index a27c7a9..05261e4 100644
+--- a/lib/traits.d.ts
++++ b/lib/traits.d.ts
+@@ -1,4 +1,4 @@
+-import type * as HttpClientError from "effect/unstable/http/HttpClientError";
++import type * as HttpClientError from "effect/http/HttpClientError";
+ import type * as Stream from "effect/Stream";
+ export { Body, Header, Query, DeepQuery, Label, Http, ResponseCode, HttpBody, FormDataFile, KeyDictionary, UnionCases, applyErrorMatchers, getErrorMatchers, type HttpTrait, type ErrorMatcher, bodySymbol, headerSymbol, querySymbol, deepQuerySymbol, labelSymbol, httpSymbol, responseCodeSymbol, httpBodySymbol, formDataFileSymbol, keyDictionarySymbol, unionCasesSymbol, errorMatchersSymbol, } from "@distilled.cloud/core/trait";
+ export declare const envelopePayloadRootSymbol: unique symbol;
 diff --git a/src/credentials.ts b/src/credentials.ts
-index 28cc17bb510c7fd7505f698356608e426f0d6491..1892c35162d57a18b20830ee06805c7efdd6c14f 100644
+index 28cc17b..1892c35 100644
 --- a/src/credentials.ts
 +++ b/src/credentials.ts
 @@ -205,10 +205,10 @@ const fromConfigError = (message: string) => () =>
@@ -36,3 +59,35 @@ index 28cc17bb510c7fd7505f698356608e426f0d6491..1892c35162d57a18b20830ee06805c7e
      Config.withDefault(DEFAULT_API_BASE_URL),
    ),
  });
+diff --git a/src/protocol.ts b/src/protocol.ts
+index f5b7260..e350b4b 100644
+--- a/src/protocol.ts
++++ b/src/protocol.ts
+@@ -24,10 +24,10 @@
+ import * as Effect from "effect/Effect";
+ import * as Layer from "effect/Layer";
+ import type * as AST from "effect/SchemaAST";
+-import type * as HttpClient from "effect/unstable/http/HttpClient";
+-import type * as HttpClientError from "effect/unstable/http/HttpClientError";
+-import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+-import type * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
++import type * as HttpClient from "effect/http/HttpClient";
++import type * as HttpClientError from "effect/http/HttpClientError";
++import type * as HttpClientRequest from "effect/http/HttpClientRequest";
++import type * as HttpClientResponse from "effect/http/HttpClientResponse";
+ import * as API from "@distilled.cloud/core/api";
+ import {
+   bodySymbol,
+diff --git a/src/traits.ts b/src/traits.ts
+index 9ff260e..096d432 100644
+--- a/src/traits.ts
++++ b/src/traits.ts
+@@ -11,7 +11,7 @@
+  * them. Anything tied to Cloudflare's response envelope lives here.
+  */
+ import { makeAnnotation } from "@distilled.cloud/core/trait";
+-import type * as HttpClientError from "effect/unstable/http/HttpClientError";
++import type * as HttpClientError from "effect/http/HttpClientError";
+ import type * as Stream from "effect/Stream";
+ 
+ export {

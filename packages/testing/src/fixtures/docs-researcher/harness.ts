@@ -9,7 +9,7 @@ import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "effect-agen
 import { Redactor, type RedactedPreview, type RedactionError } from "effect-agent/redaction";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import { Principal, type IdempotencyKey } from "effect-agent/submission-ledger";
-import { LanguageModel, Model, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, type Response } from "effect/ai";
 
 import { DeterministicIdGeneratorLayer } from "../travel-planner/deterministic-layers.ts";
 import {

@@ -1,6 +1,6 @@
 import { Dialog } from "@base-ui/react/dialog";
 import { useAtom } from "@effect/atom-react";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import {
   ArrowUpRight,
   Check,

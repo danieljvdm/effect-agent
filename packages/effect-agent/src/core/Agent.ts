@@ -1,8 +1,8 @@
 import type { Effect, Layer, Option, Schema } from "effect";
+import type { AiError, LanguageModel, Model, Prompt } from "effect/ai";
+import * as Tool from "effect/ai/Tool";
+import * as Toolkit from "effect/ai/Toolkit";
 import * as S from "effect/Schema";
-import type { AiError, LanguageModel, Model, Prompt } from "effect/unstable/ai";
-import * as Tool from "effect/unstable/ai/Tool";
-import * as Toolkit from "effect/unstable/ai/Toolkit";
 
 import type { AgentInputError, AgentOutputError, AgentRunDispositionError } from "./AgentError.ts";
 import { AgentPolicy, type AgentPolicyInput } from "./AgentPolicy.ts";

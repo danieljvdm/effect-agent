@@ -1,5 +1,5 @@
 import { Deferred, Effect, Exit, Option, Schema } from "effect";
-import { AsyncResult, Atom, Reactivity } from "effect/unstable/reactivity";
+import { AsyncResult, Atom, Reactivity } from "effect/reactivity";
 
 import { speechContext } from "../conversation.ts";
 import { PlannerError } from "../domain.ts";

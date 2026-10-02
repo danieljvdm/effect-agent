@@ -15,7 +15,7 @@ import {
   SubmissionLedger,
 } from "effect-agent/submission-ledger";
 import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
-import { AiError, Model, Tool, Toolkit } from "effect/unstable/ai";
+import { AiError, Model, Tool, Toolkit } from "effect/ai";
 
 import { BenchmarkError, check } from "./contracts.js";
 import { fairnessCases } from "./diagnostic-cases.js";

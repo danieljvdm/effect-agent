@@ -1,7 +1,7 @@
 import { createStorageSchema } from "@effect-agent/storage-sql/sql-storage-schema";
 import { SqliteMigrator } from "@effect/sql-sqlite-node";
 import { Effect } from "effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 export const CurrentSqliteStorageVersion = 14;
 

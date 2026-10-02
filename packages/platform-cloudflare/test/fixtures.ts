@@ -34,7 +34,7 @@ import {
 import { scheduleOwnerKey } from "effect-agent/schedule-transition";
 import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import { ReconciliationUncertain, ToolReconciler } from "effect-agent/tool-reconciler";
-import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 
 import { layerFromBindings } from "../src/internal/layers.ts";
 import { pauseWorkerInputInsertion } from "./helpers/worker-input-contention.ts";

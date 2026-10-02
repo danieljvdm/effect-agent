@@ -14,12 +14,7 @@ import type {
 } from "effect-agent/memory-store";
 import { MemoryKey, MemoryScope } from "effect-agent/memory-store";
 import type { ThreadHistory } from "effect-agent/thread-history";
-import type {
-  IdGenerator as EffectAiIdGenerator,
-  LanguageModel,
-  Model,
-  Tool,
-} from "effect/unstable/ai";
+import type { IdGenerator as EffectAiIdGenerator, LanguageModel, Model, Tool } from "effect/ai";
 import type { expectTypeOf as ExpectTypeOf } from "vite-plus/test";
 
 import * as ContextTools from "../../src/capabilities/ContextTools.ts";

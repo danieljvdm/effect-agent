@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { NodeServices } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Effect, Exit, FileSystem, Schema } from "effect";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 
 import { checkReleasePackages } from "../../../scripts/check-release-packages.ts";
 import {

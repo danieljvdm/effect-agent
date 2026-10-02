@@ -28,9 +28,9 @@ import {
   subscriptionCanSelect,
   subscriptionDeliveryCanSelect,
 } from "effect-agent/subscription-transition";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
-import type { Statement } from "effect/unstable/sql/Statement";
+import * as SqlClientService from "effect/sql/SqlClient";
+import type { SqlError } from "effect/sql/SqlError";
+import type { Statement } from "effect/sql/Statement";
 
 import { sqliteJsonIsTrue, jsonIsValid } from "./internal/sql-json.ts";
 import { makeSqlQuery, SqlInteger, SqlNumber } from "./SqlStorage.ts";

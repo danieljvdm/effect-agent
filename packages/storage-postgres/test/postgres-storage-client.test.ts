@@ -5,8 +5,8 @@ import { PgClient } from "@effect/sql-pg";
 import { expect, it } from "@effect/vitest";
 import { Cause, Effect, Exit, Redacted, Schema, String } from "effect";
 import { ThreadStore } from "effect-agent/thread-store";
+import * as SqlClient from "effect/sql/SqlClient";
 import { TestClock } from "effect/testing";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { withTemporaryDatabase } from "./harness.ts";
 

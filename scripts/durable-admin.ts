@@ -11,7 +11,7 @@ import {
 } from "effect-agent/admin";
 import { DurableAgentRuntime, type RecoveryReport } from "effect-agent/durable-agent-runtime";
 import { ThreadId, SubmissionId } from "effect-agent/identifiers";
-import { Command as CliCommand, Flag } from "effect/unstable/cli";
+import { Command as CliCommand, Flag } from "effect/cli";
 
 /**
  * P7 operator CLI (plan §3): explain | verify | retry | wake | obligations over the DN

@@ -7,7 +7,7 @@ import { AgentPolicy } from "effect-agent/agent-policy";
 import { digestDefinitions } from "effect-agent/digest";
 import { ToolCallId } from "effect-agent/identifiers";
 import { ApprovalDecisionCommand } from "effect-agent/submission-ledger";
-import { Tool, Toolkit, type Response } from "effect/unstable/ai";
+import { Tool, Toolkit, type Response } from "effect/ai";
 
 import {
   definitionsFor,

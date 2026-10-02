@@ -61,8 +61,8 @@ import {
   type OwnershipToken,
 } from "effect-agent/submission-ledger";
 import { ThreadMaterialization } from "effect-agent/thread-store";
+import * as SqlClientService from "effect/sql/SqlClient";
 import { TestClock } from "effect/testing";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import {
   clientLayer,

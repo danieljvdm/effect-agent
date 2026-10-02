@@ -22,8 +22,8 @@ import {
   subscriptionConformancePartition,
   subscriptionStoreConformanceCases,
 } from "effect-agent/testing/subscription-store-conformance";
+import * as SqlClientService from "effect/sql/SqlClient";
 import { TestClock } from "effect/testing";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 const testLayer = (filename: string) =>
   subscriptionStoreLayer(subscriptionConformancePartition).pipe(

@@ -26,8 +26,8 @@ import {
   PageCaptureRequest,
   PageHtmlTarget,
 } from "effect-agent/page-capture";
-import { Tool, Toolkit } from "effect/unstable/ai";
-import { FetchHttpClient } from "effect/unstable/http";
+import { Tool, Toolkit } from "effect/ai";
+import { FetchHttpClient } from "effect/http";
 
 import { CheckoutError, CheckoutPhase, Evidence, Receipt, WorkerFailure } from "./proof.ts";
 

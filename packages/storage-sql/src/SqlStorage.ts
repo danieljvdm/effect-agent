@@ -1,8 +1,8 @@
 import { Effect, Exit, Option, Schema, SchemaTransformation } from "effect";
 import type { Cause } from "effect";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
-import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
-import type { Statement } from "effect/unstable/sql/Statement";
+import { SqlClient } from "effect/sql/SqlClient";
+import { SqlError, UnknownError } from "effect/sql/SqlError";
+import type { Statement } from "effect/sql/Statement";
 
 import type { SqlStorageFailpointLocation } from "./SqlStorageFailpoint.ts";
 

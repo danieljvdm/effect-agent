@@ -17,7 +17,7 @@ import {
   WorkerHostConfig,
   WorkerPolicyResolver,
 } from "effect-agent/worker-host";
-import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 
 import { TEST_DIGESTS, TEST_PRINCIPAL, finalParts } from "./fixtures.ts";
 

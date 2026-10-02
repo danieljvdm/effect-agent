@@ -1,4 +1,4 @@
-import { PersistenceMappingError } from "@yielded/auth-persistence/drizzle";
+import { PersistenceMappingError } from "@yielded/auth-persistence/Adapter";
 import { SubjectId } from "@yielded/auth/Schema";
 import { type AuthenticationRequirement, SecurityRevision } from "@yielded/auth/Sessions";
 import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";

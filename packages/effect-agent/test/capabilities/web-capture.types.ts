@@ -2,7 +2,7 @@ import type { Layer } from "effect";
 import { Context, Effect, Schema, SchemaGetter } from "effect";
 import type { PageCapture } from "effect-agent/page-capture";
 import * as WebCapture from "effect-agent/web-capture";
-import type { Tool } from "effect/unstable/ai";
+import type { Tool } from "effect/ai";
 
 const PricingSchema = Schema.Struct({
   plans: Schema.Array(Schema.Struct({ name: Schema.String, monthlyUsd: Schema.Number })),

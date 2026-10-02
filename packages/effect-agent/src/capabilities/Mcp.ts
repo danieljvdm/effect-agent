@@ -5,15 +5,15 @@ import {
   Crypto,
   Duration,
   Effect,
-  Encoding,
   JsonPointer,
   type Layer,
   Option,
   Schema,
   type Scope,
 } from "effect";
-import { Tool, type Toolkit } from "effect/unstable/ai";
-import * as McpSchema from "effect/unstable/ai/McpSchema";
+import { Tool, type Toolkit } from "effect/ai";
+import * as McpSchema from "effect/ai/McpSchema";
+import { Hex } from "effect/encoding";
 
 import { utf8ByteLength } from "../core/internal/utf8.ts";
 
@@ -180,7 +180,7 @@ const canonicalJson = (value: Schema.Json): Schema.Json => {
 };
 
 const utf8 = (value: string): Uint8Array => {
-  const hex = Encoding.encodeHex(value);
+  const hex = Hex.encode(value);
   const bytes = new Uint8Array(hex.length / 2);
 
   for (let index = 0; index < bytes.length; index += 1) {
@@ -239,7 +239,7 @@ const digestJson = Effect.fn("digestMcpSchema")(function* (serverId: string, val
     ),
   );
 
-  return `sha256:${Encoding.encodeHex(digest)}`;
+  return `sha256:${Hex.encode(digest)}`;
 });
 
 /** Validate native discovery data before it enters Agent Tool context. */

@@ -3,7 +3,7 @@ import { ContextCompactor } from "effect-agent/context-compactor";
 import * as ContextTools from "effect-agent/context-tools";
 import { ToolExecutionClass } from "effect-agent/durable-step";
 import * as MemoryNotes from "effect-agent/memory-notes";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 import { type CompactionEvidence } from "./contracts.ts";
 import { instructions, makeScenario } from "./scenario.ts";

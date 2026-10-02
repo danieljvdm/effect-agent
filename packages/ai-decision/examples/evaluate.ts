@@ -1,7 +1,7 @@
 import type { TypeSafeSchema } from "@effect/ai-typesafe";
 import { TypeSafeClient } from "@effect/ai-typesafe";
 import { Effect, Layer, Schedule } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 export const questions = {
   department: {

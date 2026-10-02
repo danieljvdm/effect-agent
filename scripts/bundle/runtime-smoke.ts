@@ -22,7 +22,7 @@ import { layer as persistentHistoryLayer } from "effect-agent/persistent-history
 import * as DirectSubagent from "effect-agent/subagent";
 import * as DirectThread from "effect-agent/thread";
 import { layer as historyLayer } from "effect-agent/thread-history";
-import { Model, Toolkit } from "effect/unstable/ai";
+import { Model, Toolkit } from "effect/ai";
 
 import { loadRuntime } from "./lazy-module.ts";
 

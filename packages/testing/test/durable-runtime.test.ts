@@ -84,16 +84,8 @@ import {
   ToolReconciler,
 } from "effect-agent/tool-reconciler";
 import { WakeScheduler, makeWakeSubscriptionHub } from "effect-agent/wake-scheduler";
+import { AiError, LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/ai";
 import { TestClock } from "effect/testing";
-import {
-  AiError,
-  LanguageModel,
-  Model,
-  Prompt,
-  Tool,
-  Toolkit,
-  type Response,
-} from "effect/unstable/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable");

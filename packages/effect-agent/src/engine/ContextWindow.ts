@@ -1,6 +1,6 @@
 import type { Effect } from "effect";
 import * as Context from "effect/Context";
-import * as Encoding from "effect/Encoding";
+import * as Hex from "effect/encoding/Hex";
 import * as Schema from "effect/Schema";
 
 import { RunId, ThreadId } from "../core/Identifiers.ts";
@@ -9,7 +9,7 @@ import { RunId, ThreadId } from "../core/Identifiers.ts";
 export const ContextHandoff = Schema.NonEmptyString.check(
   Schema.isMaxLength(20_000),
   Schema.isPattern(/\S/),
-  Schema.makeFilter((text) => Encoding.encodeHex(JSON.stringify(text)).length / 2 <= 32_768, {
+  Schema.makeFilter((text) => Hex.encode(JSON.stringify(text)).length / 2 <= 32_768, {
     expected: "at most 32768 JSON-encoded UTF-8 bytes",
   }),
 );

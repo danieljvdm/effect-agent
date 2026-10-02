@@ -6,7 +6,7 @@ import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Effect, Layer } from "effect";
 import { ScheduleStorageError, ScheduleStore } from "effect-agent/schedule";
 import { scheduleStoreConformanceCases } from "effect-agent/testing/schedule-store-conformance";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import * as SqlClientService from "effect/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
 import { withScheduleStorage } from "./harness.ts";

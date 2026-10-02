@@ -35,8 +35,8 @@ fiber alive in the parent.
 import { Agent } from "effect-agent";
 import { AgentWorkflow } from "@effect-agent/workflow";
 import { Schema } from "effect";
-import { Toolkit } from "effect/unstable/ai";
-import { Workflow } from "effect/unstable/workflow";
+import { Toolkit } from "effect/ai";
+import { Workflow } from "effect/workflow";
 
 const triage = Agent.make("triage", {
   input: Schema.String,
@@ -186,7 +186,7 @@ import { WorkflowAgentHost } from "@effect-agent/workflow/workflow-agent-host";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Layer } from "effect";
-import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster";
+import { ClusterWorkflowEngine, SingleRunner } from "effect/cluster";
 
 import { definitions, ModelLive, OpenAiLive, planner } from "./node-agent.ts";
 

@@ -36,7 +36,7 @@ import {
 import { ThreadHistory } from "effect-agent/thread-history";
 import { Selection, Snapshot } from "effect-agent/tool-exposure";
 import { summarizeModelUsage } from "effect-agent/usage";
-import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/ai";
 
 import { JournalCheckpointSeed } from "../../src/durable/internal/journal-checkpoint.ts";
 import { makeJournalMetadata } from "../../src/durable/internal/journal-metadata.ts";

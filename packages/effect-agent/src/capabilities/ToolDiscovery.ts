@@ -1,5 +1,5 @@
 import { Effect, Schema, type Scope } from "effect";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 import { utf8ByteLength } from "../core/internal/utf8.ts";
 import { DiscoveryTool, PinnedTool } from "../core/ToolExposure.ts";

@@ -7,7 +7,7 @@ import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
 import type { RunEvent } from "effect-agent/run-event";
 import type { RunInputCommand } from "effect-agent/run-options";
 import { ThreadHistory } from "effect-agent/thread-history";
-import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
+import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/ai";
 
 // Requested engine seam: an in-flight joined input must replace disposable drafts,
 // retain reported usage and stop restarting after two cancellations in the same Run.

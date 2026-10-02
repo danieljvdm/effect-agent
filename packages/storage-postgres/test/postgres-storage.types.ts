@@ -8,7 +8,7 @@ import type { Crypto, Layer } from "effect";
 import type { ActivityMutationFailure, ActivityStoreError } from "effect-agent/activity-store";
 import type { SubmissionLedger } from "effect-agent/submission-ledger";
 import type { ThreadStore } from "effect-agent/thread-store";
-import type { SqlClient } from "effect/unstable/sql/SqlClient";
+import type { SqlClient } from "effect/sql/SqlClient";
 
 type Persistence = typeof PostgresStorage.layer;
 type Ledger = ReturnType<typeof PostgresStorage.submissionLedgerLayer>;

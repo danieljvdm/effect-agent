@@ -29,7 +29,7 @@ import {
   type ToolFailureObservation,
 } from "effect-agent/run-options";
 import { ToolBroker, type ToolBrokerPass, type ToolBrokerService } from "effect-agent/tool-broker";
-import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 import type { expectTypeOf as ExpectTypeOf } from "vite-plus/test";
 
 import { deliverToolFailure } from "../../src/engine/internal/tool-derivative.ts";

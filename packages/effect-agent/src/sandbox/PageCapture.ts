@@ -1,4 +1,5 @@
-import { Context, Encoding, Option, Predicate, Schema, type Effect } from "effect";
+import { Context, Option, Predicate, Schema, type Effect } from "effect";
+import { Hex } from "effect/encoding";
 
 import { SANDBOX_DIAGNOSTIC_MAX_LENGTH, SandboxImplementation } from "./Sandbox.ts";
 
@@ -315,7 +316,7 @@ const isBoundedResponseFormat = (input: unknown): input is typeof ResponseFormat
     if (Option.isNone(decodeResponseFormatDocument(input))) return false;
     const encoded = JSON.stringify(input);
 
-    return Encoding.encodeHex(encoded).length / 2 <= MAX_RESPONSE_FORMAT_BYTES;
+    return Hex.encode(encoded).length / 2 <= MAX_RESPONSE_FORMAT_BYTES;
   } catch {
     return false;
   }

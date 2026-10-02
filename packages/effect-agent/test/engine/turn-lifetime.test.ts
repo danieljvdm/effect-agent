@@ -6,7 +6,7 @@ import * as AgentRuntime from "effect-agent/agent-runtime";
 import { IdGenerator } from "effect-agent/id-generator";
 import { RunId, ThreadId, TurnId } from "effect-agent/identifiers";
 import { ThreadHistory } from "effect-agent/thread-history";
-import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
+import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/ai";
 
 let threadSequence = 0;
 

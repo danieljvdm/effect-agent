@@ -1,5 +1,5 @@
 import { Cause, Clock, Duration, Effect, Exit, Layer, Option, Ref, Schema, Scope } from "effect";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 import {
   type Definition,

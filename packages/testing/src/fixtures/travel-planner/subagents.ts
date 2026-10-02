@@ -4,7 +4,7 @@ import { AgentPolicy } from "effect-agent/agent-policy";
 import { type RuntimeBinding } from "effect-agent/agent-runtime";
 import * as Subagent from "effect-agent/subagent";
 import { SubagentPolicy } from "effect-agent/subagent";
-import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
+import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/ai";
 
 import type { ScriptedTurnInput } from "../../ScriptedModel.ts";
 import { AirportCode } from "./definition.ts";

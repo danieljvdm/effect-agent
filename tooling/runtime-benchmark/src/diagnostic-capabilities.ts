@@ -43,8 +43,8 @@ import { toRunThreadOptions } from "effect-agent/run-hooks";
 import * as Subagent from "effect-agent/subagent";
 import * as Reservations from "effect-agent/subagent-reservations";
 import * as Thread from "effect-agent/thread";
-import { AiError, Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import { AiError, Model, Prompt, Tool, Toolkit } from "effect/ai";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import { BenchmarkError, check } from "./contracts.js";
 import { capabilityCases } from "./diagnostic-cases.js";

@@ -29,8 +29,8 @@ import { InMemory, Agent, AgentRuntime } from "effect-agent";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { BunRuntime } from "@effect/platform-bun";
 import { Config, Console, Effect, Schema } from "effect";
-import { Toolkit } from "effect/unstable/ai";
-import { FetchHttpClient } from "effect/unstable/http";
+import { Toolkit } from "effect/ai";
+import { FetchHttpClient } from "effect/http";
 
 const triage = Agent.make("triage", {
   input: Schema.String,

@@ -1,8 +1,63 @@
+diff --git a/lib/api.d.ts b/lib/api.d.ts
+index 998f57b..b15c550 100644
+--- a/lib/api.d.ts
++++ b/lib/api.d.ts
+@@ -6,10 +6,10 @@ import type * as AST from "effect/SchemaAST";
+ import type * as Stream from "effect/Stream";
+ import * as Pagination from "./pagination.ts";
+ import { type Policy as RetryPolicy } from "./retry.ts";
+-import * as HttpClient from "effect/unstable/http/HttpClient";
+-import type * as HttpClientError from "effect/unstable/http/HttpClientError";
+-import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+-import type * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
++import * as HttpClient from "effect/http/HttpClient";
++import type * as HttpClientError from "effect/http/HttpClientError";
++import type * as HttpClientRequest from "effect/http/HttpClientRequest";
++import type * as HttpClientResponse from "effect/http/HttpClientResponse";
+ /**
+  * The view of an operation's config that protocols receive on every
+  * encode/decode call. The object is the same memoized config instance for
+diff --git a/lib/api.js b/lib/api.js
+index 08cd4eb..62f6550 100644
+--- a/lib/api.js
++++ b/lib/api.js
+@@ -9,7 +9,7 @@ import * as Scope from "effect/Scope";
+ import { SingleShotGen } from "effect/Utils";
+ import * as Pagination from "./pagination.js";
+ import { makeDefault } from "./retry.js";
+-import * as HttpClient from "effect/unstable/http/HttpClient";
++import * as HttpClient from "effect/http/HttpClient";
+ /**
+  * The Protocol service knows how to turn a value into an HTTP request using
+  * only the input schema's trait annotations, and how to turn a response back
+diff --git a/lib/category.js b/lib/category.js
+index 18a8bba..9deee64 100644
+--- a/lib/category.js
++++ b/lib/category.js
+@@ -20,7 +20,7 @@
+  */
+ import * as Effect from "effect/Effect";
+ import * as Predicate from "effect/Predicate";
+-import * as HttpClientError from "effect/unstable/http/HttpClientError";
++import * as HttpClientError from "effect/http/HttpClientError";
+ // ============================================================================
+ // Error Category Constants
+ // ============================================================================
 diff --git a/lib/codegen/cli.js b/lib/codegen/cli.js
-index 370e4187edb2a0d697745597c2e2291b277d5b31..4cdddfa7935f8bfaadcd5fa89cf593ddeb287b7a 100644
+index 370e418..50f4ff2 100644
 --- a/lib/codegen/cli.js
 +++ b/lib/codegen/cli.js
-@@ -22,9 +22,9 @@ import { generateService } from "./generator.js";
+@@ -14,17 +14,17 @@ import { BunRuntime, BunServices } from "@effect/platform-bun";
+ import { Console, Effect } from "effect";
+ import * as FileSystem from "effect/FileSystem";
+ import * as Path from "effect/Path";
+-import { Flag } from "effect/unstable/cli";
+-import { Command } from "effect/unstable/cli";
++import { Flag } from "effect/cli";
++import { Command } from "effect/cli";
+ import { barrel } from "./emit.js";
+ import { formatGenerated } from "./format.js";
+ import { generateService } from "./generator.js";
  /** Run the generator CLI (BunRuntime main — call at module top level). */
  export const runGeneratorCli = (options) => {
      const command = Command.make("generate", {
@@ -15,8 +70,33 @@ index 370e4187edb2a0d697745597c2e2291b277d5b31..4cdddfa7935f8bfaadcd5fa89cf593dd
      }, (config) => Effect.gen(function* () {
          const fs = yield* FileSystem.FileSystem;
          const path = yield* Path.Path;
+diff --git a/lib/protocol-http.d.ts b/lib/protocol-http.d.ts
+index 2672684..ac86215 100644
+--- a/lib/protocol-http.d.ts
++++ b/lib/protocol-http.d.ts
+@@ -9,7 +9,7 @@
+  * {@link matchTypedError}).
+  */
+ import type * as AST from "effect/SchemaAST";
+-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
++import * as HttpClientRequest from "effect/http/HttpClientRequest";
+ import { type ErrorMatcher, type KeyDictionaryEntries } from "./trait.ts";
+ export declare const getProps: (ast: AST.AST) => readonly AST.PropertySignature[];
+ export declare const getAnn: (ast: AST.AST, symbol: symbol) => unknown;
+diff --git a/lib/protocol-http.js b/lib/protocol-http.js
+index 2f916d4..f6d2c21 100644
+--- a/lib/protocol-http.js
++++ b/lib/protocol-http.js
+@@ -1,5 +1,5 @@
+-import * as HttpBody from "effect/unstable/http/HttpBody";
+-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
++import * as HttpBody from "effect/http/HttpBody";
++import * as HttpClientRequest from "effect/http/HttpClientRequest";
+ import { bodySymbol, deepQuerySymbol, formDataFileSymbol, getErrorMatchers, headerSymbol, httpBodySymbol, httpSymbol, keyDictionarySymbol, labelSymbol, querySymbol, unionCasesSymbol, } from "./trait.js";
+ //#region AST helpers (survive S.optional / Suspend / transforms)
+ export const getProps = (ast) => {
 diff --git a/lib/retry.js b/lib/retry.js
-index 63b00c1ccd1113f4bd22c7e2113f8970ccf3753e..da98224df011079df10730814bef55a96168631f 100644
+index 63b00c1..da98224 100644
 --- a/lib/retry.js
 +++ b/lib/retry.js
 @@ -72,7 +72,7 @@ export const ServerRetryHintCapMs = Context.Service("@distilled.cloud/core/Serve
@@ -28,10 +108,53 @@ index 63b00c1ccd1113f4bd22c7e2113f8970ccf3753e..da98224df011079df10730814bef55a9
      if (raw === "")
          return DEFAULT_SERVER_RETRY_HINT_CAP_MS;
      const n = Number(raw);
+diff --git a/src/api.ts b/src/api.ts
+index bc5f13f..f6fbba0 100644
+--- a/src/api.ts
++++ b/src/api.ts
+@@ -11,10 +11,10 @@ import type * as Stream from "effect/Stream";
+ import { SingleShotGen } from "effect/Utils";
+ import * as Pagination from "./pagination.ts";
+ import { makeDefault, type Policy as RetryPolicy } from "./retry.ts";
+-import * as HttpClient from "effect/unstable/http/HttpClient";
+-import type * as HttpClientError from "effect/unstable/http/HttpClientError";
+-import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+-import type * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
++import * as HttpClient from "effect/http/HttpClient";
++import type * as HttpClientError from "effect/http/HttpClientError";
++import type * as HttpClientRequest from "effect/http/HttpClientRequest";
++import type * as HttpClientResponse from "effect/http/HttpClientResponse";
+ 
+ //#region Protocol
+ 
+diff --git a/src/category.ts b/src/category.ts
+index 6455414..03fa537 100644
+--- a/src/category.ts
++++ b/src/category.ts
+@@ -20,7 +20,7 @@
+  */
+ import * as Effect from "effect/Effect";
+ import * as Predicate from "effect/Predicate";
+-import * as HttpClientError from "effect/unstable/http/HttpClientError";
++import * as HttpClientError from "effect/http/HttpClientError";
+ 
+ // ============================================================================
+ // Error Category Constants
 diff --git a/src/codegen/cli.ts b/src/codegen/cli.ts
-index d4080bc15ef96b1eb7bd051ecefe63b9279aa366..91a5ef61e74071918b455ee09bed4bc8863a27c2 100644
+index d4080bc..8e2a07d 100644
 --- a/src/codegen/cli.ts
 +++ b/src/codegen/cli.ts
+@@ -14,8 +14,8 @@ import { BunRuntime, BunServices } from "@effect/platform-bun";
+ import { Console, Effect } from "effect";
+ import * as FileSystem from "effect/FileSystem";
+ import * as Path from "effect/Path";
+-import { Flag } from "effect/unstable/cli";
+-import { Command } from "effect/unstable/cli";
++import { Flag } from "effect/cli";
++import { Command } from "effect/cli";
+ import { barrel } from "./emit.ts";
+ import { formatGenerated } from "./format.ts";
+ import { generateService, type SdkSpec } from "./generator.ts";
 @@ -99,15 +99,15 @@ export const runGeneratorCli = (options: GeneratorCliOptions): void => {
    const command = Command.make(
      "generate",
@@ -51,8 +174,38 @@ index d4080bc15ef96b1eb7bd051ecefe63b9279aa366..91a5ef61e74071918b455ee09bed4bc8
          Flag.withDefault(""),
          Flag.withDescription("Only generate this resource (e.g. ai)"),
        ),
+diff --git a/src/protocol-http.ts b/src/protocol-http.ts
+index 14b2169..a98cff3 100644
+--- a/src/protocol-http.ts
++++ b/src/protocol-http.ts
+@@ -9,8 +9,8 @@
+  * {@link matchTypedError}).
+  */
+ import type * as AST from "effect/SchemaAST";
+-import * as HttpBody from "effect/unstable/http/HttpBody";
+-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
++import * as HttpBody from "effect/http/HttpBody";
++import * as HttpClientRequest from "effect/http/HttpClientRequest";
+ import {
+   bodySymbol,
+   deepQuerySymbol,
+diff --git a/src/protocol-rest.ts b/src/protocol-rest.ts
+index ead8fa6..935e6e8 100644
+--- a/src/protocol-rest.ts
++++ b/src/protocol-rest.ts
+@@ -27,8 +27,8 @@ import * as Effect from "effect/Effect";
+ import * as Layer from "effect/Layer";
+ import * as Redacted from "effect/Redacted";
+ import type * as AST from "effect/SchemaAST";
+-import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+-import type * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
++import type * as HttpClientRequest from "effect/http/HttpClientRequest";
++import type * as HttpClientResponse from "effect/http/HttpClientResponse";
+ import * as API from "./api.ts";
+ import { makeAnnotation } from "./trait.ts";
+ import {
 diff --git a/src/retry.ts b/src/retry.ts
-index 5a4c9938ab1363af1a4745cc761a0e55a3c6d508..73ef50a6953e1d8b5739609b07eb635869afb6e5 100644
+index 5a4c993..73ef50a 100644
 --- a/src/retry.ts
 +++ b/src/retry.ts
 @@ -121,7 +121,7 @@ export const ServerRetryHintCapMs = Context.Service<number>(

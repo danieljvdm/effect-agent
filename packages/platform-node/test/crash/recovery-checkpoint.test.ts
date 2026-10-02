@@ -5,7 +5,7 @@ import { Effect, Layer, Option, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { LoadCheckpointRequest, ThreadStore } from "effect-agent/thread-store";
-import { LanguageModel, Model, type Prompt } from "effect/unstable/ai";
+import { LanguageModel, Model, type Prompt } from "effect/ai";
 
 import {
   CHECKPOINT_HANDOFF,

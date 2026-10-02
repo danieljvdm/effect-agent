@@ -108,8 +108,8 @@ import {
 } from "effect-agent/submission-ledger";
 import { ThreadStoreDiagnostic } from "effect-agent/thread-store";
 import { AssignmentTerminal } from "effect-agent/worker";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
+import * as SqlClientService from "effect/sql/SqlClient";
+import type { SqlError } from "effect/sql/SqlError";
 
 import { DoStorageConfig } from "./DoStorageConfig.ts";
 import {

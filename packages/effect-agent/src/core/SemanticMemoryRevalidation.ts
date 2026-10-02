@@ -1,4 +1,5 @@
-import { Effect, Encoding, Schema } from "effect";
+import { Effect, Schema } from "effect";
+import { Hex } from "effect/encoding";
 
 import { utf8ByteLength as byteLength } from "./internal/utf8.ts";
 import { MemoryLookup, MemoryPassage } from "./MemoryReference.ts";
@@ -188,7 +189,7 @@ export const revalidateSemanticMemoryCandidates = Effect.fn("revalidateSemanticM
         });
       }
       sourceBytes += encodedBytes;
-      const encodedDocument = Encoding.encodeHex(document.content.text);
+      const encodedDocument = Hex.encode(document.content.text);
 
       for (const { rank, candidate } of current) {
         if (!sameExcerpt(encodedDocument, candidate, profile.maxChunkBytes)) {
@@ -243,7 +244,7 @@ const sameExcerpt = (
   },
   maxChunkBytes: number,
 ): boolean => {
-  const hex = Encoding.encodeHex(candidate.text);
+  const hex = Hex.encode(candidate.text);
 
   return (
     candidate.startByte < candidate.endByte &&

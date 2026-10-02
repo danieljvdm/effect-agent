@@ -1,12 +1,7 @@
 import { OpenAiClient, OpenAiLanguageModel, OpenAiTool } from "@effect/ai-openai";
 import { Effect, Layer, Result, Schema, Stream, Redacted } from "effect";
-import { AiError, LanguageModel, Model } from "effect/unstable/ai";
-import {
-  FetchHttpClient,
-  HttpClient,
-  HttpClientError,
-  HttpClientRequest,
-} from "effect/unstable/http";
+import { AiError, LanguageModel, Model } from "effect/ai";
+import { FetchHttpClient, HttpClient, HttpClientError, HttpClientRequest } from "effect/http";
 
 import { type PlannerError, type AdmittedPlannerSettings } from "../domain.ts";
 import { credentialForOwner } from "./credentials.ts";

@@ -125,16 +125,11 @@ const fixture = (
     close: async () => {},
   });
 
-  const unused = async (): Promise<Response> => {
-    throw new Error("No live Browser Run calls");
-  };
-
   const layer = browserRunInteractiveLayer().pipe(
     Layer.provide(
       BrowserRunInteractiveBinding.layer({
         browser: {
           fetch: async (_input, init) => browserResponse(init),
-          quickAction: unused,
         },
       }).pipe(
         Layer.provide(Layer.succeed(BrowserRunSessionLifecycle)({ close: () => Effect.void })),

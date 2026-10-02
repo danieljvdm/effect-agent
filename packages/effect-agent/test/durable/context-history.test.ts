@@ -17,8 +17,8 @@ import {
 } from "effect-agent/records";
 import * as ThreadContextHistory from "effect-agent/thread-context-history";
 import { ThreadStore, ThreadStoreError, ThreadTail } from "effect-agent/thread-store";
+import { Prompt } from "effect/ai";
 import { TestClock } from "effect/testing";
-import { Prompt } from "effect/unstable/ai";
 
 const threadId = Schema.decodeSync(ThreadId)("context-thread");
 const sequence = Schema.decodeSync(CanonicalSequence);

@@ -9,7 +9,7 @@ import {
   WorkerPolicyResolver,
 } from "effect-agent/worker-host";
 import { WorkerEnvironment } from "effect-cf";
-import { Toolkit } from "effect/unstable/ai";
+import { Toolkit } from "effect/ai";
 
 import { DeliverResponse } from "../agent.ts";
 import { PlannerError } from "../domain.ts";

@@ -1,4 +1,6 @@
 import type { Fiber } from "effect";
+import type { Tool } from "effect/ai";
+import * as AiError from "effect/ai/AiError";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -8,8 +10,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
-import type { Tool } from "effect/unstable/ai";
-import * as AiError from "effect/unstable/ai/AiError";
 
 import type { ToolFailureHandling } from "../../core/RunEvent.ts";
 import { isolateToolDerivative } from "./tool-derivative.ts";

@@ -1,7 +1,7 @@
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Effect, Layer } from "effect";
 import { AgentRuntime, InMemory, Subagent } from "effect-agent";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 import { Coordinator } from "./coordinator.ts";
 import { Research } from "./delegation.ts";

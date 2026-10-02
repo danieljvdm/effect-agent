@@ -6,7 +6,7 @@ import {
   type AgentRunDispositionError,
 } from "effect-agent/agent-error";
 import { AgentPolicy } from "effect-agent/agent-policy";
-import { type AiError, LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
+import { type AiError, LanguageModel, Model, Tool, Toolkit } from "effect/ai";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2

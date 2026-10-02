@@ -9,7 +9,7 @@ import {
   ResolutionCompletedWithResult,
   UnknownResolutionCommand,
 } from "effect-agent/submission-ledger";
-import { ChildProcess } from "effect/unstable/process";
+import { ChildProcess } from "effect/process";
 
 import {
   hostLayer,

@@ -26,8 +26,8 @@ import {
   SemanticMemoryProfile,
 } from "effect-agent/semantic-memory-index";
 import { type SemanticMemoryError } from "effect-agent/semantic-memory-revalidation";
-import type { AiError } from "effect/unstable/ai";
-import { EmbeddingModel } from "effect/unstable/ai";
+import type { AiError } from "effect/ai";
+import { EmbeddingModel } from "effect/ai";
 
 const TestNamespace = MemoryNamespace.define({
   name: "test/memory",

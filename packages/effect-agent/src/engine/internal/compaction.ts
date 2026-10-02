@@ -1,6 +1,6 @@
+import * as Prompt from "effect/ai/Prompt";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as Prompt from "effect/unstable/ai/Prompt";
 
 import type { ContextMessageTokenEstimator } from "../ContextCompactor.ts";
 import { boundedCanonicalJsonSnapshot } from "./provider-result-staging.ts";

@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect";
-import { Decision, DecisionModel } from "effect/unstable/ai";
+import { Decision, DecisionModel } from "effect/ai";
 
 import { LabError } from "./contract.ts";
 import { Trace } from "./telemetry.ts";

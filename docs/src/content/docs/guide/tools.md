@@ -40,7 +40,7 @@ another JSON value takes precedence.
 
 ## Compose decisions into state transitions
 
-`Decision` from `effect/unstable/ai` defines typed assessments with an input Schema and named
+`Decision` from `effect/ai` defines typed assessments with an input Schema and named
 decisions. A `DecisionModel` supplies the evaluator through a provider
 Layer, such as Jev. Application code owns the next state, routing policy, and side effects.
 
@@ -59,7 +59,7 @@ flowchart LR
 | `probability` | Estimate whether a proposition is true, from 0 to 1            |
 
 ```ts twoslash
-import { Decision, DecisionModel } from "effect/unstable/ai";
+import { Decision, DecisionModel } from "effect/ai";
 import { Effect, Schema } from "effect";
 
 const TicketAssessment = Decision.make({
@@ -114,7 +114,7 @@ handlers; omitting selection configuration and discovery preserves eager exposur
 ```ts twoslash
 import { Agent, ToolDiscovery, ToolExposure } from "effect-agent";
 import { Effect, Layer, Schema } from "effect";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 const GetRecord = Tool.make("get_record", {
   description: "Read one record by its ID.",
@@ -312,7 +312,7 @@ when the model should receive the failure as a tool result and decide what to do
 ```ts twoslash
 import { Agent } from "effect-agent";
 import { Effect, Schema } from "effect";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 class SearchUnavailable extends Schema.TaggedError<SearchUnavailable>()("SearchUnavailable", {
   message: Schema.String,
@@ -518,7 +518,7 @@ requirements stay in the Layer's `R`.
 
 ```ts twoslash
 import { Mcp, McpClient } from "effect-agent";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 import { Effect, Layer } from "effect";
 
 const McpLive = McpClient.layer([
@@ -608,7 +608,7 @@ import { WebSearch } from "effect-agent";
 import * as Gateway from "@effect-agent/platform-cloudflare/cloudflare-ai-gateway";
 import { OpenAiClient, OpenAiLanguageModel, OpenAiTool } from "@effect/ai-openai";
 import { Layer, Redacted } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 const gateway = {
   accountId: "your-account",

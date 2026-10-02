@@ -4,8 +4,8 @@ import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { TypeSafeClient, TypeSafeDecisionModel } from "@effect/ai-typesafe";
 import { Config, Effect, Layer, Schema } from "effect";
 import { Agent, AgentRuntime, Identifiers, InMemory, Subagent } from "effect-agent";
-import { Toolkit } from "effect/unstable/ai";
-import { FetchHttpClient } from "effect/unstable/http";
+import { Toolkit } from "effect/ai";
+import { FetchHttpClient } from "effect/http";
 
 // ---cut---
 export const ThreadModels = AutoModel.make({

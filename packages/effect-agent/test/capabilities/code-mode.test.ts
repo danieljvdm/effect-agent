@@ -6,7 +6,7 @@ import { ToolExecutionClass } from "effect-agent/durable-step";
 import { SandboxImplementation } from "effect-agent/sandbox";
 import { ToolBroker } from "effect-agent/tool-broker";
 import { CurrentToolCatalog } from "effect-agent/tool-exposure";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 const Query = Tool.make("query_warehouse", {
   description: "Run one read-only SQL query",

@@ -32,7 +32,7 @@ import {
 } from "effect-agent/submission-ledger";
 import { submissionLedgerConformanceCases } from "effect-agent/testing/submission-ledger-conformance";
 import { ThreadMaterialization, ThreadStore, ThreadTailRequest } from "effect-agent/thread-store";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import * as SqlClientService from "effect/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
 import { instrumentedStorage } from "../../../test/fixtures/instrumented-storage.ts";

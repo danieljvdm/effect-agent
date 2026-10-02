@@ -1,6 +1,7 @@
-import { Console, Crypto, Effect, Encoding, FileSystem, Path, Schema, Stream } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
-import { ChildProcess } from "effect/unstable/process";
+import { Console, Crypto, Effect, FileSystem, Path, Schema, Stream } from "effect";
+import { Command, Flag } from "effect/cli";
+import { Hex } from "effect/encoding";
+import { ChildProcess } from "effect/process";
 
 import { HeapProbeError, NodeSample, WorkerdSample } from "./heap-contracts.ts";
 import { measureWorkerd } from "./heap-workerd.ts";
@@ -145,7 +146,7 @@ const buildBundle = Effect.fn("heap.buildBundle")(function* (options: {
     name: options.name,
     file,
     bytes: bytes.byteLength,
-    sha256: Encoding.encodeHex(yield* crypto.digest("SHA-256", bytes)),
+    sha256: Hex.encode(yield* crypto.digest("SHA-256", bytes)),
     modules,
     nodeSamples,
   });

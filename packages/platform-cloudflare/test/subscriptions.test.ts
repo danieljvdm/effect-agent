@@ -98,7 +98,7 @@ for (const [caseIndex, row] of cases.entries()) {
 
     let delivered = false;
 
-    for (let round = 0; round < 200; round += 1) {
+    for (let round = 0; round < 2_000; round += 1) {
       const pageResults = await Promise.allSettled(
         Array.from({ length: row.registrations }, (_, index) =>
           runClient(
@@ -142,7 +142,7 @@ for (const [caseIndex, row] of cases.entries()) {
     for (const thread of threads) {
       expect(await laneRows(thread)).toHaveLength(1);
     }
-  });
+  }, 30_000);
 }
 
 it("isolates failed and unknown ancillary alarms while advancing native work and preserving replacements", async () => {

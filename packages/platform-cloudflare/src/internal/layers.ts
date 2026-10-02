@@ -98,7 +98,7 @@ import { ThreadProjectionMaintenance } from "effect-agent/thread-projection-main
 import { ThreadStoreError, ThreadStore } from "effect-agent/thread-store";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { type WakeScheduler } from "effect-agent/wake-scheduler";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient } from "effect/sql/SqlClient";
 
 import {
   type ThreadRecoveryEvents,

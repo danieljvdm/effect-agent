@@ -1,4 +1,12 @@
 import type { Take } from "effect";
+import * as AiError from "effect/ai/AiError";
+import * as LanguageModel from "effect/ai/LanguageModel";
+import * as Model from "effect/ai/Model";
+import * as Prompt from "effect/ai/Prompt";
+import * as Response from "effect/ai/Response";
+import * as ResponseIdTracker from "effect/ai/ResponseIdTracker";
+import * as Tool from "effect/ai/Tool";
+import * as Toolkit from "effect/ai/Toolkit";
 import * as Cause from "effect/Cause";
 import * as Channel from "effect/Channel";
 import * as Clock from "effect/Clock";
@@ -23,14 +31,6 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
-import * as AiError from "effect/unstable/ai/AiError";
-import * as LanguageModel from "effect/unstable/ai/LanguageModel";
-import * as Model from "effect/unstable/ai/Model";
-import * as Prompt from "effect/unstable/ai/Prompt";
-import * as Response from "effect/unstable/ai/Response";
-import * as ResponseIdTracker from "effect/unstable/ai/ResponseIdTracker";
-import * as Tool from "effect/unstable/ai/Tool";
-import * as Toolkit from "effect/unstable/ai/Toolkit";
 
 import * as Agent from "../../core/Agent.ts";
 import {

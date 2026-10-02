@@ -1,5 +1,5 @@
 import { Config, Console, Effect, FileSystem, Option, Schema } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
+import { Command, Flag } from "effect/cli";
 
 import {
   type EvalCase,

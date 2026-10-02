@@ -14,8 +14,8 @@ import {
   Schedule,
   Schema,
 } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { Evidence, type Receipt, RunId, WorkerFailure } from "../src/proof.ts";
 import { checkoutStack } from "../src/stack.ts";

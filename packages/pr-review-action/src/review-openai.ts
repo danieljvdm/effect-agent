@@ -6,8 +6,8 @@ import {
 } from "@effect-agent/pr-review/review";
 import { OpenAiClient, OpenAiSchema } from "@effect/ai-openai";
 import { Config, Effect, Exit, Option, Ref, Schema, Semaphore, Stream } from "effect";
-import { AiError } from "effect/unstable/ai";
-import { HttpBody, HttpClientError, HttpClientResponse } from "effect/unstable/http";
+import { AiError } from "effect/ai";
+import { HttpBody, HttpClientError, HttpClientResponse } from "effect/http";
 
 export const reviewModel = Config.schema(Schema.Trim.check(Schema.isNonEmpty()), "PR_REVIEW_MODEL");
 

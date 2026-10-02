@@ -7,7 +7,7 @@ import { Clock, Context, Effect, Layer, Schema } from "effect";
 import { Agent, AgentRuntime } from "effect-agent";
 import { ModelCallContext } from "effect-agent/context-window";
 import { RunContextPreparation, RunToolAuthorization } from "effect-agent/run-options";
-import { AiError, type LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
+import { AiError, type LanguageModel, Model, Tool, Toolkit } from "effect/ai";
 
 import { BenchmarkError, check } from "./contracts.js";
 import { policyCases } from "./diagnostic-cases.js";

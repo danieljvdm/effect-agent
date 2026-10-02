@@ -14,7 +14,6 @@ import {
   ConfigProvider,
   Deferred,
   Effect,
-  Encoding,
   Exit,
   Fiber,
   Logger,
@@ -23,8 +22,9 @@ import {
   Schema,
   Stream,
 } from "effect";
-import type { AiError } from "effect/unstable/ai";
-import { HttpClient, HttpClientError, HttpClientResponse } from "effect/unstable/http";
+import type { AiError } from "effect/ai";
+import { Base64 } from "effect/encoding";
+import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 
 import { reviewActionProgram, reviewPublicationFailure } from "../src/action.ts";
 import { makeReviewOpenAi } from "../src/review-openai.ts";
@@ -658,7 +658,7 @@ describe("review provider boundary", () => {
                 sha: `${revision}-blob`,
                 encoding: "base64",
                 size: text.length,
-                content: Encoding.encodeBase64(new TextEncoder().encode(text)),
+                content: Base64.encode(new TextEncoder().encode(text)),
               });
             }
             if (httpRequest.method === "POST" && url.pathname.endsWith("/pulls/12/reviews")) {

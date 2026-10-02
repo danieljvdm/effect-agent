@@ -6,7 +6,7 @@ import {
   ThreadProjectionMaintenance,
 } from "effect-agent/thread-projection-maintenance";
 import { ThreadRead, ThreadStore, ThreadTailRequest } from "effect-agent/thread-store";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient } from "effect/sql/SqlClient";
 
 import { ThreadHostMaintenance, type ThreadHostMaintenanceLane } from "../src/Alarm.ts";
 import { ThreadObjectIdentity } from "../src/CloudflareBindings.ts";

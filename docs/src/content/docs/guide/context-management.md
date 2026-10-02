@@ -68,7 +68,7 @@ To add application instructions to each request:
 ```ts twoslash
 import { RunContextPreparation, type RunContextHook } from "effect-agent/run-options";
 import { Effect, Layer } from "effect";
-import { Prompt } from "effect/unstable/ai";
+import { Prompt } from "effect/ai";
 
 export const metricContext: RunContextHook = {
   prepare: ({ source }) =>
@@ -131,7 +131,7 @@ unavailable.
 The engine counts the prepared prompt, transient references, output contract, run status, and
 the native Tool schemas dispatched for the call. Supply the provider's native
 `toolSchemaTransformer`, such as `toCodecOpenAI` from
-`effect/unstable/ai/OpenAiStructuredOutput`, to include its schema conversion. Reserve additional
+`effect/ai/OpenAiStructuredOutput`, to include its schema conversion. Reserve additional
 framing or image costs only when they are absent from those estimates. Do not subtract prompt
 text or Tool schemas again as overhead. The output reserve must match the selected provider's
 generation allowance; `completionReserveTokens` instead reserves cumulative Run budget for
@@ -191,7 +191,7 @@ import {
 } from "effect-agent/memory-reference";
 import { RunContextPreparation, type RunTransientContextHook } from "effect-agent/run-options";
 import { Effect, Layer } from "effect";
-import { Prompt } from "effect/unstable/ai";
+import { Prompt } from "effect/ai";
 
 const limits = MemoryRecallLimits.make({
   maxSources: 1,
@@ -313,7 +313,7 @@ import {
 } from "effect-agent/memory-reference";
 import { RunContextPreparation, type RunTransientContextHook } from "effect-agent/run-options";
 import { Context, Effect, Layer } from "effect";
-import { Prompt } from "effect/unstable/ai";
+import { Prompt } from "effect/ai";
 
 class ExternalCorpus extends Context.Service<
   ExternalCorpus,
@@ -1231,7 +1231,7 @@ untrusted working evidence. Verify live state before repeating an action.
 `MemoryNotes.toolkit` supplies `read_notes` and `write_notes`. Bind `MemoryNotes.layer` to one
 host-selected `MemoryKey`, locator, attributions, and scopes, then supply your existing `MemoryReader`,
 `MemoryWriter`, and Effect AI `IdGenerator.IdGenerator`. For default operation identities, provide
-`Layer.succeed(IdGenerator.IdGenerator, IdGenerator.defaultIdGenerator)` from `effect/unstable/ai`.
+`Layer.succeed(IdGenerator.IdGenerator, IdGenerator.defaultIdGenerator)` from `effect/ai`.
 Notes are a full document replacement with `expectedRevision`; conflicts require
 reading and merging again. Durable Steps retain the exact write command and operation identity for
 recovery. Notes survive a process restart only when the selected Memory store does. The model cannot

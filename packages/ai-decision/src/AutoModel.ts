@@ -5,7 +5,7 @@
  * @since 0.1.0
  */
 import { Context, Effect, Layer, Schema, Semaphore, Stream } from "effect";
-import { AiError, Decision, DecisionModel, LanguageModel, Model } from "effect/unstable/ai";
+import { AiError, Decision, DecisionModel, LanguageModel, Model } from "effect/ai";
 
 /**
  * An application-approved model profile. Configure effort, provider options,

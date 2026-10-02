@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect";
-import { Prompt } from "effect/unstable/ai";
+import { Prompt } from "effect/ai";
 
 import { RunId } from "../core/Identifiers.ts";
 import { contextWindowId } from "../engine/Compaction.ts";

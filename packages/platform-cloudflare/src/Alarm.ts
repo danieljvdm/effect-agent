@@ -42,8 +42,8 @@ import {
 } from "effect-agent/thread-projection-maintenance";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { DurableObjectStorage } from "effect-cf";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
+import { SqlClient } from "effect/sql/SqlClient";
+import type { SqlError } from "effect/sql/SqlError";
 
 import { DurableObjectContext } from "./CloudflareBindings.ts";
 import { AuxiliaryDispatchMillis, CloudflareDurableRuntimeConfig } from "./CloudflareConfig.ts";
@@ -122,7 +122,7 @@ const makeStorageOperation = Effect.map(
       run(operation, Effect.tryPromise({ try: execute, catch: alarmFailure(operation) })),
 );
 
-/** `ctx.storage` alarm slot as an Effect service; storage is truth, never a memory field. */
+/** Native `ctx.storage` alarm slot owned by ThreadMaintenance; storage is truth. */
 export class DurableAlarmService extends Context.Service<
   DurableAlarmService,
   {

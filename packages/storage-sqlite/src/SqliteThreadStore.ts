@@ -8,7 +8,7 @@ import { ThreadId } from "effect-agent/identifiers";
 import { ProducerEpoch } from "effect-agent/records";
 import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "effect-agent/submission-ledger";
 import { ThreadStore } from "effect-agent/thread-store";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import * as SqlClientService from "effect/sql/SqlClient";
 
 import { CurrentSqliteStorageVersion } from "./internal/migrations.ts";
 import { initializeSqliteJournal, sqliteErrors } from "./internal/sqlite-journal.ts";

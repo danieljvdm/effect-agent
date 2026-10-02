@@ -1,4 +1,5 @@
 import type { Scope } from "effect";
+import * as Prompt from "effect/ai/Prompt";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -6,7 +7,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import * as Prompt from "effect/unstable/ai/Prompt";
 
 import { ThreadId, RunId } from "./Identifiers.ts";
 import { utf8ByteLength } from "./internal/utf8.ts";

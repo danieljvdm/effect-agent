@@ -1,5 +1,5 @@
 import { Effect, Layer, Option, Schema, Stream } from "effect";
-import { LanguageModel, Model, type Prompt, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, type Prompt, type Response } from "effect/ai";
 
 import { PlannerInput, Trip, SaveTripRequest, AdmittedPlannerSettings } from "../../src/domain.ts";
 import { PlannerAttempt, trackTool } from "../../src/server/progress.ts";

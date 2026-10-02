@@ -9,7 +9,7 @@ import {
   runIdForSubmission,
   toolCallSettledRecordId,
 } from "effect-agent/run-journal";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import * as SqlClientService from "effect/sql/SqlClient";
 import { expect } from "vite-plus/test";
 
 import { assertConvergence, laneRows, readCanonical, stubFor } from "./harness.ts";

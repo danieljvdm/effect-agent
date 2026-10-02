@@ -3,7 +3,7 @@ import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, type Crypto } from "effect";
 import { SubmissionLedger } from "effect-agent/submission-ledger";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import {
   ledgerReadCases,

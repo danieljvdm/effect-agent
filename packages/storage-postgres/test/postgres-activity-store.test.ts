@@ -12,8 +12,8 @@ import {
   ActivityWorkConflict,
   PreparedActivity,
 } from "effect-agent/activity-store";
+import * as SqlClientService from "effect/sql/SqlClient";
 import { TestClock } from "effect/testing";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import { clientLayer, storage, withTemporaryDatabase } from "./harness.ts";
 

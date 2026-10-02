@@ -44,8 +44,8 @@ import { PreparedInput } from "effect-agent/subscription";
 import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
+import { LanguageModel, Model, Toolkit, type Response } from "effect/ai";
 import { TestClock } from "effect/testing";
-import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
 
 const Input = Schema.Struct({ text: Schema.String });
 

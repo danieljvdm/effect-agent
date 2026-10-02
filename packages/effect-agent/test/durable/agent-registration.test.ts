@@ -1,6 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import { Context, DateTime, Effect, Layer, Option, Tracer, Schema } from "effect";
-import { Toolkit } from "effect/unstable/ai";
+import { Toolkit } from "effect/ai";
 
 import * as Agent from "../../src/core/Agent.ts";
 import { AttemptId, SubmissionId, ThreadId } from "../../src/core/Identifiers.ts";

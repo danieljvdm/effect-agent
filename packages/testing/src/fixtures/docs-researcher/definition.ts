@@ -4,7 +4,7 @@ import { AgentPolicy } from "effect-agent/agent-policy";
 import { type RuntimeBinding } from "effect-agent/agent-runtime";
 import * as Subagent from "effect-agent/subagent";
 import { SubagentPolicy } from "effect-agent/subagent";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 // ---------------------------------------------------------------------------
 // Docs Researcher (P7 internal agent #3, plan §6): a coordinator that

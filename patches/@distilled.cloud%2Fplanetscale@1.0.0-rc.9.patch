@@ -1,5 +1,5 @@
 diff --git a/lib/credentials.js b/lib/credentials.js
-index 5ce0d68597ce88dfcebea413e7919e87d7103554..d5b0eb83d0dda9c661696481e5afd7b1fe315146 100644
+index 5ce0d68..d5b0eb8 100644
 --- a/lib/credentials.js
 +++ b/lib/credentials.js
 @@ -40,9 +40,9 @@ export const fromOAuth = (input) => Layer.succeed(Credentials, Effect.succeed({
@@ -15,8 +15,21 @@ index 5ce0d68597ce88dfcebea413e7919e87d7103554..d5b0eb83d0dda9c661696481e5afd7b1
  });
  export const CredentialsFromEnv = Layer.succeed(Credentials, envConfig
      .pipe(Effect.mapError(() => new ConfigError({
+diff --git a/lib/protocol.d.ts b/lib/protocol.d.ts
+index ed9d821..05acd11 100644
+--- a/lib/protocol.d.ts
++++ b/lib/protocol.d.ts
+@@ -1,6 +1,6 @@
+ import type * as Layer from "effect/Layer";
+-import type * as HttpClient from "effect/unstable/http/HttpClient";
+-import type * as HttpClientError from "effect/unstable/http/HttpClientError";
++import type * as HttpClient from "effect/http/HttpClient";
++import type * as HttpClientError from "effect/http/HttpClientError";
+ import type * as API from "@distilled.cloud/core/api";
+ import type { API_ERRORS, ConfigError } from "@distilled.cloud/core/errors";
+ import { Credentials } from "./credentials.ts";
 diff --git a/src/credentials.ts b/src/credentials.ts
-index 225b2bc52fa2efbdbf5b642064990ffdd684c6c9..8c8a1c3570abbf56da3e62a3b69228e203dccf54 100644
+index 225b2bc..8c8a1c3 100644
 --- a/src/credentials.ts
 +++ b/src/credentials.ts
 @@ -89,9 +89,9 @@ export const fromOAuth = (input: {
@@ -32,3 +45,18 @@ index 225b2bc52fa2efbdbf5b642064990ffdd684c6c9..8c8a1c3570abbf56da3e62a3b69228e2
  });
  
  export const CredentialsFromEnv = Layer.succeed(
+diff --git a/src/protocol.ts b/src/protocol.ts
+index 2a94e18..e807741 100644
+--- a/src/protocol.ts
++++ b/src/protocol.ts
+@@ -19,8 +19,8 @@
+  */
+ import * as Effect from "effect/Effect";
+ import type * as Layer from "effect/Layer";
+-import type * as HttpClient from "effect/unstable/http/HttpClient";
+-import type * as HttpClientError from "effect/unstable/http/HttpClientError";
++import type * as HttpClient from "effect/http/HttpClient";
++import type * as HttpClientError from "effect/http/HttpClientError";
+ import type * as API from "@distilled.cloud/core/api";
+ import { makeRestProtocol } from "@distilled.cloud/core/protocol-rest";
+ import type { API_ERRORS, ConfigError } from "@distilled.cloud/core/errors";

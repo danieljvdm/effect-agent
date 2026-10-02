@@ -10,10 +10,10 @@ API that could be safer, simpler, or harder to misuse.
   improvement. Do not silently hide a library problem behind an app workaround.
 - Fix reusable framework defects in separate library PRs with sufficient verification
   under the root testing policy and changesets. Keep library source changes out of the demo PR.
-- Consume exact published npm versions of Effect Agent. Do not use workspace
-  links, source aliases, or local library patches to make the demo pass. If a
-  required fix is unreleased, identify the library PR and wait for its release
-  before upgrading or deploying the demo. Keep application policy here.
+- Consume Effect Agent through explicit `workspace:*` dependencies so the demo
+  validates the current framework. Use the root catalog for Effect-family and
+  `effect-cf` versions. Do not add source aliases or patch framework packages
+  inside the demo. Keep application policy here.
 - Flag usability issues even when existing configuration fixes the app. Do not
   change public library semantics just to accommodate this example without
   considering other consumers.

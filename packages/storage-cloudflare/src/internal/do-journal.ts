@@ -31,8 +31,8 @@ import {
   ThreadStoreDiagnostic,
   type SaveRecoveryCheckpointRequest,
 } from "effect-agent/thread-store";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { SqlError } from "effect/unstable/sql/SqlError";
+import * as SqlClient from "effect/sql/SqlClient";
+import { SqlError } from "effect/sql/SqlError";
 
 import {
   type DoStorageFailpointError,

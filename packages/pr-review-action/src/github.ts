@@ -5,8 +5,9 @@ import {
 } from "@effect-agent/pr-review/review";
 import { createTwoFilesPatch } from "diff";
 import type { Redacted } from "effect";
-import { Clock, Context, DateTime, Effect, Encoding, Option, Result, Schema } from "effect";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import { Clock, Context, DateTime, Effect, Option, Result, Schema } from "effect";
+import { Base64 } from "effect/encoding";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import { MAX_REVIEW_BODY_CHARS } from "./presentation.ts";
 import { dismissedReviews, unresolvedChangeRequests, type ReviewHistoryItem } from "./selection.ts";
@@ -974,9 +975,9 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
       });
     }
 
-    const bytes = yield* Effect.fromResult(
-      Encoding.decodeBase64(blob.content.replaceAll("\n", "")),
-    ).pipe(Effect.mapError((cause) => failure("decode Git blob", cause)));
+    const bytes = yield* Effect.fromResult(Base64.decode(blob.content.replaceAll("\n", ""))).pipe(
+      Effect.mapError((cause) => failure("decode Git blob", cause)),
+    );
 
     if (bytes.length !== blob.size) {
       return yield* GitHubApiFailure.make({

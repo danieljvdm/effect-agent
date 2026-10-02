@@ -2,7 +2,7 @@ import { Context, Effect, Option, Schema } from "effect";
 import { Agent, AgentRuntime } from "effect-agent";
 import { CompactionPolicy } from "effect-agent/agent-policy";
 import { selectTargets } from "effect-agent/browser-use";
-import { DecisionModel, Tool, Toolkit } from "effect/unstable/ai";
+import { DecisionModel, Tool, Toolkit } from "effect/ai";
 import type { HTTPRequest } from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 
 import { TaskResult, Browser } from "./browser.ts";

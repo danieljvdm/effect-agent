@@ -4,13 +4,7 @@ import { ThreadId } from "effect-agent/identifiers";
 import { ThreadExport, ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { WorkerCompletion, WorkerUpdate } from "effect-agent/worker";
 import { DurableObject, WorkerEnvironment } from "effect-cf";
-import {
-  LanguageModel,
-  Model,
-  Toolkit,
-  type Prompt,
-  type Response as AiResponse,
-} from "effect/unstable/ai";
+import { LanguageModel, Model, Toolkit, type Prompt, type Response as AiResponse } from "effect/ai";
 
 import { PlannerError, PlannerInput, TripSiteStore } from "../../src/domain.ts";
 import { ReadTravelPage } from "../../src/research.ts";

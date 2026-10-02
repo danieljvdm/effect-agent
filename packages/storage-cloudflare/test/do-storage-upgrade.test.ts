@@ -14,7 +14,7 @@ import {
   SubscriptionFailpointError,
   SubscriptionStore,
 } from "effect-agent/subscription";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import * as SqlClientService from "effect/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
 import {

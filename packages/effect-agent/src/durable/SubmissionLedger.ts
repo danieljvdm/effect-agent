@@ -39,16 +39,14 @@ import {
 
 export { IdempotencyKey, JoinedToHost, QueueSequence, Principal } from "../core/Receipt.ts";
 
-const identifier = <const Name extends string>(name: Name) =>
-  Schema.NonEmptyString.check(Schema.isMaxLength(256)).pipe(
-    Schema.brand(`@effect-agent/thread/${name}`),
-  );
-
 /**
  * Opaque proof that one Attempt currently owns a Submission's lane. It authorizes ledger
  * mutations only; canonical-log fencing authority remains the producer epoch (DUR-006).
  */
-export const OwnershipToken = identifier("OwnershipToken");
+export const OwnershipToken = Schema.NonEmptyString.check(Schema.isMaxLength(256)).pipe(
+  Schema.brand("@effect-agent/thread/OwnershipToken"),
+);
+
 export type OwnershipToken = typeof OwnershipToken.Type;
 
 /**
@@ -218,6 +216,7 @@ export class SubmissionLookupByKey extends Schema.TaggedClass<SubmissionLookupBy
 
 /** Lookup by Submission identity or by the scoped client idempotency key. */
 export const SubmissionLookup = Schema.Union([SubmissionLookupById, SubmissionLookupByKey]);
+
 export type SubmissionLookup = typeof SubmissionLookup.Type;
 
 /**
@@ -616,6 +615,7 @@ export class SuspendRequest extends Schema.Class<SuspendRequest>(
  * suspend transaction), so the caller resumes without releasing the lane.
  */
 export const SuspensionOutcome = Schema.Literals(["suspended", "resume-immediately"]);
+
 export type SuspensionOutcome = typeof SuspensionOutcome.Type;
 
 /**
@@ -637,11 +637,15 @@ export class ChildSettledNotification extends Schema.Class<ChildSettledNotificat
  * child — including replays after a wake, so the operation is idempotent.
  */
 export const ChildSettledOutcome = Schema.Literals(["woken", "still-waiting", "not-waiting"]);
+
 export type ChildSettledOutcome = typeof ChildSettledOutcome.Type;
 
 /** Parent-owned child budget reservation identity, deterministically derived by the
  * coordinator from the parent Run and Tool Call identity (spec §12 step 2). */
-export const ChildReservationId = identifier("ChildReservationId");
+export const ChildReservationId = Schema.NonEmptyString.check(Schema.isMaxLength(256)).pipe(
+  Schema.brand("@effect-agent/thread/ChildReservationId"),
+);
+
 export type ChildReservationId = typeof ChildReservationId.Type;
 
 /**
@@ -650,6 +654,7 @@ export type ChildReservationId = typeof ChildReservationId.Type;
  * `released` after the unused allocation returned exactly once.
  */
 export const ChildReservationStatus = Schema.Literals(["reserved", "releasePending", "released"]);
+
 export type ChildReservationStatus = typeof ChildReservationStatus.Type;
 
 /**

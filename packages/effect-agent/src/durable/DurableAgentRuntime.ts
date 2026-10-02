@@ -19,7 +19,7 @@ import {
   Semaphore,
   Stream,
 } from "effect";
-import { Prompt, type Tool } from "effect/unstable/ai";
+import { Prompt, type Tool } from "effect/ai";
 
 import {
   type InputMessage,

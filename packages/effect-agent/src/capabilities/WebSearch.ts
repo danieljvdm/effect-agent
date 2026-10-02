@@ -1,5 +1,5 @@
 import { Effect, Option, Schema } from "effect";
-import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai";
+import { LanguageModel, Tool, Toolkit } from "effect/ai";
 
 import { utf8ByteLength } from "../core/internal/utf8.ts";
 import { ToolExecutionClass } from "../engine/DurableStep.ts";
