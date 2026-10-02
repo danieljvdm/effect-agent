@@ -15,7 +15,7 @@ import {
   storageFailpointLayer,
   type SqliteStorageInitializationError,
 } from "@effect-agent/storage-sqlite/sqlite-thread-store";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Context, type Crypto, Duration, Effect, Layer, Ref, Schema } from "effect";
 import { type AgentRegistration, type ResolvedBinding } from "effect-agent/agent-registration";

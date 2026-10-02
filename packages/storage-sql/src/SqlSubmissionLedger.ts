@@ -1463,12 +1463,16 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           // Ownership belongs to the whole Thread, including unknown work skipped below.
           // Stored lease instants are normalized UTC strings, so the latest expiry covers
           // every live lease. This check and the epoch grant share one write transaction.
+          // The guard lets SQLite skip the retained-submission scan when ownership is empty.
           const ownershipRows = yield* sql<Record<string, unknown>>`
             SELECT ownership.*
             FROM ${relation("effect_agent_submission_ownership")} AS ownership
             JOIN ${relation("effect_agent_submissions")} AS submission
               ON submission.submission_id = ownership.submission_id
             WHERE submission.thread_id = ${validated.threadId}
+              AND EXISTS (
+                SELECT 1 FROM ${relation("effect_agent_submission_ownership")}
+              )
             ORDER BY ownership.lease_expires_at DESC
             LIMIT 1
           `.pipe(execute, Effect.mapError(sqlFailure(operation)));

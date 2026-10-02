@@ -10835,19 +10835,21 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     // Authorization lasts for this wait, as it does for one observe subscription.
     yield* authorizeSettlement(receipt);
     while (true) {
-      const status = yield* readSubmissionStatus(receipt);
+      const status = yield* Effect.scoped(
+        Effect.gen(function* () {
+          // Register before reading the ledger so settlement between the read and
+          // parking cannot be lost. Hints never replace the authoritative re-read.
+          const awaitHint = yield* wake.subscribe(receipt.threadId);
+          const status = yield* readSubmissionStatus(receipt);
+
+          if (status._tag !== "settled")
+            yield* Effect.raceFirst(awaitHint, Effect.sleep(config.settlementPollInterval));
+
+          return status;
+        }),
+      );
 
       if (status._tag === "settled") return status.settlement;
-      // Wake delivery is a pure liveness hint; the ledger poll below guarantees progress.
-      yield* Effect.raceFirst(
-        Stream.runDrain(
-          wake.wakes.pipe(
-            Stream.filter((threadId) => threadId === receipt.threadId),
-            Stream.take(1),
-          ),
-        ),
-        Effect.sleep(config.settlementPollInterval),
-      );
     }
   });
 
