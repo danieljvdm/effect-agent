@@ -30,6 +30,7 @@ const makeWakeScheduler = Effect.gen(function* () {
   const config = yield* NodeWakeSchedulerConfig;
   const hints = yield* PubSub.sliding<ThreadId>(WAKE_BUFFER_CAPACITY);
   const progress = yield* makeWakeSubscriptionHub;
+  const settlements = yield* makeWakeSubscriptionHub;
 
   yield* Effect.addFinalizer(() => PubSub.shutdown(hints));
 
@@ -69,11 +70,13 @@ const makeWakeScheduler = Effect.gen(function* () {
   );
 
   return WakeScheduler.of({
-    notify: (threadId) =>
-      progress
-        .notify(threadId)
-        .pipe(Effect.andThen(PubSub.publish(hints, threadId)), Effect.asVoid),
-    subscribe: progress.subscribe,
+    notify: (threadId, kind) =>
+      (kind === "progress"
+        ? progress.notify(threadId)
+        : settlements.notify(threadId).pipe(Effect.andThen(progress.notify(threadId)))
+      ).pipe(Effect.andThen(PubSub.publish(hints, threadId)), Effect.asVoid),
+    subscribe: (threadId, kind) =>
+      (kind === "settlement" ? settlements : progress).subscribe(threadId),
     wakes: Stream.merge(
       Stream.fromPubSub(hints),
       fallbackScans.pipe(Stream.flatMap(Stream.fromIterable)),
@@ -83,7 +86,8 @@ const makeWakeScheduler = Effect.gen(function* () {
 
 /**
  * In-process Node `WakeScheduler`: `notify` publishes to a bounded sliding PubSub for prompt
- * same-process wakeups, and active `wakes` subscriptions share one periodic
+ * same-process worker wakeups. Thread waiters use separate progress and settlement registrations;
+ * broad hints wake both. Active `wakes` subscriptions share one periodic
  * `SubmissionLedger.scanNonterminal` fallback so a dropped, coalesced, or never-sent notification
  * can never strand accepted work (persistence §14). Delivery may duplicate; consumers already
  * treat wakes as pure liveness hints.

@@ -2770,7 +2770,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             });
             // Canonical storage is already committed. This hint may be lost or duplicated, but
             // it lets scoped progress waiters re-read promptly without making memory authoritative.
-            yield* wake.notify(ctx.threadId);
+            yield* wake.notify(ctx.threadId, "progress");
 
             return result;
           }
@@ -10868,7 +10868,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         Effect.gen(function* () {
           // Register before reading the ledger so settlement between the read and
           // parking cannot be lost. Hints never replace the authoritative re-read.
-          const awaitHint = yield* wake.subscribe(receipt.threadId);
+          const awaitHint = yield* wake.subscribe(receipt.threadId, "settlement");
           const finalized = yield* readFinalizedSubmission(receipt);
 
           if (Option.isNone(finalized))

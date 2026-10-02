@@ -97,7 +97,9 @@ export const makeWakeSubscriptionHub: Effect.Effect<WakeSubscriptionHub> = Effec
 /**
  * Liveness hint channel for durable schedulers. `notify` announces that a Thread lane may
  * have claimable, canonical, or settled work; `wakes` is the all-lanes subscription surface for
- * workers, while `subscribe` installs an efficient one-Thread wait registration.
+ * workers, while `subscribe` installs an efficient one-Thread wait registration. Progress hints
+ * may skip settlement registrations, whose readers only need finalized submissions. Adapters
+ * may conservatively ignore the optional modes; decorators should forward them to retain filtering.
  *
  * Correctness must NEVER depend on delivery: notifications may be dropped, coalesced, duplicated,
  * or observed by no subscriber (a notify before any subscription is simply lost). Every consumer
@@ -112,11 +114,18 @@ export const makeWakeSubscriptionHub: Effect.Effect<WakeSubscriptionHub> = Effec
 export class WakeScheduler extends Context.Service<
   WakeScheduler,
   {
-    /** Best-effort hint that `threadId` may have claimable or settled work. Never fails. */
-    readonly notify: (threadId: ThreadId) => Effect.Effect<void>;
-    /** Scope-owned one-shot registration for exactly one Thread. */
+    /**
+     * Best-effort hint to workers and all Thread waiters. `progress` may omit settlement waiters,
+     * but still reaches workers and progress waiters. Never fails.
+     */
+    readonly notify: (threadId: ThreadId, kind?: "progress") => Effect.Effect<void>;
+    /**
+     * Scope-owned one-shot registration for exactly one Thread. `settlement` prefers broad hints;
+     * conservative adapters may also deliver progress. Every hint still requires an authority read.
+     */
     readonly subscribe: (
       threadId: ThreadId,
+      kind?: "settlement",
     ) => Effect.Effect<Effect.Effect<void>, never, Scope.Scope>;
     /** Scope-owned subscription to wake hints, starting at subscription time. */
     readonly wakes: Stream.Stream<ThreadId>;
