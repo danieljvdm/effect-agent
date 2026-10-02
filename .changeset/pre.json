@@ -138,6 +138,7 @@
     "engine-preserve-run-policy-compaction",
     "explicit-browser-network-policy",
     "fair-recovery-status",
+    "faster-durable-execution",
     "faster-persisted-json-bytes",
     "faster-sql-memory-receipts",
     "filter-worker-completion",
@@ -268,6 +269,7 @@
     "quiet-stream-tool-bounds",
     "quiet-successful-tool-logs",
     "quiet-text-boundaries",
+    "quiet-thread-dispatch",
     "quiet-workers-recover",
     "react-controlled-browser-fill",
     "readable-memory-recall",
@@ -332,6 +334,7 @@
     "spend-governed-review",
     "sqlite-history-scheduler",
     "stable-cloudflare-rpc-targets",
+    "stable-effect-v4",
     "stable-prompt-prefix",
     "stable-testing-release-artifacts",
     "steady-status-cache",
@@ -369,6 +372,7 @@
     "verified-pr-review",
     "warm-owned-thread-state",
     "worker-known-tail",
-    "workflow-durable-host"
+    "workflow-durable-host",
+    "yielded-agent-namespace"
   ]
 }

@@ -1,6 +1,6 @@
 {
   "name": "@yielded/agent-storage-sql",
-  "version": "0.1.0-beta.165",
+  "version": "0.1.0-beta.166",
   "description": "Shared SQL persistence implementations for Effect Agent storage adapters.",
   "license": "MIT",
   "repository": {

@@ -1,5 +1,21 @@
 # @yielded/agent-storage-postgres
 
+## 0.1.0-beta.166
+
+### Minor Changes
+
+- [#766](https://github.com/yielded-dev/agent/pull/766) [`a1fb42a`](https://github.com/yielded-dev/agent/commit/a1fb42a651eccef46b8775fe4373d3f04d85e8de) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Move Effect Agent to `@yielded/agent` and its `@yielded/agent-*` adapters. Update dependencies and import prefixes together; APIs, service identities, and stored formats remain unchanged.
+
+### Patch Changes
+
+- [#749](https://github.com/yielded-dev/agent/pull/749) [`08d1384`](https://github.com/yielded-dev/agent/commit/08d1384e625091d83a6cb6eeb9c95e28cff2cc69) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Require Effect 4.0.0 and use its current module paths and encoding APIs. Require `effect-cf@^0.53.0` for the Cloudflare adapter.
+
+  BEHAVIOR CHANGE: upgrade Effect and matching provider, platform, SQL, and Atom packages to 4.0.0; replace `effect/unstable/*` imports with `effect/*` and use `effect/http-api` for HTTP APIs. Cloudflare logical alarms now back off from one second and park for hourly recovery after eight attempts without reported source progress.
+
+- Updated dependencies [[`00995dd`](https://github.com/yielded-dev/agent/commit/00995dd9049e11190588b143a32ba5c520686e7f), [`2cfa8f7`](https://github.com/yielded-dev/agent/commit/2cfa8f75258edd32898958e264e549a737368c9e), [`08d1384`](https://github.com/yielded-dev/agent/commit/08d1384e625091d83a6cb6eeb9c95e28cff2cc69), [`a1fb42a`](https://github.com/yielded-dev/agent/commit/a1fb42a651eccef46b8775fe4373d3f04d85e8de)]:
+  - @yielded/agent@0.1.0-beta.166
+  - @yielded/agent-storage-sql@0.1.0-beta.166
+
 ## 0.1.0-beta.165
 
 ### Patch Changes
