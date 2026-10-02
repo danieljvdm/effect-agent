@@ -175,9 +175,9 @@ no worker loop is needed.
 Register the exported class as a SQLite Durable Object under `THREADS`.
 `ThreadObject.layer([])` registers no agents and refuses every agent identity.
 
-## Alchemy host (experimental) {#alchemy-host}
+## Alchemy host
 
-Use `@yielded/agent-platform-alchemy-cloudflare` when Alchemy owns your Worker and Durable
+Use the experimental `@yielded/agent-platform-alchemy-cloudflare` host when Alchemy owns your Worker and Durable
 Object runtime. This repository currently requires Alchemy `2.0.0-beta.80` with its
 [runtime patch](https://github.com/yielded-dev/agent/blob/main/patches/alchemy%402.0.0-beta.80.patch); stock beta.80 does not supply the
 required constructor lifetimes, native RPC dispatch, and transactional alarm recovery. This host is experimental.
