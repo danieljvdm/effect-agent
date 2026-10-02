@@ -568,6 +568,7 @@ export const make = Effect.fnUntraced(function* <R>(
     // Preparation has its own 2 s budget. It never waits for a missing selector;
     // an actually pending CDP request is terminated by BrowserSession, not abandoned.
     let dispatch: NonNullable<(typeof ActionResult.Type)["dispatch"]> = "not-dispatched";
+    let refusal: string | undefined;
 
     const ready = yield* native(
       command,
@@ -710,18 +711,46 @@ export const make = Effect.fnUntraced(function* <R>(
             )
               return "not-dispatched" as const;
 
-            const modifier = await element.evaluate(() =>
-              navigator.platform.startsWith("Mac") ? "Meta" : "Control",
-            );
+            const selected = await element.evaluate((node) => {
+              let selected = false;
+
+              if (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement) {
+                node.select();
+                selected =
+                  node.value.length === 0 ||
+                  (node.selectionStart === 0 && node.selectionEnd === node.value.length) ||
+                  globalThis.getSelection()?.toString() === node.value;
+              } else {
+                const selection = globalThis.getSelection();
+
+                if (selection === null) return false;
+                const range = document.createRange();
+
+                range.selectNodeContents(node);
+                selection.removeAllRanges();
+                selection.addRange(range);
+                selected =
+                  selection.rangeCount === 1 &&
+                  selection.getRangeAt(0).compareBoundaryPoints(Range.START_TO_START, range) ===
+                    0 &&
+                  selection.getRangeAt(0).compareBoundaryPoints(Range.END_TO_END, range) === 0;
+              }
+
+              return (
+                selected &&
+                node.isConnected &&
+                Reflect.get(node.getRootNode(), "activeElement") === node
+              );
+            });
+
+            if (!selected) {
+              refusal =
+                "Native selection could not prepare this field for replacement. No input dispatched.";
+
+              return "not-dispatched" as const;
+            }
 
             dispatch = "unknown";
-            await page.keyboard.down(modifier);
-            try {
-              // Headless browsers may not apply the platform shortcut's editing command.
-              await page.keyboard.press("KeyA", { commands: ["selectAll"] });
-            } finally {
-              await page.keyboard.up(modifier);
-            }
             await page.keyboard.press("Backspace");
             await element.type(value.value);
           }
@@ -770,6 +799,8 @@ export const make = Effect.fnUntraced(function* <R>(
       return yield* result.failure;
     }
     if (result.success !== "unknown") clearInput();
+    if (result.success === "not-dispatched" && refusal !== undefined)
+      return yield* invalid(refusal);
 
     return result.success;
   });

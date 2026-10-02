@@ -164,7 +164,9 @@ by selector or an observed frame when necessary. Default inspection reads the ma
 other frames are listed with `inspected: false` for explicit lookup. After input, observation
 follows the target frame, falling back to the main frame if it detached. Use `optionFilter`
 to find select options by label or value; current selections remain visible. Native fill
-supports writable inputs, textareas, and contenteditable controls. Closed shadow roots
+supports writable inputs, textareas, and contenteditable controls. It verifies native selection
+of existing content before trusted deletion and typing; unsupported selection returns
+`not-dispatched`. Closed shadow roots
 and transformed iframe coordinate spaces are unsupported. Switching tabs expires the previous page's
 references; tab selection stays inside the attachment's browser context.
 
@@ -190,7 +192,8 @@ contracts on the session's original page; selecting a tab does not retarget thos
 a dialog that prevents navigation from settling remains subject to the native timeout.
 
 Choose the engine before starting the workflow. Kitesurf's beta implementation currently
-has gaps in cross-origin classic script loading, contenteditable input, native HTML dialogs and JavaScript
+has gaps in cross-origin classic script loading, replacing nonempty number inputs,
+contenteditable input, native HTML dialogs and JavaScript
 dialogs. Choose Chromium when the workflow requires those capabilities. A new engine starts
 with separate browser state; never automatically switch engines or replay acknowledged or
 uncertain input. See [Kitesurf's lifecycle limits](https://developers.cloudflare.com/browser-run/kitesurf/)
