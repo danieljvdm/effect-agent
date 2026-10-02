@@ -1,9 +1,9 @@
 import { Effect, Queue, Stream } from "effect";
 import type { DurableBindingFailure } from "effect-agent/agent-registration";
-import type { DurableAgentRuntime, DurableWorkerFailure } from "effect-agent/durable-agent-runtime";
+import { DurableAgentRuntime, type DurableWorkerFailure } from "effect-agent/durable-agent-runtime";
 import type { ThreadId } from "effect-agent/identifiers";
-import type { SubmissionLedger } from "effect-agent/submission-ledger";
-import type { WakeScheduler } from "effect-agent/wake-scheduler";
+import { SubmissionLedger } from "effect-agent/submission-ledger";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 
 const PENDING_CAPACITY = 1_024;
 
@@ -15,13 +15,17 @@ type DispatchState = "pending" | "active" | "dirty";
  * already been validated by the host configuration.
  */
 export const runNodeWorkerDispatch = (
-  runtime: DurableAgentRuntime["Service"],
-  ledger: SubmissionLedger["Service"],
-  wake: WakeScheduler["Service"],
   concurrency: number,
-): Effect.Effect<void, DurableWorkerFailure | DurableBindingFailure> =>
+): Effect.Effect<
+  void,
+  DurableWorkerFailure | DurableBindingFailure,
+  DurableAgentRuntime | SubmissionLedger | WakeScheduler
+> =>
   Effect.scoped(
     Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const ledger = yield* SubmissionLedger;
+      const wake = yield* WakeScheduler;
       const pending = yield* Queue.bounded<ThreadId>(PENDING_CAPACITY);
       const states = new Map<ThreadId, DispatchState>();
 

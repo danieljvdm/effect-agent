@@ -42,10 +42,10 @@ import {
   type AbortCommand,
   type AbortIntent,
   type Settlement,
-  SubmissionLedger,
+  type SubmissionLedger,
 } from "effect-agent/submission-ledger";
 import { type ThreadNotMaterialized, type ThreadStoreError } from "effect-agent/thread-store";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
+import { type WakeScheduler } from "effect-agent/wake-scheduler";
 
 import { ExclusiveSqliteHost } from "./internal/exclusive-host.ts";
 import { runNodeMessageDeliveries } from "./internal/message-delivery.ts";
@@ -67,10 +67,7 @@ export class AdmissionClosed extends Schema.TaggedError<AdmissionClosed>()("Admi
 
 const makeHost = Effect.fn("NodeDurableHost.make")(function* (
   startWorkers: boolean,
-  dispatchServices?: {
-    readonly ledger: SubmissionLedger["Service"];
-    readonly wake: WakeScheduler["Service"];
-  },
+  managedWorkers?: Effect.Effect<void, DurableWorkerFailure | DurableBindingFailure>,
 ) {
   const runtime = yield* DurableAgentRuntime;
   const config = yield* NodeDurableAgentRuntimeConfig;
@@ -152,16 +149,9 @@ const makeHost = Effect.fn("NodeDurableHost.make")(function* (
   // Managed hosts dispatch each lane once. Bare host layers retain their existing service
   // requirements and generic worker-loop composition.
   const runResolvedWorkers =
-    dispatchServices === undefined
+    managedWorkers === undefined
       ? runWorkers(runtime.runResolvedWorker)
-      : withDeliveries(
-          runNodeWorkerDispatch(
-            runtime,
-            dispatchServices.ledger,
-            dispatchServices.wake,
-            config.workerConcurrency,
-          ),
-        );
+      : withDeliveries(managedWorkers);
 
   const run = startWorkers
     ? Fiber.join(
@@ -376,10 +366,16 @@ export const layer = <
 ) =>
   Layer.effect(NodeDurableHost)(
     Effect.gen(function* () {
-      const ledger = yield* SubmissionLedger;
-      const wake = yield* WakeScheduler;
+      const config = yield* NodeDurableAgentRuntimeConfig;
 
-      return yield* makeHost(true, { ledger, wake });
+      const services = yield* Effect.context<
+        DurableAgentRuntime | SubmissionLedger | WakeScheduler
+      >();
+
+      return yield* makeHost(
+        true,
+        runNodeWorkerDispatch(config.workerConcurrency).pipe(Effect.provide(services)),
+      );
     }),
   ).pipe(
     Layer.provideMerge(
