@@ -1,4 +1,23 @@
-# Effect Agent
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/lockup-agent-paper.svg" />
+    <img src=".github/assets/lockup-agent-ink.svg" alt="Effect Agent" height="48" />
+  </picture>
+</h1>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/effect-agent"><img alt="npm" src="https://img.shields.io/npm/v/effect-agent/beta?label=npm&labelColor=121310&color=b9a4ff" /></a>
+  <a href="https://github.com/danieljvdm/effect-agent/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/danieljvdm/effect-agent/ci.yml?branch=main&label=ci&labelColor=121310" /></a>
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-f3f1e8?labelColor=121310" /></a>
+</p>
+
+<p align="center">
+  <a href="https://effect-agent.com/"><b>Documentation</b></a>
+  ·
+  <a href="https://effect-agent.com/guide/getting-started/">Getting started</a>
+  ·
+  <a href="https://yielded.dev">yielded.dev</a>
+</p>
 
 Build TypeScript agents with [Effect](https://github.com/Effect-TS/effect) and Effect AI.
 Define inputs, outputs, and tools with schemas. Effect Agent runs the loop, executes tools,
