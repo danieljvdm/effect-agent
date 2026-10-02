@@ -370,10 +370,11 @@ export const journey = Effect.gen(function* () {
       if (url === undefined) return false;
       const base = new URL(allowedPrefix.value);
       const actual = new URL(url);
+      const descendants = base.pathname.endsWith("/") ? base.pathname : `${base.pathname}/`;
 
       return (
         actual.origin === base.origin &&
-        (actual.pathname === base.pathname || actual.pathname.startsWith(`${base.pathname}/`))
+        (actual.pathname === base.pathname || actual.pathname.startsWith(descendants))
       );
     };
 

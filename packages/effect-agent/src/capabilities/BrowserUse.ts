@@ -42,6 +42,8 @@ export const Control = Schema.Struct({
   disabled: Schema.optionalKey(Schema.Boolean),
   editable: Schema.optionalKey(Schema.Boolean),
   checked: Schema.optionalKey(Schema.Boolean),
+  /** Observed CSS evidence, never a substitute for native input revalidation. */
+  pointerEvents: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(64))),
   attributes: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
 });
 
@@ -221,7 +223,7 @@ export class BrowserControl extends Context.Service<
 export const browserTools = Toolkit.make(
   Tool.make("press", {
     description:
-      "Press a bounded native keyboard key on an observed focusable control, including keyboard-only links. Revalidates identity, visible state and native focus; a pointer hit is not required. Never replay uncertain input.",
+      "Press a bounded native keyboard key on an observed focusable control, including keyboard-only links with pointerEvents=none and tabindex=0. Revalidates identity, visible state and native focus; a pointer hit is not required. Never replay uncertain input.",
     parameters: PressRequest,
     success: ActionResult,
     failure: BrowserUseError,
@@ -341,6 +343,7 @@ export const selectTargets = Effect.fnUntraced(function* (
     observation.controls.filter(
       (control) =>
         !control.disabled &&
+        (action.kind !== "click" || control.pointerEvents !== "none") &&
         (action.kind === "click"
           ? [
               "button",

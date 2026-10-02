@@ -172,7 +172,9 @@ references; tab selection stays inside the attachment's browser context.
 
 Before input, the adapter checks node identity, current state and visibility, including
 iframe parents. Pointer input requires an unobstructed hit; keyboard input verifies native
-focus; keyboard-only overlays check their containing element for obstruction. Visible native
+focus. Observed `pointerEvents` and `tabindex` distinguish keyboard-only controls; semantic
+click selection excludes `pointerEvents: "none"`. Native input always revalidates these hints.
+Keyboard-only overlays check their containing element for obstruction. Visible native
 and ARIA modal dialogs block background input. Preparation has a two-second native deadline;
 stale or missing references return promptly without retiring a healthy browser. Truly
 pending native work retains the attachment's termination/fencing. Native callbacks supplied

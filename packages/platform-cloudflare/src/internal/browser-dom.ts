@@ -171,6 +171,7 @@ export const inspectDom = (
         "name",
         "type",
         "role",
+        "tabindex",
         "placeholder",
         "aria-label",
         "aria-labelledby",
@@ -186,12 +187,14 @@ export const inspectDom = (
     );
 
     registry.set(ref, node);
+    const pointerEvents = getComputedStyle(node).pointerEvents?.slice(0, 64);
 
     return {
       ref,
       kind,
       name,
       attributes,
+      ...(pointerEvents ? { pointerEvents } : {}),
       value:
         nativeField && type !== "password"
           ? associated.value.slice(0, 4_096)
