@@ -83,8 +83,9 @@ production isolated Dynamic Worker executor hosted by local Miniflare. Compare
 identical goals and settings before choosing a path.
 
 Kitesurf currently has compatibility gaps in cross-origin classic script loading,
-contenteditable input and native JavaScript dialogs. Keep those failures in its cohort;
-Chromium success does not establish Kitesurf support. Choose an engine before dispatch.
+contenteditable input, native HTML dialogs and JavaScript dialogs. Keep those failures in its cohort;
+Chromium success does not establish Kitesurf support. The task board requires native HTML
+dialogs and refuses unsupported engines before model execution. Choose an engine before dispatch.
 Starting another engine loses session continuity and cannot reconcile or replay uncertain input.
 
 For local Chromium, set `BROWSER_JOURNEY_ENGINE=local-chromium` and

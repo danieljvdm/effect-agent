@@ -95,7 +95,23 @@ export const makeBrowser = Effect.fnUntraced(function* (
           waitUntil: "domcontentloaded",
         });
         await page.waitForSelector("#edit-1", { visible: true, timeout: 5_000 });
-      }),
+
+        return await page.$eval(
+          "dialog",
+          (element) => typeof Reflect.get(element, "showModal") === "function",
+        );
+      }).pipe(
+        Effect.flatMap((supported) =>
+          supported
+            ? Effect.void
+            : Effect.fail(
+                new LabError({
+                  code: "configuration",
+                  message: "The task board requires native HTML dialog support.",
+                }),
+              ),
+        ),
+      ),
     ),
     observe,
     act,

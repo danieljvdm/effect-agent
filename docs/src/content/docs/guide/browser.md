@@ -190,7 +190,7 @@ contracts on the session's original page; selecting a tab does not retarget thos
 a dialog that prevents navigation from settling remains subject to the native timeout.
 
 Choose the engine before starting the workflow. Kitesurf's beta implementation currently
-has gaps in cross-origin classic script loading, contenteditable input and native JavaScript
+has gaps in cross-origin classic script loading, contenteditable input, native HTML dialogs and JavaScript
 dialogs. Choose Chromium when the workflow requires those capabilities. A new engine starts
 with separate browser state; never automatically switch engines or replay acknowledged or
 uncertain input. See [Kitesurf's lifecycle limits](https://developers.cloudflare.com/browser-run/kitesurf/)
