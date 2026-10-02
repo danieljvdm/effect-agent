@@ -15,6 +15,83 @@ import { scenarios, seed, type RunInput } from "../src/contract.ts";
 import { emptyControl, makeOwner, type Control } from "../src/owner.ts";
 import { makeTrace, Trace } from "../src/telemetry.ts";
 
+// An observed ID must not authorize a replacement node. Preserve the page for
+// fresh observation rather than clicking a replacement or replaying input.
+it.live("refuses a replaced observed target and recovers with fresh native input", (test) =>
+  Effect.gen(function* () {
+    const executable = yield* Config.option(Config.String("BROWSER_TEST_EXECUTABLE"));
+
+    if (Option.isNone(executable)) return test.skip();
+
+    const chrome = yield* Effect.acquireRelease(
+      Effect.promise(() => puppeteer.launch({ executablePath: executable.value, headless: true })),
+      (browser) => Effect.promise(() => browser.close()),
+    );
+
+    const connection = yield* Effect.acquireRelease(
+      Effect.promise(() => browserPuppeteer.connect({ browserWSEndpoint: chrome.wsEndpoint() })),
+      (browser) => Effect.promise(() => browser.disconnect()),
+    );
+
+    const page = yield* Effect.promise(() => connection.newPage());
+
+    const session: Pick<BrowserSession, "run"> = {
+      run: (authorize, action) =>
+        authorize.pipe(
+          Effect.andThen(
+            Effect.tryPromise({
+              try: () => action(page),
+              catch: () =>
+                new BrowserSessionError({
+                  reason: "provider",
+                  dispatch: "possibly-dispatched",
+                  cleanup: "not-requested",
+                }),
+            }),
+          ),
+        ),
+    };
+
+    const trace = yield* makeTrace(request("create"), "no-model");
+
+    const browser = yield* makeBrowser(session, false, () => {}).pipe(
+      Effect.provideService(Trace, trace),
+    );
+
+    yield* browser.native((page) =>
+      page.setContent(`<button id="save" style="margin-top:2000px">Save</button><output id="count">0</output><script>
+      document.addEventListener('click', e => { if(e.target.id === 'save') document.querySelector('output').textContent = String(Number(document.querySelector('output').textContent) + (e.isTrusted ? 1 : 100)); });
+    </script>`),
+    );
+    const initial = yield* browser.observe();
+    const stale = initial.controls.find((control) => control.name === "Save");
+
+    assert.isDefined(stale, "Offscreen controls must be discoverable");
+    yield* browser.native((page) =>
+      page.$eval("#save", (node) => node.replaceWith(node.cloneNode(true))),
+    );
+    const rejected = yield* browser.act([{ kind: "click", ref: stale!.ref }]);
+
+    assert.strictEqual(rejected.completed, 0, "Stale identity must be refused before input");
+    assert.isNotNull(rejected.error);
+    assert.strictEqual(
+      yield* browser.native((page) => page.$eval("#count", (node) => node.textContent)),
+      "0",
+    );
+    const fresh = rejected.observation?.controls.find((control) => control.name === "Save");
+
+    assert.isDefined(fresh, "Refusal must preserve the page for re-observation");
+    const accepted = yield* browser.act([{ kind: "click", ref: fresh!.ref }]);
+
+    assert.strictEqual(accepted.completed, 1);
+    assert.strictEqual(
+      yield* browser.native((page) => page.$eval("#count", (node) => node.textContent)),
+      "1",
+      "Exactly one trusted native input",
+    );
+  }).pipe(Effect.scoped),
+);
+
 const request = (
   scenario: RunInput["scenario"],
   temperature?: RunInput["temperature"],
@@ -270,6 +347,24 @@ it.live(
 
           let ordinal = 0;
           let decisionCalls = 0;
+          const selectedRefs: Array<string> = [];
+
+          const fixtureRefs = async () =>
+            Schema.decodeSync(Schema.Record(Schema.String, Schema.String))(
+              await page
+                .mainFrame()
+                .isolatedRealm()
+                .evaluate(() => {
+                  const registry: Map<string, Element> = Reflect.get(
+                    globalThis,
+                    "@effect-agent/native-browser",
+                  );
+
+                  return Object.fromEntries(
+                    Array.from(registry).map(([ref, node]) => [node.id, ref]),
+                  );
+                }),
+            );
 
           const report = yield* owner
             .run({
@@ -307,7 +402,13 @@ it.live(
                   );
 
                   assert.strictEqual(body.model, "jev-latest");
-                  const expected = decisionCalls++ === 0 ? actions.slice(0, 1) : actions.slice(1);
+                  const refs = await fixtureRefs();
+
+                  const expected = (
+                    decisionCalls++ === 0 ? actions.slice(0, 1) : actions.slice(1)
+                  ).map((action) => ({ ...action, ref: refs[action.ref]! }));
+
+                  selectedRefs.push(...expected.map((action) => action.ref));
 
                   assert.strictEqual(Object.keys(body.questions).length, expected.length);
 
@@ -371,8 +472,27 @@ it.live(
                   assert.strictEqual(body.max_output_tokens, 16_384);
                 }
                 const params = calls[ordinal++];
+                const refs = grounding === "direct" ? await fixtureRefs() : {};
+
+                const resolved =
+                  params === undefined || grounding === "jev"
+                    ? params
+                    : "action" in params
+                      ? {
+                          action: {
+                            ...params.action,
+                            ref: "ref" in params.action ? refs[params.action.ref] : undefined,
+                          },
+                        }
+                      : {
+                          actions: params.actions.map((action) => ({
+                            ...action,
+                            ref: "ref" in action ? refs[action.ref] : undefined,
+                          })),
+                        };
+
                 const toolName = params === undefined ? "finish" : "act";
-                const argumentsJson = JSON.stringify(params ?? { message: "Saved the task." });
+                const argumentsJson = JSON.stringify(resolved ?? { message: "Saved the task." });
 
                 if (apiType === "chat-completions") {
                   const requestBody = Schema.decodeUnknownSync(
@@ -538,7 +658,10 @@ it.live(
 
           assert.strictEqual(report.status, "passed", report.message);
           if (grounding === "jev") assert.strictEqual(report.model, "gpt-6-luna");
-          assert.strictEqual(report.spans.filter((span) => span.phase === "action").length, 6);
+          assert.strictEqual(
+            report.spans.filter((span) => span.phase === "action").length,
+            mode === "agent" ? 6 : 2,
+          );
           assert.strictEqual(decisionCalls, grounding === "jev" ? 2 : 0);
           const decisionSpans = report.spans.filter((span) => span.phase === "decision");
 
@@ -546,7 +669,7 @@ it.live(
           if (grounding === "jev") {
             assert.deepStrictEqual(
               decisionSpans.flatMap((span) => span.choices?.map((choice) => choice.ref) ?? []),
-              ["new-task", "title", "assignee", "priority", "status", "save"],
+              selectedRefs,
             );
             assert.isTrue(
               decisionSpans.every(
@@ -588,11 +711,20 @@ it.live(
       );
 
       yield* browser.prepare;
-      yield* browser.observe();
-      yield* browser.act([{ kind: "click", ref: "new-task" }]);
+      const initialBoard = yield* browser.observe();
+
+      const newTask = initialBoard.controls.find(
+        (control) => control.attributes?.id === "new-task",
+      )!;
+
+      const opened = yield* browser.act([{ kind: "click", ref: newTask.ref }]);
+
+      const title = opened.observation!.controls.find(
+        (control) => control.attributes?.id === "title",
+      )!;
 
       const partial = yield* browser.act([
-        { kind: "fill", ref: "title", value: "Do not save" },
+        { kind: "fill", ref: title.ref, value: "Do not save" },
         { kind: "click", ref: "not-observed" },
         { kind: "click", ref: "save" },
       ]);
@@ -600,7 +732,7 @@ it.live(
       assert.strictEqual(partial.completed, 1);
       assert.include(partial.error ?? "", "not observed");
       assert.strictEqual(
-        partial.observation?.controls.find((value) => value.ref === "title")?.value,
+        partial.observation?.controls.find((value) => value.attributes?.id === "title")?.value,
         "Do not save",
       );
       assert.deepStrictEqual(yield* browser.readBoard, seed);

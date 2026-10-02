@@ -45,6 +45,7 @@ it.effect(
               if (second?._tag === "Classify")
                 assert.deepStrictEqual(Object.keys(second.criteria), [
                   "__none__",
+                  "title",
                   "save",
                   "cancel",
                 ]);
@@ -59,7 +60,7 @@ it.effect(
                   element_1: {
                     _tag: "Classify",
                     label: "save",
-                    probabilities: { save: 0.8, cancel: 0.1, __none__: 0.1 },
+                    probabilities: { title: 0, save: 0.8, cancel: 0.1, __none__: 0.1 },
                   },
                 },
                 usage: { inputTokens: 80, outputTokens: 4 },
@@ -92,10 +93,10 @@ it.effect(
   () =>
     Effect.gen(function* () {
       for (const [label, probabilities] of [
-        ["__none__", { save: 0.05, cancel: 0.05, __none__: 0.9 }],
-        ["save", { save: 0.55, cancel: 0.35, __none__: 0.1 }],
-        ["invisible", { save: 0.8, cancel: 0.1, __none__: 0.1 }],
-        ["save", { save: 0.8, cancel: 0.1, __none__: 0.09 }],
+        ["__none__", { title: 0, save: 0.05, cancel: 0.05, __none__: 0.9 }],
+        ["save", { title: 0, save: 0.55, cancel: 0.35, __none__: 0.1 }],
+        ["invisible", { title: 0, save: 0.8, cancel: 0.1, __none__: 0.1 }],
+        ["save", { title: 0, save: 0.8, cancel: 0.1, __none__: 0.09 }],
       ] as const) {
         const model = Layer.effect(
           DecisionModel.DecisionModel,

@@ -20,6 +20,7 @@ of same-host pages. Use an interactive pass only when navigation or page actions
 | Navigate, read, click, fill, scroll, or capture one active page       | **Interactive Browser**               | A Cloudflare Worker               | Browser binding, lifecycle token, and Puppeteer                    |
 | Let an operator inspect or take over an active pass                   | **Interactive Browser host controls** | A trusted Cloudflare Worker host  | A Browser Run API token, kept private                              |
 | Keep one page through approval, credentials, and human takeover       | **Browser Sessions**                  | A trusted Cloudflare Worker host  | Durable owner, current authority, browser binding, lifecycle token |
+| Inspect and act through agent tools                                   | **Native browser tools**              | An existing Browser Session       | Model layers and current host authority                            |
 
 Browser output is untrusted input. Validate model-selected URLs against your host policy. Resolve
 vault credentials in the host; keep provider handles, Live View URLs, and handoff identities out of
@@ -114,7 +115,106 @@ Choose `ExactHosts` for a known site. Let a trusted host, never model output, ch
 `Unrestricted`. One policy also fixes maximum actions, elapsed time, and bytes returned by each
 operation.
 
-## Opt into decision-grounded browser tools
+## Give an agent native browser tools
+
+`BrowserUse` separates the agent's tools from the browser's lifetime and authority. The
+Cloudflare native adapter implements observation and input over an existing scoped
+`BrowserSession.run` attachment. The host chooses the engine, owns credentials and cleanup,
+and authorizes every operation; it does not implement DOM interaction or recovery.
+The authorization callback receives current page/frame URLs, the observed input target,
+and the destination URL for tab selection. Its Effect dependencies are captured when
+the controller is built. The initial attachment read has no cached URL; authorize that
+attachment in the host before exposing its tools.
+
+```ts twoslash
+import * as NativeBrowser from "@effect-agent/platform-cloudflare/browser-use";
+import type { BrowserSession } from "@effect-agent/platform-cloudflare/browser-session";
+import { BrowserUse } from "effect-agent";
+import { Effect, Layer } from "effect";
+
+declare const session: BrowserSession;
+declare const authorize: NativeBrowser.Options["authorize"];
+
+const browser = BrowserUse.make({ mode: "batched" });
+const attach = Effect.gen(function* () {
+  const controller = yield* NativeBrowser.make(session, {
+    authorize,
+    maxActions: 100,
+    maxReturnedBytes: 128 * 1024,
+  });
+  // Build and consume these handlers within this attachment's Scope.
+  return Layer.merge(browser.layer(), BrowserUse.browserLayer).pipe(
+    Layer.provide(controller.layer),
+  );
+});
+```
+
+Include both `browser.toolkit` and `BrowserUse.browserTools` in the Agent's Toolkit.
+They provide observe/act, scoped inspect, navigation, native key presses, selection,
+scrolling, screenshots, condition waits, observed tab/popup selection, and native dialog
+responses. Inspection accepts CSS and bounded attributes; it never accepts page JavaScript.
+Screenshots return PNG bytes for the host; composing visual model input remains host-owned.
+The [standalone journey host](https://github.com/danieljvdm/effect-agent/tree/main/examples/browser-speed)
+shows the complete composition.
+
+An observation contains live values, options, disabled/checked state, frame and tab
+references, and visible controls outside the viewport, including open shadow roots.
+It marks truncation explicitly. Inspection expires previous control references; narrow
+by selector or an observed frame when necessary. Default inspection reads the main frame;
+other frames are listed with `inspected: false` for explicit lookup. After input, observation
+follows the target frame, falling back to the main frame if it detached. Use `optionFilter`
+to find select options by label or value; current selections remain visible. Native fill
+supports writable inputs, textareas, and contenteditable controls. Closed shadow roots
+and transformed iframe coordinate spaces are unsupported. Switching tabs expires the previous page's
+references; tab selection stays inside the attachment's browser context.
+
+Before input, the adapter checks node identity, current state and visibility, including
+iframe parents. Pointer input requires an unobstructed hit; keyboard input verifies native
+focus; keyboard-only overlays check their containing element for obstruction. Visible native
+and ARIA modal dialogs block background input. Preparation has a two-second native deadline;
+stale or missing references return promptly without retiring a healthy browser. Truly
+pending native work retains the attachment's termination/fencing. Native callbacks supplied
+by custom hosts must enforce the requested deadline as well.
+
+`completed` counts acknowledged inputs. `dispatch` distinguishes `not-dispatched`,
+`acknowledged`, and `unknown`, independently of the next observation. An acknowledged
+input is not proof that the site saved the requested state. `pendingInput` identifies
+input suspended by a dialog; answering it returns the original input's `settledInput`
+receipt. Outstanding work belongs to the controller's Scope and retains its native
+deadline. Observation waits briefly for a loading document to finish parsing; use an
+explicit condition wait for application readiness. A failed read reports that it dispatched no new
+input, without changing earlier input receipts or the session's outstanding-work fencing.
+A failed observation never authorizes replay. Use a specific condition wait or fresh inspection to reconcile state.
+Password/file inputs remain host-owned; use the existing credential and file-selection
+contracts on the session's original page; selecting a tab does not retarget those host helpers. A blocking JavaScript dialog can be inspected and answered after an input;
+a dialog that prevents navigation from settling remains subject to the native timeout.
+
+Choose the engine before starting the workflow. Kitesurf's beta implementation currently
+has gaps in cross-origin classic script loading, contenteditable input and native JavaScript
+dialogs. Choose Chromium when the workflow requires those capabilities. A new engine starts
+with separate browser state; never automatically switch engines or replay acknowledged or
+uncertain input. See [Kitesurf's lifecycle limits](https://developers.cloudflare.com/browser-run/kitesurf/)
+before choosing persistence or operator controls.
+
+For Code Mode, put the same tools in its construction-time allowlist:
+
+```ts twoslash
+import { BrowserUse, CodeMode } from "effect-agent";
+
+const browser = BrowserUse.make({ mode: "batched" });
+const codeMode = CodeMode.make("run_browser", {
+  description: "Inspect current browser state and interact through its guarded tools.",
+  tools: { browser: { ...browser.toolkit.tools, ...BrowserUse.browserTools.tools } },
+  maxEgressBytes: 128 * 1024,
+});
+```
+
+Provide those same handlers and an existing [Code Mode executor](/guide/code-mode/).
+Generated programs can inspect a missing control, wait for readiness, and act on its
+new reference through the broker. They get the same authorization, ordering, budgets
+and receipts; they cannot bypass them through CDP. Never replay an uncertain program.
+
+### Opt into decision-grounded browser tools
 
 `BrowserUse.make` pairs a browser toolkit with its handler Layer. Choose grounding and
 batching once; the host supplies the page adapter and provider.
@@ -140,7 +240,13 @@ const handlers = browser.layer().pipe(Layer.provide(JevLive));
 `grounding: "decision"`, it describes `{ action: { kind: "click", target: "Save this task" } }`
 and the supplied native `DecisionModel` selects the control. Add `mode: "batched"` to either
 configuration to accept `actions` arrays of up to eight items. The planner remains your
-ordinary Language Model. Grounding introduces no fallback planner.
+ordinary Language Model. Grounding introduces no fallback planner. For a known sequence,
+`{ grounding: "decision", mode: "plan" }` resolves each next step from the previous result
+without another planner turn. It stops on missing or ambiguous controls, failed observation,
+or uncertain input. Inspect or wait before submitting a new plan, and omit completed steps.
+Grounded toolkits also expose `act_ref` for direct actions on already resolved current refs.
+After selection fails, the cached observation cannot be classified again; inspect or wait
+for fresh evidence, or use that direct recovery path. Both paths retain the same native guards.
 
 `BrowserActions` owns observation and dispatch. Its adapter assigns unique refs, limits the
 exposed page data, revalidates targets before input, and enforces navigation and action authority.
@@ -152,10 +258,11 @@ adapter using Cloudflare Browser Sessions, tracing, and an independent verifier.
 Build one grounded handler Layer per page/run. It serializes observation and selection, keeps the
 latest observation, and discards stale evidence after a failed operation.
 `browser.layer({ initialObservation })` avoids rereading an already prepared page. Selection permits 1–254
-compatible controls per action, includes an abstention choice, requires probability at least 0.6,
-and times out after 15 seconds. These are selection limits, not correctness guarantees. Direct
+compatible controls per action, includes an abstention choice, defaults to an experimental
+minimum probability of 0.6, and times out after 15 seconds. Calibrate
+`browser.layer({ minimumProbability })` against your own task cohort. These are selection limits, not correctness guarantees. Direct
 `selectTargets` returns choices and token usage for custom tools; it requires only `DecisionModel`.
-Grounded handlers emit `BrowserUse.selectTargets` spans with choices and token usage in the
+Grounded handlers emit `BrowserUse.selectTargets` spans with reference/confidence choices and token usage in the
 `browser.selection` attribute; use standard Effect tracing to observe them.
 
 Wikipedia routing and Kitesurf connection setup remain example-owned. The lab's Browser Sessions

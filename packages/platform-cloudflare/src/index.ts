@@ -12,3 +12,4 @@ export * as WakeScheduler from "./WakeScheduler.ts";
 export * as CloudflareAiGateway from "./CloudflareAiGateway.ts";
 export * as BrowserSession from "./BrowserSession.ts";
 export * as BrowserCredentials from "./BrowserCredentials.ts";
+export * as BrowserUse from "./BrowserUse.ts";

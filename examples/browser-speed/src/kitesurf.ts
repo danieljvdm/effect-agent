@@ -174,7 +174,7 @@ export const connectKitesurf = Effect.fnUntraced(function* (
 
   return {
     identity: connected.identity,
-    run: (authorize, action) =>
+    run: (authorize, action, options) =>
       lock.withPermit(
         Effect.gen(function* () {
           yield* authorize;
@@ -195,7 +195,10 @@ export const connectKitesurf = Effect.fnUntraced(function* (
               }),
           }).pipe(
             Effect.timeoutOrElse({
-              duration: browserCommandTimeoutMillis,
+              duration: Math.min(
+                browserCommandTimeoutMillis,
+                options?.timeoutMillis ?? browserCommandTimeoutMillis,
+              ),
               orElse: () =>
                 close.pipe(
                   Effect.ignore,

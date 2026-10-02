@@ -32,7 +32,8 @@
     "./browser-credentials": "./src/BrowserCredentials.ts",
     "./thread-object": "./src/ThreadObject.ts",
     "./wake-scheduler": "./src/WakeScheduler.ts",
-    "./cloudflare-ai-gateway": "./src/CloudflareAiGateway.ts"
+    "./cloudflare-ai-gateway": "./src/CloudflareAiGateway.ts",
+    "./browser-use": "./src/BrowserUse.ts"
   },
   "publishConfig": {
     "access": "public"

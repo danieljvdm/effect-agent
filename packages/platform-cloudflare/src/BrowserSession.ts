@@ -103,10 +103,12 @@ export interface BrowserSession {
    * Check current authority under the lock before native dispatch. A settled SDK rejection leaves
    * the session available for inspection, but may have changed the website; never retry blindly.
    * Timeout/interruption fences outstanding SDK work and terminates the exact browser.
+   * An optional timeoutMillis narrows the command deadline, for example for bounded preparation.
    */
   readonly run: <A, E, R>(
     authorize: Effect.Effect<void, E, R>,
     action: (page: Page) => Promise<A>,
+    options?: { readonly timeoutMillis: number },
   ) => Effect.Effect<A, E | BrowserSessionError, R>;
   /**
    * Resolves host-owned material under fresh credential grants. Never submits or retries a write.
@@ -414,6 +416,7 @@ export class BrowserSessions extends Context.Service<
           authorize: Effect.Effect<void, E, R>,
           action: (page: Page) => Promise<A>,
           terminateOnError = false,
+          timeoutMillis?: number,
         ) =>
           runEffect((commandTimeoutMillis) =>
             authorize.pipe(
@@ -431,7 +434,7 @@ export class BrowserSessions extends Context.Service<
                 ),
               ),
               Effect.timeoutOrElse({
-                duration: commandTimeoutMillis,
+                duration: Math.min(commandTimeoutMillis, timeoutMillis ?? commandTimeoutMillis),
                 orElse: () =>
                   terminate.pipe(
                     Effect.flatMap((closed) =>
@@ -466,7 +469,12 @@ export class BrowserSessions extends Context.Service<
 
         const session: BrowserSession = {
           reference,
-          run,
+          run: (authorize, action, options) =>
+            options === undefined
+              ? run(authorize, action)
+              : decode(PositiveMillis, options.timeoutMillis).pipe(
+                  Effect.flatMap((timeoutMillis) => run(authorize, action, false, timeoutMillis)),
+                ),
           fillCredential: (request) =>
             runEffect((commandTimeoutMillis) =>
               fillCredential(request).pipe(

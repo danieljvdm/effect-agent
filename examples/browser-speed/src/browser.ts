@@ -1,4 +1,5 @@
 import type { BrowserSession } from "@effect-agent/platform-cloudflare/browser-session";
+import * as NativeBrowser from "@effect-agent/platform-cloudflare/browser-use";
 import { Context, Effect, Layer, Schema } from "effect";
 import * as BrowserUse from "effect-agent/browser-use";
 import { Action, Observation, ActionResult } from "effect-agent/browser-use";
@@ -29,8 +30,15 @@ export const makeBrowser = Effect.fnUntraced(function* (
   image: (value: string) => void,
 ) {
   const trace = yield* Trace;
-  let observed = new Set<string>();
-  let actions = 0;
+
+  const asLabError = (error: { readonly message: string }) =>
+    new LabError({ code: "browser", message: error.message });
+
+  const controller = yield* NativeBrowser.make(session, {
+    authorize: () => Effect.void,
+    maxActions: 100,
+    maxReturnedBytes: 256 * 1024,
+  }).pipe(Effect.mapError(asLabError));
 
   const native = <A>(action: (page: Page) => Promise<A>) =>
     session.run(Effect.void, action).pipe(
@@ -58,140 +66,22 @@ export const makeBrowser = Effect.fnUntraced(function* (
       : Effect.void;
 
   const observe = () =>
-    trace
-      .measure(
-        "observation",
-        "Read visible controls",
-        native((page) =>
-          page.evaluate(() => {
-            const dialog = document.querySelector("dialog[open]");
-
-            const controls = Array.from(
-              document.querySelectorAll("button,input,select,textarea"),
-            ).flatMap((node) => {
-              if (
-                !(node instanceof HTMLElement) ||
-                !node.id ||
-                !node.checkVisibility() ||
-                (dialog !== null && !dialog.contains(node)) ||
-                node.matches(":disabled")
-              )
-                return [];
-
-              const field =
-                node instanceof HTMLInputElement ||
-                node instanceof HTMLSelectElement ||
-                node instanceof HTMLTextAreaElement;
-
-              return [
-                {
-                  ref: node.id,
-                  kind: node.tagName.toLowerCase(),
-                  name:
-                    node.getAttribute("aria-label") ??
-                    node.closest("label")?.textContent?.trim() ??
-                    node.textContent?.trim() ??
-                    "",
-                  value: field ? node.value : "",
-                  options:
-                    node instanceof HTMLSelectElement
-                      ? Array.from(node.options).map((option) => option.value)
-                      : [],
-                },
-              ];
-            });
-
-            return {
-              text: (dialog instanceof HTMLElement
-                ? dialog.innerText
-                : document.body.innerText
-              ).slice(0, 12_000),
-              controls,
-            };
-          }),
-        ),
-        (value) => ({
-          bytes: new TextEncoder().encode(
-            Schema.encodeSync(Schema.fromJsonString(Observation))(value),
-          ).length,
-        }),
-      )
-      .pipe(
-        Effect.tap((value) =>
-          Effect.sync(() => {
-            observed = new Set(value.controls.map((control) => control.ref));
-          }),
-        ),
-      );
-
-  const action = Effect.fnUntraced(function* (value: Action) {
-    if (!observed.has(value.ref))
-      return yield* new LabError({
-        code: "invalid",
-        message: "Control was not observed. Observe before acting.",
-      });
-    if (++actions > 100)
-      return yield* new LabError({ code: "invalid", message: "The 100-action limit was reached." });
-
-    yield* trace.measure(
-      "action",
-      `${value.kind} #${value.ref}`,
-      native(async (page) => {
-        const visible = await page.$eval(`#${value.ref}`, (node) => {
-          const dialog = document.querySelector("dialog[open]");
-
-          return (
-            node instanceof HTMLElement &&
-            node.checkVisibility() &&
-            !node.matches(":disabled") &&
-            (dialog === null || dialog.contains(node))
-          );
-        });
-
-        if (!visible) throw new Error("Control is no longer actionable");
-        switch (value.kind) {
-          case "click":
-            await page.click(`#${value.ref}`);
-            break;
-          case "fill":
-            await page.locator(`#${value.ref}`).fill(value.value);
-            break;
-          case "select": {
-            const selected = await page.select(`#${value.ref}`, value.value);
-
-            if (!selected.includes(value.value)) throw new Error("Option unavailable");
-            break;
-          }
-        }
-      }),
+    trace.measure(
+      "observation",
+      "Read current controls",
+      controller.actions.observe.pipe(Effect.mapError(asLabError)),
     );
-  });
 
   const act = Effect.fnUntraced(function* (values: ReadonlyArray<Action>) {
-    let completed = 0;
-    let error: string | null = null;
-
-    for (const value of values) {
-      const result = yield* action(value).pipe(Effect.result);
-
-      if (result._tag === "Failure") {
-        error = result.failure.message;
-        break;
-      }
-      completed++;
-    }
-
-    const observation = yield* observe().pipe(
-      Effect.catch((failure) => {
-        error ??= `Actions completed; observation failed. Use observe, do not replay. ${failure.message}`;
-
-        return Effect.succeed(null);
-      }),
+    const result = yield* trace.measure(
+      "action",
+      "Native browser actions",
+      controller.actions.act(values).pipe(Effect.mapError(asLabError)),
     );
 
-    yield* capture().pipe(Effect.catch(() => Effect.void));
+    yield* capture().pipe(Effect.ignore);
 
-    return { completed, error, observation };
+    return result;
   });
 
   return {
@@ -220,14 +110,20 @@ export const makeBrowser = Effect.fnUntraced(function* (
           () => new LabError({ code: "browser", message: "Could not validate the task ledger." }),
         ),
       ),
-    actionsLayer: Layer.succeed(BrowserUse.BrowserActions, {
-      observe: observe().pipe(
-        Effect.mapError(
-          (error) => new BrowserUse.BrowserUseError({ code: "browser", message: error.message }),
-        ),
-      ),
-      act,
-    }),
+    actionsLayer: Layer.merge(
+      Layer.succeed(BrowserUse.BrowserActions, {
+        observe: controller.actions.observe,
+        act: (values) =>
+          act(values).pipe(
+            Effect.mapError(
+              (error) =>
+                new BrowserUse.BrowserUseError({ code: "browser", message: error.message }),
+            ),
+          ),
+      }),
+      Layer.succeed(BrowserUse.BrowserControl, controller.control),
+    ),
+    inspect: controller.control.inspect,
   };
 });
 
@@ -241,7 +137,15 @@ export const scripted = Effect.fnUntraced(function* (scenario: Scenario) {
   const browser = yield* Browser;
 
   const step = Effect.fnUntraced(function* (action: Action) {
-    const result = yield* browser.act([action]);
+    const observed = yield* browser.observe();
+    const control = observed.controls.find((control) => control.attributes?.id === action.ref);
+
+    if (control === undefined)
+      return yield* new LabError({
+        code: "browser",
+        message: `Missing diagnostic control ${action.ref}`,
+      });
+    const result = yield* browser.act([{ ...action, ref: control.ref }]);
 
     if (result.error !== null)
       return yield* new LabError({ code: "browser", message: result.error });

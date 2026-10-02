@@ -204,13 +204,31 @@ export const traceOpenAiClient = Effect.gen(function* () {
   });
 });
 
-const decodeSelection = Schema.decodeUnknownOption(
+const decodeSelectionEvidence = Schema.decodeUnknownOption(
   Schema.Struct({
-    choices: Span.fields.choices,
+    choices: Schema.Array(
+      Schema.Struct({
+        index: Schema.Natural,
+        ref: Schema.String,
+        probability: Schema.Finite,
+      }),
+    ),
     inputTokens: Span.fields.inputTokens,
     outputTokens: Span.fields.outputTokens,
   }),
 );
+
+const decodeSelection = (value: unknown) =>
+  decodeSelectionEvidence(value).pipe(
+    Option.map(({ choices, ...usage }) => ({
+      ...usage,
+      choices: choices.map(({ index, ref, probability }) => ({
+        target: `Action ${index + 1}`,
+        ref,
+        probability,
+      })),
+    })),
+  );
 
 /** Tap native model and browser selection spans without replacing either model service. */
 export const traceModels = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {

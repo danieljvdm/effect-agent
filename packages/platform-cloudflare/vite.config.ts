@@ -52,6 +52,7 @@ export default defineConfig({
       "src/CloudflareThreadClient.ts",
       "src/InteractiveBrowser.ts",
       "src/BrowserSession.ts",
+      "src/BrowserUse.ts",
       "src/BrowserCredentials.ts",
       "src/ThreadObject.ts",
       "src/WakeScheduler.ts",

@@ -154,7 +154,7 @@ const layer = BrowserSessions.layerNoDeps.pipe(
         if (init?.method !== "POST" && provider.delayRetirement !== undefined) {
           const socket = response.webSocket!;
           const close = socket.close.bind(socket);
-          let state = WebSocket.OPEN;
+          let state: number = WebSocket.OPEN;
 
           Object.defineProperty(socket, "readyState", {
             get: () => state,

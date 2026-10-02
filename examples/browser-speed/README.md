@@ -35,12 +35,67 @@ Wikipedia winner. Page text is untrusted input. Tools do not expose arbitrary Ja
 
 The reusable browser toolkits and model + Jev element matching come from
 `effect-agent/browser-use`. `BrowserUse.make({ grounding, mode })` pairs tools with their handlers.
-This example supplies the `BrowserActions` adapter and reads native Effect selection spans.
+The task board uses the upstream native controller and reads native Effect selection spans.
 Wikipedia eligibility, route choice, verification, model
 configuration, and the comparison UI remain here. [Consumer setup](../../docs/src/content/docs/guide/browser.md#opt-into-decision-grounded-browser-tools).
 
 The task board uses self-contained HTML and exposes observed clicks, fills, and selections.
 Its preset verifier checks the complete saved board; free-form board requests are **unverified**.
+
+## Run a standalone browser journey
+
+The `journey` task takes a goal and uses the public native tools without the comparison UI.
+Choose `chromium` or `kitesurf` explicitly; it never switches engines. Supply Cloudflare
+and OpenAI credentials using [live credentials](../../docs/TOOLCHAIN.md#live-credentials).
+Start local Maple on its OTLP HTTP port, then run:
+
+```sh
+BROWSER_JOURNEY_ENGINE=kitesurf \
+BROWSER_JOURNEY_OUTPUT=/tmp/browser-journey-1 \
+BROWSER_JOURNEY_GOAL='Navigate to https://example.com and report its visible heading.' \
+vp run -F @effect-agent/example-browser-speed journey
+```
+
+The output directory must be new. The host uses GPT-6 Luna, Fast processing, no reasoning,
+and a 1280 × 900 viewport; `BROWSER_JOURNEY_MODEL` chooses another compatible model
+and `BROWSER_JOURNEY_REASONING` selects none, low, medium or high reasoning.
+It permits 50 turns, 100 tools, eight minutes and two million cumulative tokens;
+`BROWSER_JOURNEY_TOKEN_BUDGET` changes the token limit. Exhaustion fails the run.
+Existing mechanical compaction bounds each model context to 60,000 estimated tokens,
+retaining an 8,000-token recent tail; the full journal remains available in the export.
+`result.json` records the actual CDP engine revision, goal, trace ID, agent claim and a
+separate native DOM read. `thread.json` retains the existing conversation export;
+`page.png` and `cleanup.json` retain the final page and closure acknowledgement. Traces
+go to local Maple at `http://127.0.0.1:4318/v1/traces`. Review tool receipts and native
+preparation/input spans before rerunning a failure.
+
+Results remain `verified: false`: neither an agent claim nor an input acknowledgement
+proves saved state. Independently verify the requested outcome and retain source revision,
+inputs, reset rules and trace alongside that evidence. A failed setup can leave only
+the cleanup record and command log. This host supplies no authenticated account.
+For a disposable native reproduction, `BROWSER_JOURNEY_HTML`
+accepts host-owned fixture HTML before the agent starts.
+
+`BROWSER_JOURNEY_PATH=plan` uses bounded native Jev plans and requires
+`TYPESAFEAI_API_KEY`; `BROWSER_JOURNEY_CONFIDENCE` defaults to the experimental 0.6
+threshold. `BROWSER_JOURNEY_PATH=code` uses the same tools and broker through the
+production isolated Dynamic Worker executor hosted by local Miniflare. Compare
+identical goals and settings before choosing a path.
+
+Kitesurf currently has compatibility gaps in cross-origin classic script loading,
+contenteditable input and native JavaScript dialogs. Keep those failures in its cohort;
+Chromium success does not establish Kitesurf support. Choose an engine before dispatch.
+Starting another engine loses session continuity and cannot reconcile or replay uncertain input.
+
+For local Chromium, set `BROWSER_JOURNEY_ENGINE=local-chromium` and
+`BROWSER_TEST_EXECUTABLE` to Chrome's executable path. Human authentication setup can use
+`BROWSER_JOURNEY_HEADLESS=false`, `BROWSER_JOURNEY_SETUP_URL`, and a host-owned
+`BROWSER_JOURNEY_SETUP_SELECTOR`. The agent starts after that selector appears; setup
+duration is recorded separately. `BROWSER_JOURNEY_START_URL` opens the task's page after
+setup. An optional `BROWSER_JOURNEY_PROFILE` retains a dedicated local test profile;
+keep its credentials outside evidence exports and remove it after testing.
+`BROWSER_JOURNEY_ALLOWED_URL_PREFIX` limits operations to that origin and path.
+Do not put credentials in goals, selectors, or artifact paths.
 
 ## Run locally
 

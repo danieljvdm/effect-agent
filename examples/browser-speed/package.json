@@ -11,6 +11,7 @@
     "@effect/ai-openai-compat": "catalog:",
     "@effect/ai-typesafe": "catalog:",
     "@effect/atom-react": "catalog:",
+    "@effect/platform-bun": "catalog:",
     "@fontsource-variable/ibm-plex-sans": "catalog:",
     "@fontsource/ibm-plex-mono": "catalog:",
     "effect": "catalog:",
