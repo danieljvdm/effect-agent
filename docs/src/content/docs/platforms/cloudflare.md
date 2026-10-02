@@ -213,7 +213,12 @@ custom Crypto or namespace composition, and `threadNamespaceLayer` for untyped e
 In an authenticated handler, call `client.submit(agent, input, options)` with the thread ID,
 principal, idempotency key, and definition digests. Return its receipt after admission.
 
-Use `client.awaitSettlement(receipt)` for completion.
+Use `client.awaitSettlement(receipt)` for completion metadata. When you also need the output,
+use `client.awaitSettlementRecord(receipt)` to wait for finalization and retrieve that receipt's
+canonical terminal record in one call. It requires both settlement and observation permission.
+For an ordinary completed record, decode `record.result` with your Agent's output Schema;
+joined completion may have no independent result. Failed and aborted outcomes remain records.
+
 For updates, call `readPage`, then `awaitProgress`, then read after the last received sequence.
 Scope progress waits so interruption cancels them remotely.
 Cancellation is best effort and waits at most one second for the remote reply, so a lost reply

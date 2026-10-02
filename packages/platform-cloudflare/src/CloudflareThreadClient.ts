@@ -16,6 +16,7 @@ import {
   CanonicalSequence,
   DefinitionDigests,
   PersistedJson,
+  SubmissionSettledRecord,
   WorkerAdmission,
 } from "effect-agent/records";
 import {
@@ -198,6 +199,13 @@ export class SettlementReached extends Schema.TaggedClass<SettlementReached>(
   settlement: Settlement,
 }) {}
 
+/** The exact canonical record of an operationally finalized Submission. */
+export class SettlementRecordReached extends Schema.TaggedClass<SettlementRecordReached>(
+  "@effect-agent/platform-cloudflare/SettlementRecordReached",
+)("SettlementRecordReached", {
+  record: SubmissionSettledRecord,
+}) {}
+
 export class ObservedPage extends Schema.TaggedClass<ObservedPage>(
   "@effect-agent/platform-cloudflare/ObservedPage",
 )("ObservedPage", {
@@ -242,6 +250,7 @@ export class HostFailed extends Schema.TaggedClass<HostFailed>(
 export const HostResponse = Schema.Union([
   SubmitSucceeded,
   SettlementReached,
+  SettlementRecordReached,
   SubmissionStatusResponse,
   ObservedPage,
   ProgressObserved,
@@ -361,6 +370,7 @@ const outOfContract = (threadId: string, operation: string, observed: string): T
 const hostRpcMethods = {
   submit: "submitEncoded",
   awaitSettlement: "awaitSettlementEncoded",
+  awaitSettlementRecord: "awaitSettlementRecordEncoded",
   submissionStatus: "submissionStatusEncoded",
   awaitProgress: "awaitProgressEncoded",
   cancelProgress: "cancelProgressEncoded",
@@ -385,6 +395,14 @@ export class CloudflareThreadClient extends Context.Service<
       receipt: Receipt,
     ) => Effect.Effect<SubmissionStatus, ClientAwaitFailure>;
     readonly awaitSettlement: (receipt: Receipt) => Effect.Effect<Settlement, ClientAwaitFailure>;
+    /**
+     * Wait for finalization and return this Receipt's canonical terminal record in one RPC.
+     * Requires both settlement and observation authority. Decode an ordinary completed
+     * record's result through the Agent output Schema; joined completion may have no result.
+     */
+    readonly awaitSettlementRecord: (
+      receipt: Receipt,
+    ) => Effect.Effect<SubmissionSettledRecord, ClientAwaitFailure>;
     /**
      * Wait without polling until progress after `afterSequence` is already durable or hinted.
      * The result is deliberately void: canonical records remain authoritative and must be read.
@@ -674,6 +692,28 @@ export class CloudflareThreadClient extends Context.Service<
             )(response);
 
             return settled.settlement;
+          }),
+
+        awaitSettlementRecord: (receipt) =>
+          Effect.gen(function* () {
+            const encoded = yield* encodeReceipt(receipt).pipe(
+              Effect.mapError((error) =>
+                HostProtocolError.make({
+                  message: boundHostDiagnostic(`receipt encode failed: ${error.message}`),
+                }),
+              ),
+            );
+
+            const response = yield* call(receipt.threadId, "awaitSettlementRecord", encoded);
+
+            const settled = yield* expect(
+              receipt.threadId,
+              "awaitSettlementRecord",
+              SettlementRecordReached,
+              ClientAwaitHostFailure,
+            )(response);
+
+            return settled.record;
           }),
 
         awaitProgress: (threadId, afterSequence) =>
