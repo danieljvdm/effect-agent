@@ -1,6 +1,6 @@
 import { makeSqlTransaction, SqlInteger } from "@effect-agent/storage-sql/sql-storage";
 import { makeSqlThreadStore } from "@effect-agent/storage-sql/sql-thread-store";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import type { Crypto } from "effect";
 import { Duration, Effect, Layer, Schema } from "effect";

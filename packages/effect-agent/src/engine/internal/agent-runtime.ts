@@ -8059,11 +8059,19 @@ const enforceDurationDeadline = <A, E, R>(
     );
   });
 
+  // The pull stays inside this stream and uses its current scoped services.
+  const makePull = Effect.flatMap(Scope.Scope, (scope) =>
+    Channel.toPullScoped(execution.channel, scope),
+  ).pipe(
+    // Match Channel.toPull: acquisition causes are delivered by the returned pull.
+    Effect.catchCause((cause) => Effect.succeed(Effect.failCause(cause))),
+  );
+
   // Guard acquisition and each pull against the same deadline. A merged timer
   // stream can deadlock at a cooperative scheduler yield (see #692).
-  return Stream.fromPull(
-    beforeDeadline(Stream.toPull(execution)).pipe(Effect.map(beforeDeadline)),
-  ).pipe(Stream.scoped);
+  return Stream.fromPull(beforeDeadline(makePull).pipe(Effect.map(beforeDeadline))).pipe(
+    Stream.scoped,
+  );
 };
 
 const guardBudgetStream = <A, E, R, HookError, HookRequirements>(
@@ -8902,8 +8910,7 @@ function streamWithCompletion<
       const events = modeled.pipe(
         // The engine composition boundary owns span-lifecycle isolation while preserving the host's
         // ambient Tracer/Logger configuration. Individual Tool executions consume this capability.
-        Stream.provide(ToolSpanTelemetry.layer),
-        Stream.provide(programmaticAuthorization),
+        Stream.provide(ToolSpanTelemetry.layer.pipe(Layer.provideMerge(programmaticAuthorization))),
       );
 
       if (retained === undefined && onCompleted === undefined) return events;

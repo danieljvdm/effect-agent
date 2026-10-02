@@ -67,6 +67,10 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
   const canonicalRecordJson = Schema.fromJsonString(CanonicalRecord);
   const decodeRecordJson = Schema.decodeEffect(canonicalRecordJson);
   const encodeRecordJson = Schema.encodeEffect(canonicalRecordJson);
+  const decodeThreadId = Schema.decodeEffect(CanonicalRecordEnvelope.fields.threadId);
+  const decodeBatchId = Schema.decodeEffect(CanonicalRecordEnvelope.fields.batchId);
+  const decodeSequence = Schema.decodeEffect(CanonicalSequence);
+  const decodeObservationOffset = Schema.decodeEffect(ObservationOffset);
 
   const storeError = (operation: string, error: { readonly message: string }) =>
     ThreadStoreError.make({
@@ -81,20 +85,6 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
       operation,
       message: error.message,
     });
-
-  const makeOffset = Effect.fn("SqlThreadStore.makeOffset")(function* (
-    threadId: ThreadMaterialization["threadId"],
-    sequence: number,
-  ): Effect.fn.Return<ObservationOffset, ThreadStoreError> {
-    return yield* Schema.decodeEffect(CanonicalSequence)(sequence).pipe(
-      Effect.flatMap((validatedSequence) =>
-        Schema.decodeEffect(ObservationOffset)(
-          `${OFFSET_PREFIX}${encodeURIComponent(threadId)}:${validatedSequence}`,
-        ),
-      ),
-      Effect.mapError((error) => schemaStoreError("encode observation offset", error)),
-    );
-  });
 
   const parseOffset = Effect.fn("SqlThreadStore.parseOffset")(function* (
     threadId: ThreadMaterialization["threadId"],
@@ -153,14 +143,16 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
     );
   });
 
-  const decodeEnvelope = Effect.fn("SqlThreadStore.decodeEnvelope")(function* (row: {
+  // Scalar decoders resolve immediately; eager error mapping preserves that fast path between
+  // the full canonical JSON decode and envelope construction, within the enclosing read span.
+  const decodeEnvelope = Effect.fnUntraced(function* (row: {
     readonly batch_id: string;
     readonly thread_id: string;
     readonly record_json: string;
     readonly sequence: CanonicalSequence;
   }) {
     const record = yield* decodeRecordJson(row.record_json).pipe(
-      Effect.mapError((error) =>
+      Effect.mapErrorEager((error) =>
         ThreadStoreError.make({
           operation: "decode canonical record",
           message: error.message,
@@ -168,20 +160,26 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
       ),
     );
 
-    const threadId = yield* Schema.decodeEffect(CanonicalRecordEnvelope.fields.threadId)(
-      row.thread_id,
-    ).pipe(Effect.mapError((error) => schemaStoreError("decode thread identity", error)));
+    const threadId = yield* decodeThreadId(row.thread_id).pipe(
+      Effect.mapErrorEager((error) => schemaStoreError("decode thread identity", error)),
+    );
 
-    const offset = yield* makeOffset(threadId, row.sequence);
+    const sequence = yield* decodeSequence(row.sequence).pipe(
+      Effect.mapErrorEager((error) => schemaStoreError("encode observation offset", error)),
+    );
 
-    const batchId = yield* Schema.decodeEffect(CanonicalRecordEnvelope.fields.batchId)(
-      row.batch_id,
-    ).pipe(Effect.mapError((error) => schemaStoreError("decode batch identity", error)));
+    const offset = yield* decodeObservationOffset(
+      `${OFFSET_PREFIX}${encodeURIComponent(threadId)}:${sequence}`,
+    ).pipe(Effect.mapErrorEager((error) => schemaStoreError("encode observation offset", error)));
+
+    const batchId = yield* decodeBatchId(row.batch_id).pipe(
+      Effect.mapErrorEager((error) => schemaStoreError("decode batch identity", error)),
+    );
 
     return CanonicalRecordEnvelope.make({
       threadId,
       batchId,
-      sequence: row.sequence,
+      sequence,
       offset,
       record,
     });

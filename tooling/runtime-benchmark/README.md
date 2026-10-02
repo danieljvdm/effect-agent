@@ -93,10 +93,13 @@ boundaries remain unchanged.
 it checks the command, not statistical confidence. `extended` takes 30 samples per revision and
 adds 8,192 records. `archive` adds 100,000 records with nine measured samples. Larger profiles
 are manual workflow-dispatch options and can take substantial time. Individual sample attempts,
-including setup, are bounded to three minutes; PR child processes to five minutes. The controller
-stops after 19 minutes, before the comparison step's 20-minute limit and the job's 30-minute limit,
-and gives interrupted children five seconds to stop before forceful termination. Timeouts retain
-partial evidence and fail correctness. No scheduled or paid execution is configured here.
+including setup, are bounded to three minutes, or fifteen minutes for `archive`: constructing the
+100,000-row settled ledger uses the production admission and settlement protocol before timing.
+PR and smoke warm workers have a five-minute limit and their controller stops after nineteen
+minutes. Extended and archive warm workers have a ninety-minute limit, with a 160-minute controller
+limit. Cold subprocesses have a thirty-second limit. Interrupted children get five seconds to stop
+before forceful termination. Timeouts retain partial evidence and fail correctness. No scheduled
+or paid execution is configured here.
 
 | Case                      | Completed work and timing boundary                                                                                                                                                                                                                                                                                                                        |
 | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

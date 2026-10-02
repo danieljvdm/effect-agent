@@ -10,7 +10,7 @@ import {
   createNativeReadIndexes,
   seedNativeReadIndexes,
 } from "@effect-agent/storage-sql/sql-thread-native-reads";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { SqliteMigrator } from "@effect/sql-sqlite-node";
 import { Effect, Schema } from "effect";
 import { ScheduleFailpoint, ScheduleFailpointError } from "effect-agent/schedule";

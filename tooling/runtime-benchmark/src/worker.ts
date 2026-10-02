@@ -86,7 +86,14 @@ export const runWorker = Effect.fn("benchmark.runWorker")(function* (
             elapsedMs: 0,
           };
           yield* persist();
-          samples.push(yield* runner.run(workload, index, index < options.warmups));
+          samples.push(
+            yield* runner.run(workload, index, index < options.warmups, {
+              // Constructing 100,000 settled submissions uses the production admission
+              // and settlement protocol. Keep that untimed setup within a finite budget
+              // without applying the small-profile timeout to the archive fixture.
+              timeout: options.profile === "archive" ? "15 minutes" : "3 minutes",
+            }),
+          );
           active = null;
           // Keep partial failures and slow samples even when a later child is interrupted.
           yield* persist();

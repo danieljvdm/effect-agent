@@ -1,5 +1,5 @@
 import { makeSqlSubmissionLedger } from "@effect-agent/storage-sql/sql-submission-ledger";
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import type { Crypto } from "effect";
 import { Effect, Layer } from "effect";

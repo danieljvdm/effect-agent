@@ -1,4 +1,4 @@
-import { NodeCrypto } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { type Stream, Context, Effect, Fiber, Layer, Ref, Schema } from "effect";
 import {
   type IntegrityReport,
