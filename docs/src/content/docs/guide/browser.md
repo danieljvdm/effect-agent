@@ -170,6 +170,8 @@ of existing content before trusted deletion and typing; unsupported selection re
 `not-dispatched`. Closed shadow roots
 and transformed iframe coordinate spaces are unsupported. Switching tabs expires the previous page's
 references; tab selection stays inside the attachment's browser context.
+Frame and tab URL summaries omit `data:` document payloads. Host authorization always
+receives the complete native URL.
 
 Before input, the adapter checks node identity, current state and visibility, including
 iframe parents. Pointer input requires an unobstructed hit; keyboard input verifies native

@@ -67,6 +67,16 @@ const Limits = Schema.Struct({
 const invalid = (message: string) =>
   new BrowserUseError({ code: "invalid", message, dispatch: "not-dispatched" });
 
+// URL evidence identifies pages; opaque document payloads are not page observations.
+// Authorization and navigation fencing always use the complete native SDK URL.
+const observedUrl = (url: string): string => {
+  const payload = url.startsWith("data:") ? url.indexOf(",") : -1;
+
+  return payload < 0
+    ? url.slice(0, 8_192)
+    : `${url.slice(0, Math.min(payload, 256))},[payload omitted]`;
+};
+
 /** One application-neutral controller over an existing scoped native attachment.
  * No allocation, model, provider choice, automatic retry, or arbitrary page JS is exposed.
  * References expire on inspection; outstanding native work retains the session's fencing.
@@ -373,7 +383,7 @@ export const make = Effect.fnUntraced(function* <R>(
 
       const tabObservation = currentTabs
         .slice(0, 32)
-        .map((tab) => ({ ref: tabId(tab), url: tab.url().slice(0, 8192), active: tab === page }));
+        .map((tab) => ({ ref: tabId(tab), url: observedUrl(tab.url()), active: tab === page }));
 
       const pending = pendingDialogs.get(page);
 
@@ -472,7 +482,7 @@ export const make = Effect.fnUntraced(function* <R>(
         frames: currentFrames.slice(0, 32).map((frame) => ({
           ref: frameId(frame),
           name: frame.name().slice(0, 300),
-          url: frame.url().slice(0, 8_192),
+          url: observedUrl(frame.url()),
           inspected: inspected.includes(frame),
         })),
         tabs: tabObservation,
