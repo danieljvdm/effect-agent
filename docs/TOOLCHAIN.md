@@ -13,16 +13,16 @@ Effect and `effect-cf` catalog versions, so it validates the current framework.
 use local source; registry dependencies, including transitive ones, stay on published packages.
 Commit the Bun lockfile; CI installs with `--frozen-lockfile`.
 
-| Tool                                                    | Repository version                                  |
-| ------------------------------------------------------- | --------------------------------------------------- |
-| Bun                                                     | `1.4.2`                                             |
-| Vite+                                                   | `0.3.3`                                             |
-| Alchemy and its Cloudflare runtime                      | `2.0.0-beta.77` with upstream compatibility patches |
-| Effect and its provider/platform/SQL/Atom/test packages | `4.0.0`                                             |
-| `effect-cf`                                             | `0.53.0`                                            |
-| TypeScript                                              | `7.0.2`                                             |
-| `@effect/tsgo`                                          | `0.45.0`                                            |
-| Node.js                                                 | `22.18+` or `24.11+`                                |
+| Tool                                                    | Repository version   |
+| ------------------------------------------------------- | -------------------- |
+| Bun                                                     | `1.4.2`              |
+| Vite+                                                   | `0.3.3`              |
+| Alchemy and its Cloudflare runtime                      | `2.0.0-beta.80`      |
+| Effect and its provider/platform/SQL/Atom/test packages | `4.0.0`              |
+| `effect-cf`                                             | `0.53.0`             |
+| TypeScript                                              | `7.0.2`              |
+| `@effect/tsgo`                                          | `0.45.0`             |
+| Node.js                                                 | `22.18+` or `24.11+` |
 
 Public packages require `effect@^4.0.0` as a peer. The exact catalog pin supplies the
 development version. Raise the peer minimum when code needs a newer API.
@@ -49,15 +49,9 @@ Astro uses its own Vite dependency. Keep the root Vite+ core alias required by V
 do not add a global Vite override.
 
 Alchemy is deployment tooling; framework packages do not depend on it at runtime.
-Alchemy and its Cloudflare runtime advance together. Their published beta.77 packages and
-Distilled rc.9 clients still use Effect APIs renamed in rc.113. The version-specific Bun
-patches backport [Alchemy's compatibility fix](https://github.com/alchemy-run/alchemy/pull/1562)
-and [Distilled's matching fix](https://github.com/alchemy-run/distilled/pull/575), including the
-published JavaScript entry points. The patches also update the removed Effect import paths
-and URL-safe Base64 encoding for Effect 4.0.0, including Alchemy's Neon client. The root
-declares `mime` because the Cloudflare runtime
-imports it without declaring the dependency. Keep these corrections until a published upgrade
-includes them; verify that upgrade with a frozen install and `vp run check:deploy`.
+Alchemy and its Cloudflare runtime advance together. Their published beta.80 packages and
+Distilled rc.13 clients support stable Effect 4 directly, without repository compatibility
+patches. Verify upgrades with a frozen install and `vp run check:deploy`.
 
 The demo uses Auth beta.11 and its compatible Drizzle, GitHub, and crypto companions,
 which support stable Effect directly. Verify auth upgrades with the existing integration checks
