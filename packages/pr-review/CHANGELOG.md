@@ -1,5 +1,12 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.166
+
+### Patch Changes
+
+- Updated dependencies [[`66ef052`](https://github.com/yielded-dev/agent/commit/66ef0528e335db44c9d909ea7f3e8010c19800e0)]:
+  - effect-agent@0.1.0-beta.166
+
 ## 0.1.0-beta.165
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.166
+
+### Patch Changes
+
+- [`66ef052`](https://github.com/yielded-dev/agent/commit/66ef0528e335db44c9d909ea7f3e8010c19800e0) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reuse immutable tool schema projections and successful fallback operation contracts across policy-only definition copies. Preserve operation hashes, host Crypto ownership, and validation failures.
+
 ## 0.1.0-beta.165
 
 ### Patch Changes
