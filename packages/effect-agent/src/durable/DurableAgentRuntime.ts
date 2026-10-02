@@ -10745,9 +10745,15 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     return yield* submit(agent, input, { ...options, definitions: binding.digests });
   });
 
-  const readSubmissionStatus = Effect.fn("DurableAgentRuntime.readSubmissionStatus")(function* (
+  const readFinalizedSubmission = Effect.fn("DurableAgentRuntime.readSubmissionStatus")(function* (
     receipt: Receipt,
-  ): Effect.fn.Return<SubmissionStatus, DurableAwaitFailure> {
+  ): Effect.fn.Return<
+    Option.Option<{
+      readonly settlement: Settlement;
+      readonly record: SubmissionSettledRecord;
+    }>,
+    DurableAwaitFailure
+  > {
     const snapshot = yield* ledger.lookup(
       SubmissionLookupById.make({ submissionId: receipt.submissionId }),
     );
@@ -10770,7 +10776,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         submissionId: receipt.submissionId,
       });
     }
-    if (snapshot.value.state !== "settled") return PendingSubmission.make({});
+    if (snapshot.value.state !== "settled") return Option.none();
 
     // Finalization replay reads the canonical outcome without changing settledAt.
     const settlement = yield* ledger.finalizeSettlement(
@@ -10780,13 +10786,54 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       }),
     );
 
-    const recovery = yield* ledger.loadRecoverySnapshot(
-      RecoverySnapshotRequest.make({ submissionId: receipt.submissionId }),
+    const canonical = yield* getRecord({
+      threadId: receipt.threadId,
+      recordId: submissionSettlementRecordId(receipt.submissionId),
+    }).pipe(
+      Effect.provideService(ThreadStore, store),
+      Effect.mapError((cause) =>
+        LedgerError.make({
+          operation: "awaitSettlement",
+          message: "Cannot read the finalized canonical Settlement",
+          cause,
+        }),
+      ),
     );
 
-    return SettledSubmission.make({
-      settlement: materializeSettlement(settlement, recovery.reservation?.record),
+    if (Option.isNone(canonical)) {
+      return yield* LedgerError.make({
+        operation: "awaitSettlement",
+        message: "Finalized Submission has no canonical Settlement",
+      });
+    }
+
+    const record = yield* settlementPayloadFromRecord(canonical.value.record, receipt.submissionId);
+
+    if (
+      record.receiptId !== receipt.receiptId ||
+      record.settlementId !== settlement.settlementId ||
+      record.outcome !== settlement.outcome
+    ) {
+      return yield* LedgerError.make({
+        operation: "awaitSettlement",
+        message: "Canonical Settlement disagrees with the receipt or finalized outcome",
+      });
+    }
+
+    return Option.some({
+      settlement: materializeSettlement(settlement, canonical.value.record),
+      record,
     });
+  });
+
+  const readSubmissionStatus = Effect.fnUntraced(function* (
+    receipt: Receipt,
+  ): Effect.fn.Return<SubmissionStatus, DurableAwaitFailure> {
+    const finalized = yield* readFinalizedSubmission(receipt);
+
+    return Option.isNone(finalized)
+      ? PendingSubmission.make({})
+      : SettledSubmission.make({ settlement: finalized.value.settlement });
   });
 
   const submissionStatus = Effect.fn("DurableAgentRuntime.submissionStatus")(function* (
@@ -10801,67 +10848,50 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     receipt: Receipt,
   ) {
     yield* authorizeSettlement(receipt);
-    const status = yield* readSubmissionStatus(receipt);
+    const finalized = yield* readFinalizedSubmission(receipt);
 
-    if (status._tag !== "settled") {
+    if (Option.isNone(finalized)) {
       return yield* LedgerError.make({
         operation: "settlementRecord",
         message: "Submission has not settled",
       });
     }
 
-    const snapshot = yield* ledger.loadRecoverySnapshot(
-      RecoverySnapshotRequest.make({ submissionId: receipt.submissionId }),
-    );
-
-    if (snapshot.reservation === undefined) {
-      return yield* LedgerError.make({
-        operation: "settlementRecord",
-        message: "Settlement has no canonical reservation",
-      });
-    }
-
-    const record = yield* settlementPayloadFromRecord(
-      snapshot.reservation.record,
-      receipt.submissionId,
-    );
-
-    if (
-      record.receiptId !== receipt.receiptId ||
-      record.settlementId !== status.settlement.settlementId ||
-      record.outcome !== status.settlement.outcome
-    ) {
-      return yield* LedgerError.make({
-        operation: "settlementRecord",
-        message: "Canonical Settlement disagrees with the receipt or finalized outcome",
-      });
-    }
-
-    return record;
+    return finalized.value.record;
   });
 
-  const awaitSettlement = Effect.fn("DurableAgentRuntime.awaitSettlement")(function* (
-    receipt: Receipt,
-  ): Effect.fn.Return<Settlement, DurableAwaitFailure> {
+  const awaitFinalizedSubmission = Effect.fnUntraced(function* (receipt: Receipt) {
     // Authorization lasts for this wait, as it does for one observe subscription.
     yield* authorizeSettlement(receipt);
     while (true) {
-      const status = yield* Effect.scoped(
+      const finalized = yield* Effect.scoped(
         Effect.gen(function* () {
           // Register before reading the ledger so settlement between the read and
           // parking cannot be lost. Hints never replace the authoritative re-read.
           const awaitHint = yield* wake.subscribe(receipt.threadId);
-          const status = yield* readSubmissionStatus(receipt);
+          const finalized = yield* readFinalizedSubmission(receipt);
 
-          if (status._tag !== "settled")
+          if (Option.isNone(finalized))
             yield* Effect.raceFirst(awaitHint, Effect.sleep(config.settlementPollInterval));
 
-          return status;
+          return finalized;
         }),
       );
 
-      if (status._tag === "settled") return status.settlement;
+      if (Option.isSome(finalized)) return finalized.value;
     }
+  });
+
+  const awaitSettlement = Effect.fn("DurableAgentRuntime.awaitSettlement")(function* (
+    receipt: Receipt,
+  ) {
+    return (yield* awaitFinalizedSubmission(receipt)).settlement;
+  });
+
+  const awaitSettlementRecord = Effect.fn("DurableAgentRuntime.awaitSettlementRecord")(function* (
+    receipt: Receipt,
+  ) {
+    return (yield* awaitFinalizedSubmission(receipt)).record;
   });
 
   const awaitProgress = Effect.fn("DurableAgentRuntime.awaitProgress")(function* (
@@ -11554,6 +11584,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     submissionStatus,
     inspectSubmissionStatus: readSubmissionStatus,
     awaitSettlement,
+    awaitSettlementRecord,
     awaitProgress,
     observe,
     abort,
@@ -11666,6 +11697,10 @@ export class DurableAgentRuntime extends Context.Service<
       options: DurableSubmitOptions,
     ) => Effect.Effect<Receipt, DurableSubmitFailure, InputSchema["EncodingServices"]>;
     readonly awaitSettlement: (receipt: Receipt) => Effect.Effect<Settlement, DurableAwaitFailure>;
+    /** Wait under settlement authority for the exact canonical terminal record, including encoded output. */
+    readonly awaitSettlementRecord: (
+      receipt: Receipt,
+    ) => Effect.Effect<SubmissionSettledRecord, DurableAwaitFailure>;
     /** Authorized, nonblocking read. Only the durable Settlement marks work complete. */
     readonly submissionStatus: (
       receipt: Receipt,
