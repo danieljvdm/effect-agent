@@ -141,7 +141,7 @@
     "@alchemy.run/cloudflare-runtime": "2.0.0-beta.77",
     "jose": "6.2.12",
     "@astrojs/starlight": "0.42.4",
-    "@yielded/starlight-theme": "0.1.3",
+    "@yielded/starlight-theme": "0.2.1",
     "astro": "7.3.5",
     "expressive-code-twoslash": "0.6.1",
     "starlight-links-validator": "0.26.0",
