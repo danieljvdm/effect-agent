@@ -30,6 +30,23 @@ export const inspectDom = (
     const discovery = document.createTreeWalker(
       root,
       NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+      {
+        acceptNode: (node) => {
+          if (!(node instanceof Element)) return NodeFilter.FILTER_ACCEPT;
+          const style = getComputedStyle(node);
+
+          // Hidden templates and collapsed option lists must not consume the
+          // observation budget before the rendered page is reached.
+          return node.matches(
+            'script,style,template,option,optgroup,[inert],[aria-hidden="true"]',
+          ) ||
+            style.display === "none" ||
+            style.opacity === "0" ||
+            style.contentVisibility === "hidden"
+            ? NodeFilter.FILTER_REJECT
+            : NodeFilter.FILTER_ACCEPT;
+        },
+      },
     );
 
     const nodes: Array<Element> = [];
@@ -418,41 +435,52 @@ export const checkFrameDom = (node: Element, point: { x: number; y: number }, sc
 
 export const waitDom = (selector: string, state: string, text: string | undefined) => {
   const roots: Array<Document | ShadowRoot> = [document];
-  const nodes: Array<Element> = [];
   let scanned = 0;
 
   for (let index = 0; index < roots.length; index++) {
     const root = roots[index];
 
     if (root === undefined) break;
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
+      acceptNode: (node) => {
+        if (!(node instanceof Element)) return NodeFilter.FILTER_ACCEPT;
+        const style = getComputedStyle(node);
+
+        return node.matches('script,style,template,option,optgroup,[inert],[aria-hidden="true"]') ||
+          style.display === "none" ||
+          style.opacity === "0" ||
+          style.contentVisibility === "hidden"
+          ? NodeFilter.FILTER_REJECT
+          : NodeFilter.FILTER_ACCEPT;
+      },
+    });
+
     let node = walker.nextNode();
 
     while (node !== null) {
       if (++scanned > 10_000) return false;
       if (node instanceof Element) {
-        if (node.matches(selector)) nodes.push(node);
         if (node.shadowRoot !== null) roots.push(node.shadowRoot);
+        if (
+          node instanceof HTMLElement &&
+          node.matches(selector) &&
+          node.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+        ) {
+          if (state === "hidden") return false;
+          if (
+            state === "visible" ||
+            (state === "enabled" &&
+              !node.matches(":disabled") &&
+              node.getAttribute("aria-disabled") !== "true") ||
+            (state === "text" && text !== undefined && node.innerText.includes(text))
+          )
+            return true;
+        }
       }
       node = walker.nextNode();
     }
   }
 
-  if (state === "hidden")
-    return Array.from(nodes).every(
-      (node) =>
-        !(node instanceof HTMLElement) ||
-        !node.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
-    );
-
-  return Array.from(nodes).some(
-    (node) =>
-      node instanceof HTMLElement &&
-      node.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) &&
-      (state === "visible" ||
-        (state === "enabled" &&
-          !node.matches(":disabled") &&
-          node.getAttribute("aria-disabled") !== "true") ||
-        (state === "text" && text !== undefined && node.textContent?.includes(text))),
-  );
+  return state === "hidden";
 };

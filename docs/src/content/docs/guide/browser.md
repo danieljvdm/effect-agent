@@ -160,7 +160,8 @@ shows the complete composition.
 An observation contains live values, options, disabled/checked state, frame and tab
 references, and visible controls outside the viewport, including open shadow roots.
 It marks truncation explicitly. Inspection expires previous control references; narrow
-by selector or an observed frame when necessary. Default inspection reads the main frame;
+by selector or an observed frame when necessary. Hidden content is excluded from bounded
+inspection and text waits. Default inspection reads the main frame;
 other frames are listed with `inspected: false` for explicit lookup. After input, observation
 follows the target frame, falling back to the main frame if it detached. Use `optionFilter`
 to find select options by label or value; current selections remain visible. Native fill
