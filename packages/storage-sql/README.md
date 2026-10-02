@@ -1,17 +1,17 @@
-# @effect-agent/storage-sql
+# @yielded/agent-storage-sql
 
 Shared SQL persistence for Effect Agent storage adapters. It owns the journal, submission
 ledger, thread reads, schedules, subscriptions, message delivery, and activity transitions.
 
 ```text
-effect-agent ports
+@yielded/agent ports
        ↑
    storage-sql
        ↑
 SQLite / Postgres adapters
 ```
 
-Applications use `@effect-agent/storage-sqlite` or `@effect-agent/storage-postgres`. Adapters
+Applications use `@yielded/agent-storage-sqlite` or `@yielded/agent-storage-postgres`. Adapters
 supply a `SqlClient`, typed diagnostics, failpoints, and native transaction settings. Journal
 format checks and supported upgrades remain adapter-owned; standalone activity initialization
 is shared here.

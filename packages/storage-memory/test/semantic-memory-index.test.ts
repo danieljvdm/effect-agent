@@ -1,17 +1,17 @@
+import { describe, expect, it } from "@effect/vitest";
 import {
   InMemorySemanticIndexCapacity,
   inMemorySemanticIndexLayer,
-} from "@effect-agent/storage-memory/memory-semantic-index";
-import { describe, expect, it } from "@effect/vitest";
-import { Schema as NamespaceSchema, Effect, Schema } from "effect";
-import * as MemoryNamespace from "effect-agent/memory-namespace";
+} from "@yielded/agent-storage-memory/memory-semantic-index";
+import * as MemoryNamespace from "@yielded/agent/memory-namespace";
 import {
   MemoryIndexQuery,
   MemoryIndexSource,
   SemanticMemoryChunk,
   SemanticMemoryIndex,
   SemanticMemoryProfile,
-} from "effect-agent/semantic-memory-index";
+} from "@yielded/agent/semantic-memory-index";
+import { Schema as NamespaceSchema, Effect, Schema } from "effect";
 import { Hex } from "effect/encoding";
 
 const TestNamespace = MemoryNamespace.define({

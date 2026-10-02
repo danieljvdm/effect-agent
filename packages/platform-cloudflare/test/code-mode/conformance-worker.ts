@@ -1,5 +1,3 @@
-import { DurableObject } from "cloudflare:workers";
-import { Duration, Effect, ManagedRuntime, Predicate, type Layer } from "effect";
 import {
   CodeExecutionHost,
   CodeExecutionLimits,
@@ -9,8 +7,10 @@ import {
   CodeHostCallFailure,
   CodeHostCallSuccess,
   type CodeExecutionError,
-} from "effect-agent/code-executor";
-import { NetworkDisabled } from "effect-agent/sandbox";
+} from "@yielded/agent/code-executor";
+import { NetworkDisabled } from "@yielded/agent/sandbox";
+import { DurableObject } from "cloudflare:workers";
+import { Duration, Effect, ManagedRuntime, Predicate, type Layer } from "effect";
 
 import { dynamicWorkerCodeExecutorLayer } from "../../src/CloudflareCodeMode.ts";
 

@@ -1,6 +1,6 @@
 ---
 title: Getting started
-description: Install Effect Agent and run your first agent.
+description: Install Yielded Agent and run your first agent.
 ---
 
 <a id="getting-started"></a>
@@ -14,7 +14,7 @@ Build an agent that classifies a bug report and returns a typed result.
 In a TypeScript project with [Bun](https://bun.sh):
 
 ```sh
-bun add effect-agent@beta effect
+bun add @yielded/agent@beta effect
 ```
 
 Use an Effect AI provider for model access. See the [package map](/reference/packages/)
@@ -25,7 +25,7 @@ for compatibility.
 Save as `agent.ts`:
 
 ```ts
-import { InMemory, Agent, AgentRuntime } from "effect-agent";
+import { InMemory, Agent, AgentRuntime } from "@yielded/agent";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { BunRuntime } from "@effect/platform-bun";
 import { Config, Console, Effect, Schema } from "effect";

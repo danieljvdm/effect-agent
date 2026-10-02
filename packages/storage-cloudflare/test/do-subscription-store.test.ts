@@ -1,10 +1,9 @@
+import { SqliteClient } from "@effect/sql-sqlite-do";
 import {
   DoSubscriptionTransaction,
   doSubscriptionStoreLayer,
-} from "@effect-agent/storage-cloudflare/do-subscription-store";
-import { SqliteClient } from "@effect/sql-sqlite-do";
-import { Effect, Layer, Schema } from "effect";
-import { Digest } from "effect-agent/records";
+} from "@yielded/agent-storage-cloudflare/do-subscription-store";
+import { Digest } from "@yielded/agent/records";
 import {
   AcceptedEvent,
   defaultSubscriptionLimits,
@@ -13,11 +12,12 @@ import {
   SubscriptionFailpointError,
   SubscriptionError,
   SubscriptionStore,
-} from "effect-agent/subscription";
+} from "@yielded/agent/subscription";
 import {
   subscriptionConformancePartition,
   subscriptionStoreConformanceCases,
-} from "effect-agent/testing/subscription-store-conformance";
+} from "@yielded/agent/testing/subscription-store-conformance";
+import { Effect, Layer, Schema } from "effect";
 import * as SqlClientService from "effect/sql/SqlClient";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vite-plus/test";

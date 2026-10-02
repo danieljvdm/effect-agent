@@ -1,4 +1,4 @@
-# effect-agent
+# @yielded/agent
 
 ## 0.1.0-beta.165
 

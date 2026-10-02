@@ -1,39 +1,39 @@
 import {
   type ThreadMaintenanceFailpointHandler,
   type ThreadMaintenanceFailpointLocation,
-} from "@effect-agent/platform-cloudflare/alarm";
-import { type DoStorageFailpointLocation } from "@effect-agent/storage-cloudflare/do-storage-error";
-import { type DoStorageFailpointHandler } from "@effect-agent/storage-cloudflare/do-storage-failpoint";
-import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing/do-storage-failpoint-testing";
-import { type Clock, Deferred, Effect, Layer, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
+} from "@yielded/agent-platform-cloudflare/alarm";
+import { type DoStorageFailpointLocation } from "@yielded/agent-storage-cloudflare/do-storage-error";
+import { type DoStorageFailpointHandler } from "@yielded/agent-storage-cloudflare/do-storage-failpoint";
+import { evictionFailpointHandler } from "@yielded/agent-storage-cloudflare/testing/do-storage-failpoint-testing";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
 import {
   DurableWorkerBinding,
   type BindingSelection,
   type ResolvedBinding,
-} from "effect-agent/agent-registration";
-import * as AgentUpdates from "effect-agent/agent-updates";
-import { estimatePromptTokens } from "effect-agent/compaction";
-import { CompactionError, ContextCompactor } from "effect-agent/context-compactor";
-import { type DurableSubmitOptions } from "effect-agent/durable-agent-runtime";
+} from "@yielded/agent/agent-registration";
+import * as AgentUpdates from "@yielded/agent/agent-updates";
+import { estimatePromptTokens } from "@yielded/agent/compaction";
+import { CompactionError, ContextCompactor } from "@yielded/agent/context-compactor";
+import { type DurableSubmitOptions } from "@yielded/agent/durable-agent-runtime";
 import {
   type DurableRuntimeFailpointHandler,
   type DurableRuntimeFailpointLocation,
-} from "effect-agent/durable-failpoint";
-import { ToolExecutionClass } from "effect-agent/durable-step";
-import { ThreadId, ToolCallId } from "effect-agent/identifiers";
-import { DefinitionDigests, Digest } from "effect-agent/records";
-import { RunToolAuthorization } from "effect-agent/run-options";
+} from "@yielded/agent/durable-failpoint";
+import { ToolExecutionClass } from "@yielded/agent/durable-step";
+import { ThreadId, ToolCallId } from "@yielded/agent/identifiers";
+import { DefinitionDigests, Digest } from "@yielded/agent/records";
+import { RunToolAuthorization } from "@yielded/agent/run-options";
 import {
   ScheduleFailpointError,
   type ScheduleOwner,
   ScheduleRecord,
   ScheduleStorageError,
-} from "effect-agent/schedule";
-import { scheduleOwnerKey } from "effect-agent/schedule-transition";
-import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
-import { ReconciliationUncertain, ToolReconciler } from "effect-agent/tool-reconciler";
+} from "@yielded/agent/schedule";
+import { scheduleOwnerKey } from "@yielded/agent/schedule-transition";
+import { IdempotencyKey, Principal } from "@yielded/agent/submission-ledger";
+import { ReconciliationUncertain, ToolReconciler } from "@yielded/agent/tool-reconciler";
+import { type Clock, Deferred, Effect, Layer, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 
 import { layerFromBindings } from "../src/internal/layers.ts";

@@ -1,20 +1,20 @@
 import { expect, layer } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import { IdGenerator } from "effect-agent/id-generator";
-import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import { IdGenerator } from "@yielded/agent/id-generator";
+import { ThreadId, RunId, TurnId } from "@yielded/agent/identifiers";
 import {
   RunToolAuthorization,
   type RunOptions,
   type RunToolAuthorizationRequest,
-} from "effect-agent/run-options";
+} from "@yielded/agent/run-options";
 import {
   ToolBroker,
   type ToolBrokerPass,
   type ToolBrokerPassOptions,
-} from "effect-agent/tool-broker";
+} from "@yielded/agent/tool-broker";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 
 import { RunContextPreparationPassthrough } from "../../src/engine/RunOptions.ts";

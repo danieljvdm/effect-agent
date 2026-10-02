@@ -1,27 +1,27 @@
-import { makeSqlActivityStore } from "@effect-agent/storage-sql/sql-activity-store";
-import { makeSqlMessageDeliveryStore } from "@effect-agent/storage-sql/sql-message-delivery-store";
-import { makeSqlScheduleStore } from "@effect-agent/storage-sql/sql-schedule-store";
-import { makeSqlSubmissionLedger } from "@effect-agent/storage-sql/sql-submission-ledger";
-import { makeSqlSubscriptionStore } from "@effect-agent/storage-sql/sql-subscription-store";
-import { makeSqlThreadStore } from "@effect-agent/storage-sql/sql-thread-store";
-import { Context, Duration, Effect, Layer, Schema } from "effect";
+import { makeSqlActivityStore } from "@yielded/agent-storage-sql/sql-activity-store";
+import { makeSqlMessageDeliveryStore } from "@yielded/agent-storage-sql/sql-message-delivery-store";
+import { makeSqlScheduleStore } from "@yielded/agent-storage-sql/sql-schedule-store";
+import { makeSqlSubmissionLedger } from "@yielded/agent-storage-sql/sql-submission-ledger";
+import { makeSqlSubscriptionStore } from "@yielded/agent-storage-sql/sql-subscription-store";
+import { makeSqlThreadStore } from "@yielded/agent-storage-sql/sql-thread-store";
 import {
   ActivityMutationFailpoint,
   ActivityProcessorStore,
   ActivityStoreError,
-} from "effect-agent/activity-store";
+} from "@yielded/agent/activity-store";
 import {
   MessageDeliveryStore,
   type MessageDeliveryStoreLimits,
-} from "effect-agent/message-delivery";
-import { ScheduleStore } from "effect-agent/schedule";
+} from "@yielded/agent/message-delivery";
+import { ScheduleStore } from "@yielded/agent/schedule";
 import {
   DEFAULT_OWNERSHIP_LEASE_DURATION,
   LedgerError,
   SubmissionLedger,
-} from "effect-agent/submission-ledger";
-import { SubscriptionError, SubscriptionStore, SourcePartition } from "effect-agent/subscription";
-import { ThreadStore } from "effect-agent/thread-store";
+} from "@yielded/agent/submission-ledger";
+import { SubscriptionError, SubscriptionStore, SourcePartition } from "@yielded/agent/subscription";
+import { ThreadStore } from "@yielded/agent/thread-store";
+import { Context, Duration, Effect, Layer, Schema } from "effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import {

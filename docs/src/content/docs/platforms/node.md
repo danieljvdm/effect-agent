@@ -5,13 +5,13 @@ description: Run durable agents on Node.js with SQLite.
 
 <a id="node-js"></a>
 
-`@effect-agent/platform-node` stores thread history and pending work in SQLite.
+`@yielded/agent-platform-node` stores thread history and pending work in SQLite.
 A bounded worker pool executes registered agents and recovers work after a restart.
 
 ## Install
 
 ```sh
-bun add @effect-agent/platform-node@beta effect
+bun add @yielded/agent-platform-node@beta effect
 ```
 
 Keep framework packages at one release and use compatible [Effect and provider packages](/guide/getting-started/#installation-and-compatibility).
@@ -85,7 +85,7 @@ Use `NodeDurableAgentRuntime.layerRegistered` when you own execution, as in the
 
 The service class's existing `NodeDurableHost.layerRegistered`, `layerStack`, and `layer`
 constructors remain available for manually managed hosts. Import the class from
-`@effect-agent/platform-node/node-durable-host` when using these APIs; their workers start only
+`@yielded/agent-platform-node/node-durable-host` when using these APIs; their workers start only
 when you run `host.runResolvedWorkers`. The module-level `NodeDurableHost.layer` shown above
 owns worker startup and is the default for an application.
 

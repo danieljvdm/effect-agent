@@ -1,17 +1,17 @@
 ---
-title: Effect Agent
+title: Yielded Agent
 description: An agent harness toolkit for TypeScript, built on Effect and Effect AI.
 template: splash
 tableOfContents: false
 hero:
-  title: Effect Agent
+  title: Yielded Agent
   tagline: An agent harness toolkit for TypeScript, built on Effect and Effect AI.
   actions:
     - text: Get started
-      link: /guide/getting-started/
+      link: /agent/guide/getting-started/
       icon: right-arrow
     - text: Introduction
-      link: /guide/introduction/
+      link: /agent/guide/introduction/
       icon: right-arrow
       variant: secondary
 ---

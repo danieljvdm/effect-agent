@@ -1,4 +1,4 @@
-import { makeSqlJournal } from "@effect-agent/storage-sql/sql-journal";
+import { makeSqlJournal } from "@yielded/agent-storage-sql/sql-journal";
 import {
   makeRowDecoder,
   makeSqlQuery,
@@ -6,8 +6,8 @@ import {
   SqlInteger,
   type StorageErrorFields,
   type CorruptionErrorFields,
-} from "@effect-agent/storage-sql/sql-storage";
-import { createStorageSchema } from "@effect-agent/storage-sql/sql-storage-schema";
+} from "@yielded/agent-storage-sql/sql-storage";
+import { createStorageSchema } from "@yielded/agent-storage-sql/sql-storage-schema";
 import { Effect, Schema } from "effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { isSqlError, type SqlError } from "effect/sql/SqlError";

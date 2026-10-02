@@ -1,8 +1,7 @@
 import { it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
-import * as MemoryNamespace from "effect-agent/memory-namespace";
-import { type MemoryContent } from "effect-agent/memory-reference";
-import type { MemoryDocument } from "effect-agent/memory-store";
+import * as MemoryNamespace from "@yielded/agent/memory-namespace";
+import { type MemoryContent } from "@yielded/agent/memory-reference";
+import type { MemoryDocument } from "@yielded/agent/memory-store";
 import {
   applyMemoryWrite,
   MemoryKey,
@@ -12,8 +11,9 @@ import {
   MemoryStorageError,
   MemoryWrite,
   MemoryWriter,
-} from "effect-agent/memory-store";
-import * as Protocol from "effect-agent/remembering-store";
+} from "@yielded/agent/memory-store";
+import * as Protocol from "@yielded/agent/remembering-store";
+import { Effect, Schema } from "effect";
 import { describe, expect } from "vite-plus/test";
 
 import * as Remembering from "../../src/capabilities/Remembering.ts";

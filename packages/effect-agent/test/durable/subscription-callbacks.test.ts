@@ -1,16 +1,16 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Context, Effect, Schema, SchemaGetter } from "effect";
-import { makeEventSource } from "effect-agent/event-source";
-import { AgentId, ThreadId } from "effect-agent/identifiers";
-import { DefinitionDigests, Digest } from "effect-agent/records";
-import { Principal } from "effect-agent/submission-ledger";
+import { makeEventSource } from "@yielded/agent/event-source";
+import { AgentId, ThreadId } from "@yielded/agent/identifiers";
+import { DefinitionDigests, Digest } from "@yielded/agent/records";
+import { Principal } from "@yielded/agent/submission-ledger";
 import {
   AcceptedEvent,
   EventSourceVersion,
   SourcePartition,
   SubscriptionRecord,
-} from "effect-agent/subscription";
-import { makeSubscriptionInputBinding } from "effect-agent/subscription-input";
+} from "@yielded/agent/subscription";
+import { makeSubscriptionInputBinding } from "@yielded/agent/subscription-input";
+import { Context, Effect, Schema, SchemaGetter } from "effect";
 
 const version = EventSourceVersion.make({ name: "scoped-callback", version: "1" });
 const partition = SourcePartition.make({ tenantId: "tenant", address: "events" });

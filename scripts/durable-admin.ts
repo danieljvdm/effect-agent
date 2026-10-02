@@ -1,6 +1,5 @@
-import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/node-durable-agent-runtime";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
-import { Console, Effect, Schema } from "effect";
+import { NodeDurableAgentRuntime } from "@yielded/agent-platform-node/node-durable-agent-runtime";
 import {
   ObligationThresholds,
   RecoveryExplanation,
@@ -8,9 +7,10 @@ import {
   renderRecoveryExplanation,
   type IntegrityReport,
   type ObligationReport,
-} from "effect-agent/admin";
-import { DurableAgentRuntime, type RecoveryReport } from "effect-agent/durable-agent-runtime";
-import { ThreadId, SubmissionId } from "effect-agent/identifiers";
+} from "@yielded/agent/admin";
+import { DurableAgentRuntime, type RecoveryReport } from "@yielded/agent/durable-agent-runtime";
+import { ThreadId, SubmissionId } from "@yielded/agent/identifiers";
+import { Console, Effect, Schema } from "effect";
 import { Command as CliCommand, Flag } from "effect/cli";
 
 /**

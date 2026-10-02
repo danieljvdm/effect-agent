@@ -1,14 +1,13 @@
-import { Effect, Schema } from "effect";
-import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
-import { ThreadId } from "effect-agent/identifiers";
-import { LifecyclePublicationFact } from "effect-agent/lifecycle-publication";
+import { EMPTY_TAIL_DIGEST } from "@yielded/agent/digest";
+import { ThreadId } from "@yielded/agent/identifiers";
+import { LifecyclePublicationFact } from "@yielded/agent/lifecycle-publication";
 import {
   BatchId,
   CanonicalRecord,
   CanonicalSequence,
   Digest,
   ProducerEpoch,
-} from "effect-agent/records";
+} from "@yielded/agent/records";
 import {
   MAX_THREAD_EXPORT_RECORDS,
   AppendConflict,
@@ -16,7 +15,8 @@ import {
   FenceRejected,
   ThreadNotMaterialized,
   type SaveRecoveryCheckpointRequest,
-} from "effect-agent/thread-store";
+} from "@yielded/agent/thread-store";
+import { Effect, Schema } from "effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
 

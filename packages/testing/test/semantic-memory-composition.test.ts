@@ -1,14 +1,14 @@
-import { inMemorySemanticIndexLayer } from "@effect-agent/storage-memory/memory-semantic-index";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";
+import { inMemorySemanticIndexLayer } from "@yielded/agent-storage-memory/memory-semantic-index";
+import * as MemoryNamespace from "@yielded/agent/memory-namespace";
+import { MemoryAccess } from "@yielded/agent/memory-revalidation";
+import { MemoryScope, MemoryKey, MemoryWriter } from "@yielded/agent/memory-store";
+import { indexMemorySource, querySemanticMemory } from "@yielded/agent/semantic-memory";
+import { SemanticMemoryIndex, SemanticMemoryProfile } from "@yielded/agent/semantic-memory-index";
+import { memoryStoreLayer } from "@yielded/agent/sql-memory-store";
 import { Schema as NamespaceSchema, Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect";
-import * as MemoryNamespace from "effect-agent/memory-namespace";
-import { MemoryAccess } from "effect-agent/memory-revalidation";
-import { MemoryScope, MemoryKey, MemoryWriter } from "effect-agent/memory-store";
-import { indexMemorySource, querySemanticMemory } from "effect-agent/semantic-memory";
-import { SemanticMemoryIndex, SemanticMemoryProfile } from "effect-agent/semantic-memory-index";
-import { memoryStoreLayer } from "effect-agent/sql-memory-store";
 import { AiError, EmbeddingModel } from "effect/ai";
 
 const TestNamespace = MemoryNamespace.define({

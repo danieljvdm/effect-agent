@@ -1,11 +1,13 @@
-import { doMessageDeliveryStoreLayer } from "@effect-agent/storage-cloudflare/do-message-delivery-store";
-import { DoStorageFailpoint } from "@effect-agent/storage-cloudflare/do-storage-failpoint";
-import { ledgerLayer } from "@effect-agent/storage-cloudflare/do-submission-ledger";
+import { BrowserCrypto } from "@effect/platform-browser";
+import { SqliteClient } from "@effect/sql-sqlite-do";
+import { doMessageDeliveryStoreLayer } from "@yielded/agent-storage-cloudflare/do-message-delivery-store";
+import { DoStorageFailpoint } from "@yielded/agent-storage-cloudflare/do-storage-failpoint";
+import { ledgerLayer } from "@yielded/agent-storage-cloudflare/do-submission-ledger";
 import {
   storageConfigLayer,
   layer as storeLayer,
-} from "@effect-agent/storage-cloudflare/do-thread-store";
-import { PortResponse } from "@effect-agent/storage-cloudflare/port-protocol";
+} from "@yielded/agent-storage-cloudflare/do-thread-store";
+import { PortResponse } from "@yielded/agent-storage-cloudflare/port-protocol";
 import {
   ThreadPortTransport,
   PortTransportError,
@@ -13,16 +15,11 @@ import {
   routedThreadStoreLayer,
   routedMessageDeliveryStoreLayer,
   routedSubmissionLedgerLayer,
-} from "@effect-agent/storage-cloudflare/port-routing";
-import { BrowserCrypto } from "@effect/platform-browser";
-import { SqliteClient } from "@effect/sql-sqlite-do";
-import { runInDurableObject } from "cloudflare:test";
-import type { Crypto } from "effect";
-import { Effect, Layer, Option, Schema, Stream } from "effect";
-import { digestJson, EMPTY_TAIL_DIGEST } from "effect-agent/digest";
-import { lifecyclePublicationLayer } from "effect-agent/lifecycle-publication";
-import { MessageDeliveryStore, readPending } from "effect-agent/message-delivery";
-import { type PersistedJson } from "effect-agent/records";
+} from "@yielded/agent-storage-cloudflare/port-routing";
+import { digestJson, EMPTY_TAIL_DIGEST } from "@yielded/agent/digest";
+import { lifecyclePublicationLayer } from "@yielded/agent/lifecycle-publication";
+import { MessageDeliveryStore, readPending } from "@yielded/agent/message-delivery";
+import { type PersistedJson } from "@yielded/agent/records";
 import {
   AttachChildToReservationRequest,
   ChildBudgetReservationRequest,
@@ -42,14 +39,17 @@ import {
   WaitingChild,
   WaitingForChildSuspension,
   type Claim,
-} from "effect-agent/submission-ledger";
-import { makeMessageDeliveryFixture } from "effect-agent/testing/message-delivery-store-conformance";
+} from "@yielded/agent/submission-ledger";
+import { makeMessageDeliveryFixture } from "@yielded/agent/testing/message-delivery-store-conformance";
 import {
   ThreadIdentityRequest,
   ThreadMaterialization,
   ThreadStore,
   ThreadStoreError,
-} from "effect-agent/thread-store";
+} from "@yielded/agent/thread-store";
+import { runInDurableObject } from "cloudflare:test";
+import type { Crypto } from "effect";
+import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -249,9 +249,9 @@ describe("cross-DO port routing", () => {
     );
   });
 
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/6a4f4f870
+  // Regression: https://github.com/yielded-dev/agent/commit/6a4f4f870
 
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/6a4f4f870
+  // Regression: https://github.com/yielded-dev/agent/commit/6a4f4f870
   it("preserves identity absence and rejects invalid owner replies typed", () => {
     const state = control();
 

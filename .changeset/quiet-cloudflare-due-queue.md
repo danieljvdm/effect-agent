@@ -1,5 +1,5 @@
 ---
-"@effect-agent/platform-cloudflare": patch
+"@yielded/agent-platform-cloudflare": patch
 ---
 
 Schedule Cloudflare maintenance through one durable due queue and alarm, running only explicitly enrolled host lanes without wake-scan polling.

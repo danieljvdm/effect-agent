@@ -1,5 +1,4 @@
-import { Clock, Effect, Option, Schema } from "effect";
-import { ToolExecutionClass } from "effect-agent/durable-step";
+import { ToolExecutionClass } from "@yielded/agent/durable-step";
 import {
   CapturePageMarkdown,
   CapturePageScrape,
@@ -12,8 +11,9 @@ import {
   PageUrlTarget,
   type PageCaptureError,
   type PageScrapeCaptured,
-} from "effect-agent/page-capture";
-import { WebCaptureFailure } from "effect-agent/web-capture";
+} from "@yielded/agent/page-capture";
+import { WebCaptureFailure } from "@yielded/agent/web-capture";
+import { Clock, Effect, Option, Schema } from "effect";
 import { Tool, Toolkit } from "effect/ai";
 
 import { recordDiagnostic } from "./server/diagnostics.ts";

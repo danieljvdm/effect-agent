@@ -1,6 +1,4 @@
-import { env, runInDurableObject } from "cloudflare:test";
-import { DateTime, Effect, Schema } from "effect";
-import { digestJson } from "effect-agent/digest";
+import { digestJson } from "@yielded/agent/digest";
 import {
   CanonicalSequence,
   DefinitionDigests,
@@ -13,7 +11,7 @@ import {
   SubmissionSettledRecord,
   type PersistedJson,
   type SettlementOutcome,
-} from "effect-agent/records";
+} from "@yielded/agent/records";
 import {
   AdmissionRequest,
   ApprovalDecisionCommand,
@@ -25,7 +23,9 @@ import {
   type AdmissionResult,
   type OwnershipToken,
   type ParentLinkage,
-} from "effect-agent/submission-ledger";
+} from "@yielded/agent/submission-ledger";
+import { env, runInDurableObject } from "cloudflare:test";
+import { DateTime, Effect, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
 import type { ThreadStorageObject, ScheduleStorageObject } from "./worker.ts";

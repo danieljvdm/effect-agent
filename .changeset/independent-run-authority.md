@@ -1,7 +1,7 @@
 ---
-"@effect-agent/platform-node": patch
-"@effect-agent/platform-cloudflare": patch
-"effect-agent": patch
+"@yielded/agent-platform-node": patch
+"@yielded/agent-platform-cloudflare": patch
+"@yielded/agent": patch
 ---
 
 Compose prompt preparation and Tool authorization independently in durable hosts, preserving both across recovery.

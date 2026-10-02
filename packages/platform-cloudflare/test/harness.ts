@@ -1,22 +1,22 @@
+import { SqliteClient } from "@effect/sql-sqlite-do";
 import {
   ThreadObjectNamespace,
   type ThreadObjectRpc,
-} from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+} from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
 import {
   CloudflareSchedulingClient,
   ScheduleOwnerNamespace,
-} from "@effect-agent/platform-cloudflare/cloudflare-scheduling";
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
-import { SqliteClient } from "@effect/sql-sqlite-do";
+} from "@yielded/agent-platform-cloudflare/cloudflare-scheduling";
+import { CloudflareThreadClient } from "@yielded/agent-platform-cloudflare/cloudflare-thread-client";
+import { SubmissionId } from "@yielded/agent/identifiers";
+import { type CanonicalRecordEnvelope } from "@yielded/agent/records";
+import { scheduleOwnerKey } from "@yielded/agent/schedule-transition";
+import { type Scheduling } from "@yielded/agent/scheduling";
+import { SubmissionLedger, SubmissionLookupById } from "@yielded/agent/submission-ledger";
+import { verifyThreadInvariants } from "@yielded/agent/thread-invariants";
+import { ThreadExportRequest, ThreadStore } from "@yielded/agent/thread-store";
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Crypto, Effect, Layer, Option, Schema } from "effect";
-import { SubmissionId } from "effect-agent/identifiers";
-import { type CanonicalRecordEnvelope } from "effect-agent/records";
-import { scheduleOwnerKey } from "effect-agent/schedule-transition";
-import { type Scheduling } from "effect-agent/scheduling";
-import { SubmissionLedger, SubmissionLookupById } from "effect-agent/submission-ledger";
-import { verifyThreadInvariants } from "effect-agent/thread-invariants";
-import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { DurableObject } from "effect-cf";
 import * as SqlClientService from "effect/sql/SqlClient";
 import { expect } from "vite-plus/test";

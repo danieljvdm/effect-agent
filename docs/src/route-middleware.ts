@@ -3,10 +3,10 @@ import { defineRouteMiddleware } from "@astrojs/starlight/route-data";
 export const onRequest = defineRouteMiddleware((context) => {
   const { head, entry } = context.locals.starlightRoute;
 
-  if (context.url.pathname === "/404/") return;
+  if (context.url.pathname === "/agent/404/") return;
 
   const title =
-    entry.data.title === "Effect Agent" ? "Effect Agent" : `${entry.data.title} | Effect Agent`;
+    entry.data.title === "Yielded Agent" ? "Yielded Agent" : `${entry.data.title} | Yielded Agent`;
 
   const description =
     entry.data.description ??
@@ -15,7 +15,7 @@ export const onRequest = defineRouteMiddleware((context) => {
   const imagePath = entry.filePath.split("/content/docs/")[1]?.replace(/\.mdx?$/, "");
 
   if (imagePath === undefined) throw new Error(`Unknown documentation source: ${entry.filePath}`);
-  const image = new URL(`/social/${imagePath}.png`, "https://effect-agent.com").href;
+  const image = new URL(`/agent/social/${imagePath}.png`, "https://yielded.dev").href;
   const alt = `${title}. ${description}`;
 
   for (const item of head) {

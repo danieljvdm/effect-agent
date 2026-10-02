@@ -2,22 +2,22 @@ import {
   MemoryOwnerAuthorizer,
   MemoryOwnerIdentity,
   MemoryRpcError,
-} from "@effect-agent/storage-cloudflare/memory-protocol";
-import { Effect, Layer, Schema } from "effect";
-import * as MemoryNamespace from "effect-agent/memory-namespace";
+} from "@yielded/agent-storage-cloudflare/memory-protocol";
+import * as MemoryNamespace from "@yielded/agent/memory-namespace";
 import {
   type MemoryLookup,
   MemoryPassage,
   MemoryRecallLimits,
-} from "effect-agent/memory-reference";
-import { MemoryAccess } from "effect-agent/memory-revalidation";
+} from "@yielded/agent/memory-reference";
+import { MemoryAccess } from "@yielded/agent/memory-revalidation";
 import {
   MemoryScope,
   MemoryMutationFailpoint,
   MemoryWrite,
   type MemoryMutationPoint,
-} from "effect-agent/memory-store";
-import { Principal } from "effect-agent/submission-ledger";
+} from "@yielded/agent/memory-store";
+import { Principal } from "@yielded/agent/submission-ledger";
+import { Effect, Layer, Schema } from "effect";
 import { DurableObjectState } from "effect-cf";
 
 export const MemoryProjects = MemoryNamespace.define({

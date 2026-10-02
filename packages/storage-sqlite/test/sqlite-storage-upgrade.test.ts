@@ -1,9 +1,9 @@
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
+import { SubmissionLedger } from "@yielded/agent/submission-ledger";
+import { SubscriptionStore, type SubscriptionError } from "@yielded/agent/subscription";
 import { Effect, FileSystem, Layer, Exit, Deferred, Fiber } from "effect";
-import { SubmissionLedger } from "effect-agent/submission-ledger";
-import { SubscriptionStore, type SubscriptionError } from "effect-agent/subscription";
 import * as SqlClient from "effect/sql/SqlClient";
 import { TestClock } from "effect/testing";
 

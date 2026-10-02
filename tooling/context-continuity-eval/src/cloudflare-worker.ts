@@ -1,27 +1,27 @@
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { BrowserCrypto } from "@effect/platform-browser";
 import {
   DurableObjectContext,
   ThreadObjectIdentity,
   ThreadObjectNamespace,
-} from "@effect-agent/platform-cloudflare/cloudflare-bindings";
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
-import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
-import { BrowserCrypto } from "@effect/platform-browser";
-import { Context, Effect, Layer, Redacted, Ref, Schema } from "effect";
-import { ContextHistory, ContextHistoryError } from "effect-agent/context-history";
-import * as ContextTools from "effect-agent/context-tools";
-import { digestDefinitions } from "effect-agent/digest";
-import { ThreadId } from "effect-agent/identifiers";
-import * as MemoryNotes from "effect-agent/memory-notes";
+} from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
+import { CloudflareThreadClient } from "@yielded/agent-platform-cloudflare/cloudflare-thread-client";
+import * as ThreadObject from "@yielded/agent-platform-cloudflare/thread-object";
+import { ContextHistory, ContextHistoryError } from "@yielded/agent/context-history";
+import * as ContextTools from "@yielded/agent/context-tools";
+import { digestDefinitions } from "@yielded/agent/digest";
+import { ThreadId } from "@yielded/agent/identifiers";
+import * as MemoryNotes from "@yielded/agent/memory-notes";
 import {
   MemoryKey,
   MemoryReader,
   MemoryStorageError,
   MemoryWriter,
-} from "effect-agent/memory-store";
-import { memoryStoreLayer } from "effect-agent/sql-memory-store";
-import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
-import * as ThreadContextHistory from "effect-agent/thread-context-history";
+} from "@yielded/agent/memory-store";
+import { memoryStoreLayer } from "@yielded/agent/sql-memory-store";
+import { IdempotencyKey, Principal } from "@yielded/agent/submission-ledger";
+import * as ThreadContextHistory from "@yielded/agent/thread-context-history";
+import { Context, Effect, Layer, Redacted, Ref, Schema } from "effect";
 import { DurableObject, WorkerEnvironment } from "effect-cf";
 import { IdGenerator } from "effect/ai";
 import { FetchHttpClient } from "effect/http";

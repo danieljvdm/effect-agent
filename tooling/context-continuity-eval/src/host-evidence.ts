@@ -1,16 +1,16 @@
-import { Effect, Option, Schema, Stream } from "effect";
-import { type ThreadId } from "effect-agent/identifiers";
-import * as MemoryNamespace from "effect-agent/memory-namespace";
-import type { MemoryKey } from "effect-agent/memory-store";
-import { MemoryReader } from "effect-agent/memory-store";
-import type { CanonicalRecordEnvelope } from "effect-agent/records";
-import { CanonicalSequence } from "effect-agent/records";
+import { type ThreadId } from "@yielded/agent/identifiers";
+import * as MemoryNamespace from "@yielded/agent/memory-namespace";
+import type { MemoryKey } from "@yielded/agent/memory-store";
+import { MemoryReader } from "@yielded/agent/memory-store";
+import type { CanonicalRecordEnvelope } from "@yielded/agent/records";
+import { CanonicalSequence } from "@yielded/agent/records";
 import {
   LoadCheckpointRequest,
   ThreadRead,
   ThreadStore,
   ThreadTailRequest,
-} from "effect-agent/thread-store";
+} from "@yielded/agent/thread-store";
+import { Effect, Option, Schema, Stream } from "effect";
 
 import { EvaluationError, type RecoveryCheckpointEvidence } from "./contracts.ts";
 

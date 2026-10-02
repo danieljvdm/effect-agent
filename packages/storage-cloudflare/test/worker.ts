@@ -1,22 +1,22 @@
-import { doMessageDeliveryStoreLayer } from "@effect-agent/storage-cloudflare/do-message-delivery-store";
-import { DoStorageFailpoint } from "@effect-agent/storage-cloudflare/do-storage-failpoint";
-import { ledgerLayer } from "@effect-agent/storage-cloudflare/do-submission-ledger";
+import { SqliteClient } from "@effect/sql-sqlite-do";
+import { doMessageDeliveryStoreLayer } from "@yielded/agent-storage-cloudflare/do-message-delivery-store";
+import { DoStorageFailpoint } from "@yielded/agent-storage-cloudflare/do-storage-failpoint";
+import { ledgerLayer } from "@yielded/agent-storage-cloudflare/do-submission-ledger";
 import {
   storageConfigLayer,
   layer as doThreadStoreLayer,
-} from "@effect-agent/storage-cloudflare/do-thread-store";
-import { handleEncodedPortRequest } from "@effect-agent/storage-cloudflare/port-routing";
-import { SqliteClient } from "@effect/sql-sqlite-do";
+} from "@yielded/agent-storage-cloudflare/do-thread-store";
+import { handleEncodedPortRequest } from "@yielded/agent-storage-cloudflare/port-routing";
+import { DurableRuntimeFailpoint } from "@yielded/agent/durable-failpoint";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
 import { DurableObject } from "cloudflare:workers";
 import { Effect, Layer } from "effect";
-import { DurableRuntimeFailpoint } from "effect-agent/durable-failpoint";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
 
 /**
  * SQLite-backed Durable Object shell hosting the WP1/WP2 adapter suites. Tests use
  * `runInDurableObject` to run the adapter Layers directly against `ctx.storage`; the class
  * itself holds NO state — important state never lives in in-memory Durable Object fields,
- * and the real Thread Object class factory is WP3's `@effect-agent/platform-cloudflare`
+ * and the real Thread Object class factory is WP3's `@yielded/agent-platform-cloudflare`
  * concern.
  *
  * `portCall` is the WP2 cross-Object endpoint (plan §1.3, D-P6-3): Schema-encoded port

@@ -1,15 +1,13 @@
-import {
-  SqliteStorageConfig,
-  SqliteStorageConfigValue,
-} from "@effect-agent/storage-sqlite/sqlite-storage-config";
-import { SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/sqlite-storage-failpoint";
-import { subscriptionStoreLayer } from "@effect-agent/storage-sqlite/sqlite-subscription-store";
 import { NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
-import type { PlatformError } from "effect";
-import { Effect, FileSystem, Layer, Schema } from "effect";
-import { Digest } from "effect-agent/records";
+import {
+  SqliteStorageConfig,
+  SqliteStorageConfigValue,
+} from "@yielded/agent-storage-sqlite/sqlite-storage-config";
+import { SqliteStorageFailpoint } from "@yielded/agent-storage-sqlite/sqlite-storage-failpoint";
+import { subscriptionStoreLayer } from "@yielded/agent-storage-sqlite/sqlite-subscription-store";
+import { Digest } from "@yielded/agent/records";
 import {
   AcceptedEvent,
   defaultSubscriptionLimits,
@@ -17,11 +15,13 @@ import {
   SubscriptionStore,
   SubscriptionFailpoint,
   SubscriptionFailpointError,
-} from "effect-agent/subscription";
+} from "@yielded/agent/subscription";
 import {
   subscriptionConformancePartition,
   subscriptionStoreConformanceCases,
-} from "effect-agent/testing/subscription-store-conformance";
+} from "@yielded/agent/testing/subscription-store-conformance";
+import type { PlatformError } from "effect";
+import { Effect, FileSystem, Layer, Schema } from "effect";
 import * as SqlClientService from "effect/sql/SqlClient";
 import { TestClock } from "effect/testing";
 

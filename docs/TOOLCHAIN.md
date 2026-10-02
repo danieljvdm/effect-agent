@@ -80,13 +80,13 @@ Provider integrations come from upstream Effect AI Layers, including `@effect/ai
 `ai-decision` owns thread model selection and consumes Effect's native `Decision` and `DecisionModel`.
 
 ```text
-effect-agent <- storage-sql <- storage-sqlite / storage-postgres / storage-cloudflare
-effect-agent <- storage-memory
-effect-agent <- workflow
-effect-agent + selected adapters <- platform packages
-effect-agent <- sandbox-local
-effect-agent <- testing
-effect-agent <- pr-review
+@yielded/agent <- storage-sql <- storage-sqlite / storage-postgres / storage-cloudflare
+@yielded/agent <- storage-memory
+@yielded/agent <- workflow
+@yielded/agent + selected adapters <- platform packages
+@yielded/agent <- sandbox-local
+@yielded/agent <- testing
+@yielded/agent <- pr-review
 ```
 
 Within `packages/effect-agent/src`, dependencies point inward:
@@ -103,24 +103,24 @@ Shared compiler settings live in `tsconfig.base.json`.
 
 Run `vp help` or `vp <command> --help` for options.
 
-| Command                                              | Use                                                   |
-| ---------------------------------------------------- | ----------------------------------------------------- |
-| `vp install`                                         | Install dependencies and hooks                        |
-| `vp check`                                           | Format, lint, and type checks                         |
-| `vp fmt` / `vp fmt --check`                          | Format files / check formatting                       |
-| `vp lint` / `vp lint --fix`                          | Lint / apply fixes                                    |
-| `vp test`                                            | Root test runner                                      |
-| `vp run check`                                       | All static checks, package types, scripts, and purity |
-| `vp run test`                                        | All workspace suites, including Cloudflare            |
-| `vp run build`                                       | Package, docs, and Action builds                      |
-| `vp run ready`                                       | Full handoff gate: check, test, build                 |
-| `vp run docs:dev`                                    | Docs development server                               |
-| `vp run docs:build`                                  | Build docs and check links                            |
-| `vp run docs:preview`                                | Preview built docs                                    |
-| `vp run docs:deploy --yes`                           | Deploy docs to the existing production stack          |
-| `vp run check:deploy`                                | Load both deployment CLIs without deploying           |
-| `vp run -F @effect-agent/example-travel-planner dev` | Cloudflare travel planner                             |
-| `vp env doctor`                                      | Diagnose toolchain setup                              |
+| Command                                               | Use                                                   |
+| ----------------------------------------------------- | ----------------------------------------------------- |
+| `vp install`                                          | Install dependencies and hooks                        |
+| `vp check`                                            | Format, lint, and type checks                         |
+| `vp fmt` / `vp fmt --check`                           | Format files / check formatting                       |
+| `vp lint` / `vp lint --fix`                           | Lint / apply fixes                                    |
+| `vp test`                                             | Root test runner                                      |
+| `vp run check`                                        | All static checks, package types, scripts, and purity |
+| `vp run test`                                         | All workspace suites, including Cloudflare            |
+| `vp run build`                                        | Package, docs, and Action builds                      |
+| `vp run ready`                                        | Full handoff gate: check, test, build                 |
+| `vp run docs:dev`                                     | Docs development server                               |
+| `vp run docs:build`                                   | Build docs and check links                            |
+| `vp run docs:preview`                                 | Preview built docs                                    |
+| `vp run docs:deploy --yes`                            | Deploy docs to the existing production stack          |
+| `vp run check:deploy`                                 | Load both deployment CLIs without deploying           |
+| `vp run -F @yielded/agent-example-travel-planner dev` | Cloudflare travel planner                             |
+| `vp env doctor`                                       | Diagnose toolchain setup                              |
 
 Use `vp run <task>` for other scripts. Do not use `bun run`, `npm run`, `pnpm run`,
 `yarn run`, or invoke the wrapped compiler, formatter, linter, or test runner directly.
@@ -201,7 +201,7 @@ Outside a generator, the formatter parses `*` as multiplication and inserts spac
 ## Link previews
 
 The docs config adds Open Graph and Twitter metadata to the built HTML. Each page uses its
-resolved title and description, a canonical URL on `https://effect-agent.com`, and its own
+resolved title and description, a canonical URL on `https://yielded.dev/agent/`, and its own
 1200 × 630 PNG. `docs/integrations/social-renderer.ts` renders the page title, description, and URL
 using the installed IBM Plex fonts and `docs/public/mark.svg`. The build writes images under
 `docs/dist/social/`; no browser, remote font request, or manual screenshot is needed.
@@ -218,6 +218,14 @@ Run `vp run docs:build` and inspect the generated HTML for the homepage, a guide
 index such as `docs/dist/platforms/index.html`. Open their generated PNGs to check the layout. Image URLs
 must be absolute, and canonical URLs must match the site's clean routes. Existing messages may
 retain a cached preview after a deployment.
+
+## Documentation deployment
+
+`vp run docs:deploy --yes` keeps the existing `effect-agent` production stack and
+`effect-agent-docs` Worker, serving the docs at `yielded.dev/agent/`. The Worker
+route is `yielded.dev/agent*` and the assets base is `/agent/`. The legacy domain
+`effect-agent.com` remains attached and redirects each path to its equivalent
+under `/agent`, preserving query strings. Retain the domain and redirects.
 
 ## Releasing to npm
 
@@ -288,7 +296,12 @@ The publisher temporarily prepares npm-ready manifests:
 source exports point at built files, `workspace:*` dependencies use the current workspace
 versions, and `catalog:` dependencies use the root catalog. All source manifests are restored
 on success, failure, or interruption. npm publishes through OIDC with provenance; each package
-must list `release.yml` in `danieljvdm/effect-agent` as its trusted publisher.
+must list `release.yml` in `yielded-dev/agent` as its trusted publisher.
+New package names need a first authenticated publication before trusted publishing
+can be configured. Install the release GitHub App on `yielded-dev/agent` after
+transferring the repository; preserve its existing repository secrets. Keep the
+old npm packages available and deprecate them only after their replacements are
+published and the migration guide is live.
 
 Changesets defaults packages with no stable release to `latest`. The adapter temporarily marks
 the prerelease state as exiting while running `changeset publish --tag beta`, then restores it.
@@ -316,7 +329,7 @@ All public packages use the MIT license.
 ## Script runners
 
 Package scripts use Bun through `vp run`.
-Scripts that import `@effect-agent/storage-sqlite` continue to use
+Scripts that import `@yielded/agent-storage-sqlite` continue to use
 `node --experimental-transform-types` to exercise the Node host runtime.
 Strip-only execution cannot handle the framework's runtime namespaces.
 This includes `admin:durable` and the Node crash workers.
@@ -382,11 +395,11 @@ defaults, so declare `dts` and `sourcemap` there when needed.
 Follow the pinned Effect package's module layout. Package roots and public groups use namespace
 exports such as `export * as Agent from "./Agent.ts"`; explicit named conveniences are also
 allowed, as Effect does for `pipe` and `flow`. Public namespaces and source filenames use
-PascalCase; public import subpaths use kebab-case. `import { Agent } from "effect-agent"` and
-`import * as Agent from "effect-agent/agent"` select the same module.
+PascalCase; public import subpaths use kebab-case. `import { Agent } from "@yielded/agent"` and
+`import * as Agent from "@yielded/agent/agent"` select the same module.
 
 - Lead documentation examples with named namespace imports from package roots, such as
-  `import { NodeDurableHost } from "@effect-agent/platform-node"`. Use kebab-case subpaths for
+  `import { NodeDurableHost } from "@yielded/agent-platform-node"`. Use kebab-case subpaths for
   individual declarations such as services, schemas, or types; direct module and lazy-loading examples; and specialized
   adapters or runtime-specific helpers. In particular, Node-safe Cloudflare helpers must use
   their dedicated subpaths rather than the Workers package root.
@@ -418,7 +431,7 @@ code. Public forwarding modules need no umbrella-specific exception or file allo
 
 The export check in `vp run check` verifies manifest paths, exact filename casing, namespace
 targets, pack entries, declared workspace dependencies, and the inward-only source layers within
-`effect-agent`. The purity check uses declared testing
+`@yielded/agent`. The purity check uses declared testing
 targets as well as known test-module paths to prevent production entry points from reaching
 test-only code. Choosing supported APIs and useful public groups still requires review.
 
@@ -453,8 +466,8 @@ for the base. Build failures fail the report; size increases are informational.
 
 Use direct module paths at lazy-loading boundaries. With the measured esbuild configuration,
 statically importing `Agent` from the root and dynamically importing `AgentRuntime` from the same
-root pulls the runtime into the initial chunk. Direct `effect-agent/agent` and
-`effect-agent/agent-runtime` imports preserve a deferred runtime chunk; shared Effect dependencies
+root pulls the runtime into the initial chunk. Direct `@yielded/agent/agent` and
+`@yielded/agent/agent-runtime` imports preserve a deferred runtime chunk; shared Effect dependencies
 still count toward the initial load.
 
 The comparison also bundles and executes `runtime-smoke.ts` against the PR's staged packages.
@@ -685,7 +698,7 @@ code. Superseded source commits are skipped, and a Git lease prevents competing
 publishers from overwriting a newer channel. Failed publication preserves the last
 release and can be retried by rerunning the failed CI job.
 
-Consumers use `danieljvdm/effect-agent/action@action-v1` or pin the distribution
+Consumers use `yielded-dev/agent/action@action-v1` or pin the distribution
 commit SHA printed in the CI summary. New source commits and `@main` no longer
 contain a runnable bundle; older SHA pins still work. Before the initial cutover, seed `action-v1` with the
 last validated source commit that still contains the bundle, then migrate existing

@@ -1,7 +1,49 @@
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it, layer } from "@effect/vitest";
+import { MemorySubmissionLedgerLive } from "@yielded/agent-storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@yielded/agent-storage-memory/memory-thread-store";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import { compileRegistrations, type AgentAttemptContext } from "@yielded/agent/agent-registration";
+import {
+  ApprovalAuditMemoryLive,
+  ApprovalResolver,
+  ApprovalResolverError,
+} from "@yielded/agent/approval";
+import {
+  ApprovalSuspensionError,
+  DurableAgentRuntime,
+  DurableApprovalSuspension,
+  DurableRuntimeConfig,
+  type DurableSubmitOptions,
+} from "@yielded/agent/durable-agent-runtime";
+import { ThreadId, RunId, ToolCallId, TurnId, type SubmissionId } from "@yielded/agent/identifiers";
+import {
+  DefinitionDigestInput,
+  DefinitionDigests,
+  DeploymentId,
+  Digest,
+  ProducerId,
+  type CanonicalRecordEnvelope,
+} from "@yielded/agent/records";
+import { StructuralRedactorLive } from "@yielded/agent/redaction";
+import { toDurableRunApprovalHook } from "@yielded/agent/run-hooks";
+import { runIdForSubmission } from "@yielded/agent/run-journal";
+import { RunToolAuthorization, type RunApprovalRequest } from "@yielded/agent/run-options";
+import {
+  AbortCommand,
+  ApprovalDecisionCommand,
+  IdempotencyKey,
+  Principal,
+  SubmissionLedger,
+  SubmissionLookupById,
+  DEFAULT_OWNERSHIP_LEASE_DURATION,
+  RecoverySnapshotRequest,
+} from "@yielded/agent/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "@yielded/agent/testing/durable-failpoint-test-control";
+import { ThreadRead, ThreadStore } from "@yielded/agent/thread-store";
+import { ToolReconciler } from "@yielded/agent/tool-reconciler";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
 import {
   Cause,
   DateTime,
@@ -16,48 +58,6 @@ import {
   Schema,
   Stream,
 } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { compileRegistrations, type AgentAttemptContext } from "effect-agent/agent-registration";
-import {
-  ApprovalAuditMemoryLive,
-  ApprovalResolver,
-  ApprovalResolverError,
-} from "effect-agent/approval";
-import {
-  ApprovalSuspensionError,
-  DurableAgentRuntime,
-  DurableApprovalSuspension,
-  DurableRuntimeConfig,
-  type DurableSubmitOptions,
-} from "effect-agent/durable-agent-runtime";
-import { ThreadId, RunId, ToolCallId, TurnId, type SubmissionId } from "effect-agent/identifiers";
-import {
-  DefinitionDigestInput,
-  DefinitionDigests,
-  DeploymentId,
-  Digest,
-  ProducerId,
-  type CanonicalRecordEnvelope,
-} from "effect-agent/records";
-import { StructuralRedactorLive } from "effect-agent/redaction";
-import { toDurableRunApprovalHook } from "effect-agent/run-hooks";
-import { runIdForSubmission } from "effect-agent/run-journal";
-import { RunToolAuthorization, type RunApprovalRequest } from "effect-agent/run-options";
-import {
-  AbortCommand,
-  ApprovalDecisionCommand,
-  IdempotencyKey,
-  Principal,
-  SubmissionLedger,
-  SubmissionLookupById,
-  DEFAULT_OWNERSHIP_LEASE_DURATION,
-  RecoverySnapshotRequest,
-} from "effect-agent/submission-ledger";
-import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
-import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
-import { ToolReconciler } from "effect-agent/tool-reconciler";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { LanguageModel, Model, Response, Tool, Toolkit, type Prompt } from "effect/ai";
 import { TestClock } from "effect/testing";
 

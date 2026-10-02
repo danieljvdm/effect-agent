@@ -1,18 +1,4 @@
 import {
-  Clock,
-  Cause,
-  Exit,
-  Fiber,
-  DateTime,
-  Duration,
-  Effect,
-  Layer,
-  Option,
-  Ref,
-  Schema,
-  Stream,
-} from "effect";
-import {
   type ToolCallId,
   AttemptId,
   ReceiptId,
@@ -20,8 +6,8 @@ import {
   type AgentId,
   type ThreadId,
   type SettlementId,
-} from "effect-agent/identifiers";
-import { InputMessage } from "effect-agent/messaging";
+} from "@yielded/agent/identifiers";
+import { InputMessage } from "@yielded/agent/messaging";
 import {
   PersistedJson,
   WorkerAdmission,
@@ -32,7 +18,7 @@ import {
   type ProducerId,
   type RecordEnvelope,
   type SettlementOutcome,
-} from "effect-agent/records";
+} from "@yielded/agent/records";
 import {
   type ParentLinkage,
   AbortCommand,
@@ -111,7 +97,21 @@ import {
   type SubmissionState,
   type SuspensionOutcome,
   type SuspensionReason,
-} from "effect-agent/submission-ledger";
+} from "@yielded/agent/submission-ledger";
+import {
+  Clock,
+  Cause,
+  Exit,
+  Fiber,
+  DateTime,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 
 const MAX_SUBMISSIONS = 65_536;
 

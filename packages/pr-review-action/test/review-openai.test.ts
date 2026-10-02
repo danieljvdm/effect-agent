@@ -1,14 +1,14 @@
-import { makeReviewer, ReviewChange, ReviewRequest } from "@effect-agent/pr-review/review";
+import type { OpenAiSchema } from "@effect/ai-openai";
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { NodeServices } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import { makeReviewer, ReviewChange, ReviewRequest } from "@yielded/agent-pr-review/review";
 import {
   ReviewContextError,
   ReviewFileList,
   ReviewRepository,
   ReviewSource,
-} from "@effect-agent/pr-review/review-repository";
-import type { OpenAiSchema } from "@effect/ai-openai";
-import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
-import { NodeServices } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
+} from "@yielded/agent-pr-review/review-repository";
 import {
   Cause,
   ConfigProvider,

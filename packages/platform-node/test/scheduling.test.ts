@@ -1,11 +1,9 @@
-import { NodeDurableHost } from "@effect-agent/platform-node/node-durable-host";
-import { NodeScheduling } from "@effect-agent/platform-node/node-scheduling";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import type { PlatformError } from "effect";
-import { Context, Deferred, Effect, Exit, FileSystem, Layer, Ref, Schema, Scope } from "effect";
-import { AgentId } from "effect-agent/identifiers";
-import { DefinitionDigests, Digest } from "effect-agent/records";
+import { NodeDurableHost } from "@yielded/agent-platform-node/node-durable-host";
+import { NodeScheduling } from "@yielded/agent-platform-node/node-scheduling";
+import { AgentId } from "@yielded/agent/identifiers";
+import { DefinitionDigests, Digest } from "@yielded/agent/records";
 import {
   ScheduleAuthorizer,
   ScheduleFailpoint,
@@ -14,9 +12,11 @@ import {
   ScheduleStore,
   defaultSchedulingLimits,
   type ScheduleSnapshot,
-} from "effect-agent/schedule";
-import { Scheduling } from "effect-agent/scheduling";
-import { Principal } from "effect-agent/submission-ledger";
+} from "@yielded/agent/schedule";
+import { Scheduling } from "@yielded/agent/scheduling";
+import { Principal } from "@yielded/agent/submission-ledger";
+import type { PlatformError } from "effect";
+import { Context, Deferred, Effect, Exit, FileSystem, Layer, Ref, Schema, Scope } from "effect";
 import { TestClock } from "effect/testing";
 
 const digest = Schema.decodeSync(Digest)("a".repeat(64));

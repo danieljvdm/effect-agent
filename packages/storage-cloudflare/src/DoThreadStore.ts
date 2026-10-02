@@ -1,22 +1,10 @@
-import {
-  makeSelectedReads,
-  SelectedReadOwner,
-} from "@effect-agent/storage-sql/sql-thread-native-reads";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import {
-  Clock,
-  Context,
-  Crypto,
-  Duration,
-  Effect,
-  Layer,
-  Option,
-  Ref,
-  Schema,
-  Stream,
-} from "effect";
-import { digestCanonicalBatch, EMPTY_TAIL_DIGEST } from "effect-agent/digest";
+  makeSelectedReads,
+  SelectedReadOwner,
+} from "@yielded/agent-storage-sql/sql-thread-native-reads";
+import { digestCanonicalBatch, EMPTY_TAIL_DIGEST } from "@yielded/agent/digest";
 import {
   CanonicalBatch,
   CanonicalRecord,
@@ -24,9 +12,9 @@ import {
   CanonicalSequence,
   Digest,
   ObservationOffset,
-} from "effect-agent/records";
-import { SqlStorageOwner } from "effect-agent/sql-memory-store";
-import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "effect-agent/submission-ledger";
+} from "@yielded/agent/records";
+import { SqlStorageOwner } from "@yielded/agent/sql-memory-store";
+import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "@yielded/agent/submission-ledger";
 import {
   AppendConflict,
   AppendResult,
@@ -51,7 +39,19 @@ import {
   SaveRecoveryCheckpointRequest,
   MAX_THREAD_EXPORT_RECORDS,
   type ThreadRecoveryCheckpoints,
-} from "effect-agent/thread-store";
+} from "@yielded/agent/thread-store";
+import {
+  Clock,
+  Context,
+  Crypto,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 import * as SqlClientService from "effect/sql/SqlClient";
 
 import {
@@ -89,7 +89,7 @@ export interface DoStorageOptions {
   readonly observationPollInterval?: number | undefined;
   /**
    * Submission ownership lease duration in milliseconds (D5). Defaults to
-   * `DEFAULT_OWNERSHIP_LEASE_DURATION` from `effect-agent/submission-ledger`.
+   * `DEFAULT_OWNERSHIP_LEASE_DURATION` from `@yielded/agent/submission-ledger`.
    */
   readonly ownershipLeaseDuration?: number | undefined;
   /**

@@ -1,5 +1,5 @@
 ---
-"effect-agent": patch
+"@yielded/agent": patch
 ---
 
 Expose host tool scheduling through `RunToolScheduling` so durable agents can run independent tools concurrently while preserving barriers around sequential tools. Capture the host policy across replacement attempts and retain the agent's admitted concurrency bound.

@@ -1,6 +1,6 @@
 ---
-"@effect-agent/platform-cloudflare": minor
-"@effect-agent/storage-cloudflare": patch
+"@yielded/agent-platform-cloudflare": minor
+"@yielded/agent-storage-cloudflare": patch
 ---
 
 Add opt-in native Thread RPC tracing with binding/method client spans, transient current-span propagation, and typed receiver invocation hooks. Remove routine storage codec, failpoint-wrapper, and engine identifier-helper spans while preserving validation, failures, and I/O tracing.

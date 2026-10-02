@@ -1,4 +1,4 @@
-import { AgentPolicy } from "effect-agent/agent-policy";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
 
 /** Operational allowances for the current planner and workers. */
 export const researchScoutLimit = 6;

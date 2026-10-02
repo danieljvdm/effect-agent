@@ -1,7 +1,7 @@
+import * as ToolDiscovery from "@yielded/agent/tool-discovery";
+import type { CurrentToolCatalog } from "@yielded/agent/tool-exposure";
 import type { Layer } from "effect";
 import { Context, Effect, Schema } from "effect";
-import * as ToolDiscovery from "effect-agent/tool-discovery";
-import type { CurrentToolCatalog } from "effect-agent/tool-exposure";
 import type { Tool } from "effect/ai";
 import type { expectTypeOf as ExpectTypeOf } from "vite-plus/test";
 

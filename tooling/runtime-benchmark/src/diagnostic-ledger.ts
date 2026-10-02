@@ -1,24 +1,13 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/node-durable-agent-runtime";
-import { ScriptedModel } from "@effect-agent/testing/scripted-model";
-import {
-  Clock,
-  Context,
-  DateTime,
-  Effect,
-  FileSystem,
-  Layer,
-  Option,
-  Schema,
-  Stream,
-} from "effect";
-import { Agent } from "effect-agent";
-import { ContextCompactor } from "effect-agent/context-compactor";
-import { digestJson } from "effect-agent/digest";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { AgentId, ThreadId } from "effect-agent/identifiers";
+import { Agent } from "@yielded/agent";
+import { NodeDurableAgentRuntime } from "@yielded/agent-platform-node/node-durable-agent-runtime";
+import { ScriptedModel } from "@yielded/agent-testing/scripted-model";
+import { ContextCompactor } from "@yielded/agent/context-compactor";
+import { digestJson } from "@yielded/agent/digest";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import { AgentId, ThreadId } from "@yielded/agent/identifiers";
 import {
   DefinitionDigests,
   DeploymentId,
@@ -26,7 +15,7 @@ import {
   ProducerId,
   RecordEnvelope,
   SubmissionSettledRecord,
-} from "effect-agent/records";
+} from "@yielded/agent/records";
 import {
   AdmissionRequest,
   ClaimRequest,
@@ -38,9 +27,20 @@ import {
   SubmissionLedger,
   submissionSettlementId,
   submissionSettlementRecordId,
-} from "effect-agent/submission-ledger";
-import type { Settlement } from "effect-agent/submission-ledger";
-import type { SubmissionStatus } from "effect-agent/submission-status";
+} from "@yielded/agent/submission-ledger";
+import type { Settlement } from "@yielded/agent/submission-ledger";
+import type { SubmissionStatus } from "@yielded/agent/submission-status";
+import {
+  Clock,
+  Context,
+  DateTime,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Schema,
+  Stream,
+} from "effect";
 import { Model, Toolkit } from "effect/ai";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { SqlClient } from "effect/sql/SqlClient";

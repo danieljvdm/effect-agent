@@ -1,17 +1,17 @@
-import * as PostgresStorage from "@effect-agent/storage-postgres/postgres-storage";
+import { NodeCrypto } from "@effect/platform-node";
+import { PgClient } from "@effect/sql-pg";
+import { expect, it } from "@effect/vitest";
+import * as PostgresStorage from "@yielded/agent-storage-postgres/postgres-storage";
 import {
   CERTIFICATION_SCENARIOS,
   TIER2_UNREACHED_LOCATIONS,
   certifyDurableAdapters,
   tier2NeverFiredLocations,
-} from "@effect-agent/testing/certification";
-import { NodeCrypto } from "@effect/platform-node";
-import { PgClient } from "@effect/sql-pg";
-import { expect, it } from "@effect/vitest";
+} from "@yielded/agent-testing/certification";
+import { DurableRuntimeFailpointLocation } from "@yielded/agent/durable-failpoint";
+import { submissionLedgerConformanceCases } from "@yielded/agent/testing/submission-ledger-conformance";
+import { threadStoreConformanceCases } from "@yielded/agent/testing/thread-store-conformance";
 import { Effect, Layer, Redacted } from "effect";
-import { DurableRuntimeFailpointLocation } from "effect-agent/durable-failpoint";
-import { submissionLedgerConformanceCases } from "effect-agent/testing/submission-ledger-conformance";
-import { threadStoreConformanceCases } from "effect-agent/testing/thread-store-conformance";
 
 /**
  * Keep certification outside the adapter package to avoid a storage-postgres -> testing cycle.

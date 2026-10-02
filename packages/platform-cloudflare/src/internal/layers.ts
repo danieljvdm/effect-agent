@@ -1,9 +1,11 @@
-import { doMessageDeliveryStoreLayer } from "@effect-agent/storage-cloudflare/do-message-delivery-store";
+import { BrowserCrypto } from "@effect/platform-browser";
+import { SqliteClient } from "@effect/sql-sqlite-do";
+import { doMessageDeliveryStoreLayer } from "@yielded/agent-storage-cloudflare/do-message-delivery-store";
 import {
   type DoStorageFailpointHandler,
   type DoStorageFailpoint,
-} from "@effect-agent/storage-cloudflare/do-storage-failpoint";
-import { submissionLedgerLayer } from "@effect-agent/storage-cloudflare/do-submission-ledger";
+} from "@yielded/agent-storage-cloudflare/do-storage-failpoint";
+import { submissionLedgerLayer } from "@yielded/agent-storage-cloudflare/do-submission-ledger";
 import {
   threadStoreLayer,
   storageConfigLayer,
@@ -11,11 +13,11 @@ import {
   sqlOwnerLayer,
   type DoStorageInitializationError,
   type DoStorageOptions,
-} from "@effect-agent/storage-cloudflare/do-thread-store";
+} from "@yielded/agent-storage-cloudflare/do-thread-store";
 import {
   type PortRequest,
   type PortResponse,
-} from "@effect-agent/storage-cloudflare/port-protocol";
+} from "@yielded/agent-storage-cloudflare/port-protocol";
 import {
   executePortRequest,
   makeLocalSubmissionLookup,
@@ -23,13 +25,64 @@ import {
   routedThreadStoreLayer,
   routedSubmissionLedgerLayer,
   routedWorkerAdmissionLayer,
-} from "@effect-agent/storage-cloudflare/port-routing";
+} from "@yielded/agent-storage-cloudflare/port-routing";
 import {
   SqlStorageProgress,
   SqlStorageProgressError,
-} from "@effect-agent/storage-sql/sql-storage-progress";
-import { BrowserCrypto } from "@effect/platform-browser";
-import { SqliteClient } from "@effect/sql-sqlite-do";
+} from "@yielded/agent-storage-sql/sql-storage-progress";
+import {
+  compileRegistrations,
+  type AgentRegistration,
+  type ResolvedBinding,
+} from "@yielded/agent/agent-registration";
+import { type DigestError } from "@yielded/agent/digest";
+import { DurableAgentRuntime, DurableRuntimeConfig } from "@yielded/agent/durable-agent-runtime";
+import {
+  DurableRuntimeFailpoint,
+  type DurableRuntimeFailpointHandler,
+} from "@yielded/agent/durable-failpoint";
+import { ThreadId, type SubmissionId } from "@yielded/agent/identifiers";
+import type { LifecyclePublicationHandler } from "@yielded/agent/lifecycle-publication";
+import {
+  drainLifecyclePublications,
+  LifecyclePublicationError,
+  LifecyclePublicationFact,
+  lifecyclePublicationLayer,
+} from "@yielded/agent/lifecycle-publication";
+import {
+  type MessageDeliveryStore,
+  MessageDeliveryDriver,
+  type MessageDeliveryError,
+} from "@yielded/agent/message-delivery";
+import {
+  operationAuthorizerLayer,
+  type OperationAuthorizerService,
+} from "@yielded/agent/operation-authorizer";
+import { ProducerId } from "@yielded/agent/records";
+import {
+  type RunContextPreparation,
+  type RunCostEstimator,
+  type RunToolFailureObserver,
+} from "@yielded/agent/run-options";
+import {
+  CurrentToolFailureObserver,
+  RunContextPreparationPassthrough,
+  RunToolAuthorization,
+  toolFailureObserverLayer,
+} from "@yielded/agent/run-options";
+import { SqlStorageOwner } from "@yielded/agent/sql-memory-store";
+import {
+  LedgerError,
+  SubmissionLedger,
+  type SubmissionSnapshot,
+  type AdmissionRequest,
+  type SettlementFinalization,
+  type WorkerStopCommand,
+} from "@yielded/agent/submission-ledger";
+import { ThreadProjectionMaintenance } from "@yielded/agent/thread-projection-maintenance";
+import { ThreadStoreError, ThreadStore } from "@yielded/agent/thread-store";
+import { ToolReconciler } from "@yielded/agent/tool-reconciler";
+import { type WakeScheduler } from "@yielded/agent/wake-scheduler";
 import {
   type Crypto,
   Cause,
@@ -45,59 +98,6 @@ import {
   Semaphore,
   Option,
 } from "effect";
-import {
-  compileRegistrations,
-  type AgentRegistration,
-  type ResolvedBinding,
-} from "effect-agent/agent-registration";
-import { type DigestError } from "effect-agent/digest";
-import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
-import {
-  DurableRuntimeFailpoint,
-  type DurableRuntimeFailpointHandler,
-} from "effect-agent/durable-failpoint";
-import { ThreadId, type SubmissionId } from "effect-agent/identifiers";
-import type { LifecyclePublicationHandler } from "effect-agent/lifecycle-publication";
-import {
-  drainLifecyclePublications,
-  LifecyclePublicationError,
-  LifecyclePublicationFact,
-  lifecyclePublicationLayer,
-} from "effect-agent/lifecycle-publication";
-import {
-  type MessageDeliveryStore,
-  MessageDeliveryDriver,
-  type MessageDeliveryError,
-} from "effect-agent/message-delivery";
-import {
-  operationAuthorizerLayer,
-  type OperationAuthorizerService,
-} from "effect-agent/operation-authorizer";
-import { ProducerId } from "effect-agent/records";
-import {
-  type RunContextPreparation,
-  type RunCostEstimator,
-  type RunToolFailureObserver,
-} from "effect-agent/run-options";
-import {
-  CurrentToolFailureObserver,
-  RunContextPreparationPassthrough,
-  RunToolAuthorization,
-  toolFailureObserverLayer,
-} from "effect-agent/run-options";
-import { SqlStorageOwner } from "effect-agent/sql-memory-store";
-import {
-  LedgerError,
-  SubmissionLedger,
-  type SubmissionSnapshot,
-  type AdmissionRequest,
-  type SettlementFinalization,
-  type WorkerStopCommand,
-} from "effect-agent/submission-ledger";
-import { ThreadProjectionMaintenance } from "effect-agent/thread-projection-maintenance";
-import { ThreadStoreError, ThreadStore } from "effect-agent/thread-store";
-import { ToolReconciler } from "effect-agent/tool-reconciler";
-import { type WakeScheduler } from "effect-agent/wake-scheduler";
 import { SqlClient } from "effect/sql/SqlClient";
 
 import {

@@ -1,8 +1,26 @@
-import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/node-durable-agent-runtime";
-import * as NodeHost from "@effect-agent/platform-node/node-durable-host";
-import { NodeDurableHost } from "@effect-agent/platform-node/node-durable-host";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
+import { NodeDurableAgentRuntime } from "@yielded/agent-platform-node/node-durable-agent-runtime";
+import * as NodeHost from "@yielded/agent-platform-node/node-durable-host";
+import { NodeDurableHost } from "@yielded/agent-platform-node/node-durable-host";
+import * as Agent from "@yielded/agent/agent";
+import { digestDefinitions, digestJson } from "@yielded/agent/digest";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import { DurableRuntimeFailpointError } from "@yielded/agent/durable-failpoint";
+import { AgentId, ThreadId } from "@yielded/agent/identifiers";
+import {
+  MessageDeliveryStore,
+  prepareMessageDelivery,
+  type MessageDeliveryKey,
+  type MessageDeliveryRecord,
+} from "@yielded/agent/message-delivery";
+import { DefinitionDigestInput, type DefinitionDigests } from "@yielded/agent/records";
+import {
+  IdempotencyKey,
+  Principal,
+  SubmissionLedger,
+  SubmissionLookupByKey,
+} from "@yielded/agent/submission-ledger";
 import {
   Clock,
   Context,
@@ -18,24 +36,6 @@ import {
   Stream,
   type PlatformError,
 } from "effect";
-import * as Agent from "effect-agent/agent";
-import { digestDefinitions, digestJson } from "effect-agent/digest";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
-import { AgentId, ThreadId } from "effect-agent/identifiers";
-import {
-  MessageDeliveryStore,
-  prepareMessageDelivery,
-  type MessageDeliveryKey,
-  type MessageDeliveryRecord,
-} from "effect-agent/message-delivery";
-import { DefinitionDigestInput, type DefinitionDigests } from "effect-agent/records";
-import {
-  IdempotencyKey,
-  Principal,
-  SubmissionLedger,
-  SubmissionLookupByKey,
-} from "effect-agent/submission-ledger";
 import { LanguageModel, Model, Toolkit, type Response } from "effect/ai";
 import { TestClock } from "effect/testing";
 

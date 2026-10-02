@@ -1,20 +1,20 @@
 {
-  "name": "@effect-agent/example-browser-speed",
+  "name": "@yielded/agent-example-browser-speed",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vp dev"
   },
   "dependencies": {
-    "@effect-agent/platform-cloudflare": "workspace:*",
     "@effect/ai-openai": "catalog:",
     "@effect/ai-openai-compat": "catalog:",
     "@effect/ai-typesafe": "catalog:",
     "@effect/atom-react": "catalog:",
     "@fontsource-variable/ibm-plex-sans": "catalog:",
     "@fontsource/ibm-plex-mono": "catalog:",
+    "@yielded/agent": "workspace:*",
+    "@yielded/agent-platform-cloudflare": "workspace:*",
     "effect": "catalog:",
-    "effect-agent": "workspace:*",
     "effect-cf": "catalog:",
     "lucide-react": "catalog:",
     "puppeteer-core": "catalog:",

@@ -1,10 +1,10 @@
-import { Context, Effect } from "effect";
-import * as Memory from "effect-agent/memory";
+import * as Memory from "@yielded/agent/memory";
 import {
   type MemoryLookup,
   MemoryRecallError,
   MemoryRecallLimits,
-} from "effect-agent/memory-reference";
+} from "@yielded/agent/memory-reference";
+import { Context, Effect } from "effect";
 
 const limits = MemoryRecallLimits.make({
   maxSources: 8,

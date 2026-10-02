@@ -3,25 +3,25 @@
   "changelog": [
     "@changesets/changelog-github",
     {
-      "repo": "danieljvdm/effect-agent"
+      "repo": "yielded-dev/agent"
     }
   ],
   "commit": false,
   "fixed": [
     [
-      "@effect-agent/ai-decision",
-      "@effect-agent/platform-cloudflare",
-      "@effect-agent/platform-node",
-      "@effect-agent/pr-review",
-      "@effect-agent/sandbox-local",
-      "@effect-agent/storage-cloudflare",
-      "@effect-agent/storage-memory",
-      "@effect-agent/storage-postgres",
-      "@effect-agent/storage-sql",
-      "@effect-agent/storage-sqlite",
-      "@effect-agent/testing",
-      "@effect-agent/workflow",
-      "effect-agent"
+      "@yielded/agent-ai-decision",
+      "@yielded/agent-platform-cloudflare",
+      "@yielded/agent-platform-node",
+      "@yielded/agent-pr-review",
+      "@yielded/agent-sandbox-local",
+      "@yielded/agent-storage-cloudflare",
+      "@yielded/agent-storage-memory",
+      "@yielded/agent-storage-postgres",
+      "@yielded/agent-storage-sql",
+      "@yielded/agent-storage-sqlite",
+      "@yielded/agent-testing",
+      "@yielded/agent-workflow",
+      "@yielded/agent"
     ]
   ],
   "linked": [],

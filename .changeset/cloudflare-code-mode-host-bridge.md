@@ -1,5 +1,5 @@
 ---
-"@effect-agent/platform-cloudflare": patch
+"@yielded/agent-platform-cloudflare": patch
 ---
 
 Run Dynamic Worker Code Mode host callbacks on retained independent Effect fibers so guest RPC

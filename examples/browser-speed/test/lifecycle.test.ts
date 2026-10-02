@@ -1,9 +1,9 @@
+import { assert, expectTypeOf, it } from "@effect/vitest";
 import {
   BrowserSessionError,
   BrowserSessionReference,
   BrowserSessions,
-} from "@effect-agent/platform-cloudflare/browser-session";
-import { assert, expectTypeOf, it } from "@effect/vitest";
+} from "@yielded/agent-platform-cloudflare/browser-session";
 import type { Scope } from "effect";
 import { Deferred, Effect, Exit, Fiber, Redacted, Schema } from "effect";
 import { TestClock } from "effect/testing";

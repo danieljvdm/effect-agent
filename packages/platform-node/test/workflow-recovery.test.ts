@@ -1,12 +1,12 @@
-import { WorkflowAgentHost } from "@effect-agent/workflow/workflow-agent-host";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
+import { WorkflowAgentHost } from "@yielded/agent-workflow/workflow-agent-host";
+import * as Agent from "@yielded/agent/agent";
+import { digestDefinitions } from "@yielded/agent/digest";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import * as Subagent from "@yielded/agent/subagent";
+import { SubagentReservationsMemoryLive } from "@yielded/agent/subagent-reservations";
 import { Clock, Deferred, Effect, Fiber, FileSystem, Layer, Ref, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { digestDefinitions } from "effect-agent/digest";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import * as Subagent from "effect-agent/subagent";
-import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import { Toolkit, type Response } from "effect/ai";
 
 import {

@@ -1,17 +1,16 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { type Stream, Context, Effect, Fiber, Layer, Ref, Schema } from "effect";
 import {
   type IntegrityReport,
   type ObligationReport,
   type ObligationThresholds,
   type RecoveryExplanation,
   type RetryCommand,
-} from "effect-agent/admin";
+} from "@yielded/agent/admin";
 import {
   type AgentRegistration,
   type ResolvedBinding,
   type DurableBindingFailure,
-} from "effect-agent/agent-registration";
+} from "@yielded/agent/agent-registration";
 import {
   DurableAgentRuntime,
   type DurableAbortFailure,
@@ -28,24 +27,25 @@ import {
   type Receipt,
   type RecoveryBlocked,
   type RecoveryReport,
-} from "effect-agent/durable-agent-runtime";
-import { type ThreadId, type SubmissionId } from "effect-agent/identifiers";
+} from "@yielded/agent/durable-agent-runtime";
+import { type ThreadId, type SubmissionId } from "@yielded/agent/identifiers";
 import {
   type MessageDeliveryStore,
   MessageDeliveryDriver,
   type MessageDeliveryError,
-} from "effect-agent/message-delivery";
-import { type OperationDenied } from "effect-agent/operation-authorizer";
-import { PreparedInputAdmission } from "effect-agent/prepared-input-admission";
-import { type CanonicalRecordEnvelope } from "effect-agent/records";
+} from "@yielded/agent/message-delivery";
+import { type OperationDenied } from "@yielded/agent/operation-authorizer";
+import { PreparedInputAdmission } from "@yielded/agent/prepared-input-admission";
+import { type CanonicalRecordEnvelope } from "@yielded/agent/records";
 import {
   type AbortCommand,
   type AbortIntent,
   type Settlement,
   type SubmissionLedger,
-} from "effect-agent/submission-ledger";
-import { type ThreadNotMaterialized, type ThreadStoreError } from "effect-agent/thread-store";
-import { type WakeScheduler } from "effect-agent/wake-scheduler";
+} from "@yielded/agent/submission-ledger";
+import { type ThreadNotMaterialized, type ThreadStoreError } from "@yielded/agent/thread-store";
+import { type WakeScheduler } from "@yielded/agent/wake-scheduler";
+import { type Stream, Context, Effect, Fiber, Layer, Ref, Schema } from "effect";
 
 import { ExclusiveSqliteHost } from "./internal/exclusive-host.ts";
 import { runNodeMessageDeliveries } from "./internal/message-delivery.ts";

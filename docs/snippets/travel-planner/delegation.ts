@@ -1,4 +1,4 @@
-import { Subagent } from "effect-agent";
+import { Subagent } from "@yielded/agent";
 
 import { Researcher } from "./researcher.ts";
 

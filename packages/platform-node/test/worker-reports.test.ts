@@ -1,6 +1,23 @@
-import * as NodeHost from "@effect-agent/platform-node/node-durable-host";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
+import * as NodeHost from "@yielded/agent-platform-node/node-durable-host";
+import * as Agent from "@yielded/agent/agent";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import { DurableRuntimeFailpointError } from "@yielded/agent/durable-failpoint";
+import { ThreadId } from "@yielded/agent/identifiers";
+import { MessageDeliveryStore } from "@yielded/agent/message-delivery";
+import { DefinitionDigestInput } from "@yielded/agent/records";
+import * as Subagent from "@yielded/agent/subagent";
+import { SubagentHost } from "@yielded/agent/subagent-host";
+import {
+  IdempotencyKey,
+  Principal,
+  RecoverySnapshotRequest,
+  SubmissionLedger,
+} from "@yielded/agent/submission-ledger";
+import { ThreadExportRequest, ThreadStore } from "@yielded/agent/thread-store";
+import { WorkerCompletion, WorkerError } from "@yielded/agent/worker";
+import { WorkerHostAuthorizer } from "@yielded/agent/worker-host";
 import {
   Clock,
   Context,
@@ -13,23 +30,6 @@ import {
   Scope,
   Stream,
 } from "effect";
-import * as Agent from "effect-agent/agent";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
-import { ThreadId } from "effect-agent/identifiers";
-import { MessageDeliveryStore } from "effect-agent/message-delivery";
-import { DefinitionDigestInput } from "effect-agent/records";
-import * as Subagent from "effect-agent/subagent";
-import { SubagentHost } from "effect-agent/subagent-host";
-import {
-  IdempotencyKey,
-  Principal,
-  RecoverySnapshotRequest,
-  SubmissionLedger,
-} from "effect-agent/submission-ledger";
-import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
-import { WorkerCompletion, WorkerError } from "effect-agent/worker";
-import { WorkerHostAuthorizer } from "effect-agent/worker-host";
 import { LanguageModel, Model, Toolkit, type Response, type Tool } from "effect/ai";
 
 const principal = Schema.decodeSync(Principal)("report-owner");

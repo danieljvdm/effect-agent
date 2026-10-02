@@ -169,7 +169,7 @@ fresh services around any externally retained resource.
 When an approval wait must retain a resource, provide `DurableApprovalSuspension` from that same
 Layer. This optional `Effect<void, ApprovalSuspensionError>` captures the live services and finishes
 the host's checkpoint and handoff before returning. Import both names from
-`effect-agent/durable-agent-runtime`. Wrap typed failures in `ApprovalSuspensionError.make({ cause })`
+`@yielded/agent/durable-agent-runtime`. Wrap typed failures in `ApprovalSuspensionError.make({ cause })`
 using `Effect.catchCause` and `Cause.map` to preserve accompanying defects and interruptions.
 
 The runtime calls it after recording the approval request, while claim renewal and abort observation

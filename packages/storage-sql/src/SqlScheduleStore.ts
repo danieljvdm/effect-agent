@@ -1,4 +1,3 @@
-import { Effect, Result, Schema } from "effect";
 import {
   ScheduleCapacityError,
   ScheduleDueCursor,
@@ -16,12 +15,13 @@ import {
   ScheduleRecord,
   ScheduleStorageError,
   ScheduleStore,
-} from "effect-agent/schedule";
+} from "@yielded/agent/schedule";
 import {
   scheduleUsesCapacity,
   applyScheduleChange,
   scheduleDeadline,
-} from "effect-agent/schedule-transition";
+} from "@yielded/agent/schedule-transition";
+import { Effect, Result, Schema } from "effect";
 import * as SqlClientService from "effect/sql/SqlClient";
 
 import { sqliteJsonText } from "./internal/sql-json.ts";

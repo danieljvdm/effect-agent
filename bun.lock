@@ -7,16 +7,6 @@
       "devDependencies": {
         "@changesets/changelog-github": "0.7.0",
         "@changesets/cli": "2.31.0",
-        "@effect-agent/ai-decision": "workspace:*",
-        "@effect-agent/platform-cloudflare": "workspace:*",
-        "@effect-agent/platform-node": "workspace:*",
-        "@effect-agent/sandbox-local": "workspace:*",
-        "@effect-agent/storage-memory": "workspace:*",
-        "@effect-agent/storage-postgres": "workspace:*",
-        "@effect-agent/storage-sql": "workspace:*",
-        "@effect-agent/storage-sqlite": "workspace:*",
-        "@effect-agent/testing": "workspace:*",
-        "@effect-agent/workflow": "workspace:*",
         "@effect/ai-anthropic": "catalog:",
         "@effect/ai-openai": "catalog:",
         "@effect/ai-typesafe": "catalog:",
@@ -31,9 +21,19 @@
         "@napi-rs/canvas": "catalog:",
         "@stylistic/eslint-plugin": "5.10.0",
         "@types/node": "catalog:",
+        "@yielded/agent": "workspace:*",
+        "@yielded/agent-ai-decision": "workspace:*",
+        "@yielded/agent-platform-cloudflare": "workspace:*",
+        "@yielded/agent-platform-node": "workspace:*",
+        "@yielded/agent-sandbox-local": "workspace:*",
+        "@yielded/agent-storage-memory": "workspace:*",
+        "@yielded/agent-storage-postgres": "workspace:*",
+        "@yielded/agent-storage-sql": "workspace:*",
+        "@yielded/agent-storage-sqlite": "workspace:*",
+        "@yielded/agent-testing": "workspace:*",
+        "@yielded/agent-workflow": "workspace:*",
         "alchemy": "catalog:",
         "effect": "catalog:",
-        "effect-agent": "workspace:*",
         "effect-cf": "catalog:",
         "esbuild": "catalog:",
         "oxfmt": "0.68.0",
@@ -45,7 +45,7 @@
       },
     },
     "docs": {
-      "name": "@effect-agent/docs",
+      "name": "@yielded/agent-docs",
       "version": "0.0.0",
       "dependencies": {
         "@astrojs/starlight": "catalog:",
@@ -59,17 +59,17 @@
       },
     },
     "examples/browser-speed": {
-      "name": "@effect-agent/example-browser-speed",
+      "name": "@yielded/agent-example-browser-speed",
       "dependencies": {
-        "@effect-agent/platform-cloudflare": "workspace:*",
         "@effect/ai-openai": "catalog:",
         "@effect/ai-openai-compat": "catalog:",
         "@effect/ai-typesafe": "catalog:",
         "@effect/atom-react": "catalog:",
         "@fontsource-variable/ibm-plex-sans": "catalog:",
         "@fontsource/ibm-plex-mono": "catalog:",
+        "@yielded/agent": "workspace:*",
+        "@yielded/agent-platform-cloudflare": "workspace:*",
         "effect": "catalog:",
-        "effect-agent": "workspace:*",
         "effect-cf": "catalog:",
         "lucide-react": "catalog:",
         "puppeteer-core": "catalog:",
@@ -91,19 +91,20 @@
       },
     },
     "examples/travel-planner": {
-      "name": "@effect-agent/example-travel-planner",
+      "name": "@yielded/agent-example-travel-planner",
       "dependencies": {
         "@base-ui/react": "catalog:",
         "@cloudflare/sandbox": "catalog:",
-        "@effect-agent/platform-cloudflare": "workspace:*",
-        "@effect-agent/storage-cloudflare": "workspace:*",
-        "@effect-agent/testing": "workspace:*",
         "@effect/ai-openai": "catalog:",
         "@effect/atom-react": "catalog:",
         "@effect/sql-sqlite-do": "catalog:",
         "@streamparser/json": "catalog:",
         "@tanstack/react-router": "catalog:",
         "@tanstack/react-start": "catalog:",
+        "@yielded/agent": "workspace:*",
+        "@yielded/agent-platform-cloudflare": "workspace:*",
+        "@yielded/agent-storage-cloudflare": "workspace:*",
+        "@yielded/agent-testing": "workspace:*",
         "@yielded/auth": "0.1.0-beta.11",
         "@yielded/auth-crypto": "0.1.0-beta.1",
         "@yielded/auth-openid-client": "0.1.0-beta.1",
@@ -113,7 +114,6 @@
         "clsx": "catalog:",
         "drizzle-orm": "1.0.0-rc.5-ab785fc",
         "effect": "catalog:",
-        "effect-agent": "workspace:*",
         "effect-cf": "catalog:",
         "isomorphic-git": "catalog:",
         "lucide-react": "catalog:",
@@ -143,7 +143,7 @@
       },
     },
     "packages/ai-decision": {
-      "name": "@effect-agent/ai-decision",
+      "name": "@yielded/agent-ai-decision",
       "version": "0.1.0-beta.165",
       "devDependencies": {
         "@effect/ai-typesafe": "catalog:",
@@ -157,7 +157,7 @@
       },
     },
     "packages/effect-agent": {
-      "name": "effect-agent",
+      "name": "@yielded/agent",
       "version": "0.1.0-beta.165",
       "devDependencies": {
         "@effect/platform-node": "catalog:",
@@ -171,23 +171,23 @@
       },
     },
     "packages/platform-cloudflare": {
-      "name": "@effect-agent/platform-cloudflare",
+      "name": "@yielded/agent-platform-cloudflare",
       "version": "0.1.0-beta.165",
       "dependencies": {
-        "@effect-agent/storage-cloudflare": "workspace:*",
-        "@effect-agent/storage-sql": "workspace:*",
         "@effect/platform-browser": "catalog:",
         "@effect/sql-sqlite-do": "catalog:",
-        "effect-agent": "workspace:*",
+        "@yielded/agent": "workspace:*",
+        "@yielded/agent-storage-cloudflare": "workspace:*",
+        "@yielded/agent-storage-sql": "workspace:*",
         "puppeteer-core": "catalog:",
       },
       "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:",
         "@cloudflare/workers-types": "catalog:",
-        "@effect-agent/testing": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/sql-d1": "catalog:",
         "@effect/vitest": "catalog:",
+        "@yielded/agent-testing": "workspace:*",
         "effect": "catalog:",
         "effect-cf": "catalog:",
         "esbuild": "catalog:",
@@ -202,14 +202,14 @@
       },
     },
     "packages/platform-node": {
-      "name": "@effect-agent/platform-node",
+      "name": "@yielded/agent-platform-node",
       "version": "0.1.0-beta.165",
       "dependencies": {
-        "@effect-agent/storage-sqlite": "workspace:*",
-        "@effect-agent/workflow": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/sql-sqlite-node": "catalog:",
-        "effect-agent": "workspace:*",
+        "@yielded/agent": "workspace:*",
+        "@yielded/agent-storage-sqlite": "workspace:*",
+        "@yielded/agent-workflow": "workspace:*",
       },
       "devDependencies": {
         "@effect/vitest": "catalog:",
@@ -222,10 +222,10 @@
       },
     },
     "packages/pr-review": {
-      "name": "@effect-agent/pr-review",
+      "name": "@yielded/agent-pr-review",
       "version": "0.1.0-beta.165",
       "dependencies": {
-        "effect-agent": "workspace:*",
+        "@yielded/agent": "workspace:*",
       },
       "devDependencies": {
         "@effect/vitest": "catalog:",
@@ -238,12 +238,12 @@
       },
     },
     "packages/pr-review-action": {
-      "name": "@effect-agent/pr-review-action",
+      "name": "@yielded/agent-pr-review-action",
       "version": "0.0.0",
       "dependencies": {
-        "@effect-agent/pr-review": "workspace:*",
         "@effect/ai-openai": "catalog:",
         "@effect/platform-node": "catalog:",
+        "@yielded/agent-pr-review": "workspace:*",
         "diff": "catalog:",
         "effect": "catalog:",
       },
@@ -255,11 +255,11 @@
       },
     },
     "packages/sandbox-local": {
-      "name": "@effect-agent/sandbox-local",
+      "name": "@yielded/agent-sandbox-local",
       "version": "0.1.0-beta.165",
       "dependencies": {
         "@effect/platform-node": "catalog:",
-        "effect-agent": "workspace:*",
+        "@yielded/agent": "workspace:*",
       },
       "devDependencies": {
         "@effect/vitest": "catalog:",
@@ -273,19 +273,19 @@
       },
     },
     "packages/storage-cloudflare": {
-      "name": "@effect-agent/storage-cloudflare",
+      "name": "@yielded/agent-storage-cloudflare",
       "version": "0.1.0-beta.165",
       "dependencies": {
-        "@effect-agent/storage-sql": "workspace:*",
         "@effect/platform-browser": "catalog:",
         "@effect/sql-sqlite-do": "catalog:",
-        "effect-agent": "workspace:*",
+        "@yielded/agent": "workspace:*",
+        "@yielded/agent-storage-sql": "workspace:*",
       },
       "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:",
         "@cloudflare/workers-types": "catalog:",
-        "@effect-agent/testing": "workspace:*",
         "@effect/vitest": "catalog:",
+        "@yielded/agent-testing": "workspace:*",
         "effect": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
@@ -296,10 +296,10 @@
       },
     },
     "packages/storage-memory": {
-      "name": "@effect-agent/storage-memory",
+      "name": "@yielded/agent-storage-memory",
       "version": "0.1.0-beta.165",
       "dependencies": {
-        "effect-agent": "workspace:*",
+        "@yielded/agent": "workspace:*",
       },
       "devDependencies": {
         "@effect/platform-node": "catalog:",
@@ -313,11 +313,11 @@
       },
     },
     "packages/storage-postgres": {
-      "name": "@effect-agent/storage-postgres",
+      "name": "@yielded/agent-storage-postgres",
       "version": "0.1.0-beta.165",
       "dependencies": {
-        "@effect-agent/storage-sql": "workspace:*",
-        "effect-agent": "workspace:*",
+        "@yielded/agent": "workspace:*",
+        "@yielded/agent-storage-sql": "workspace:*",
       },
       "devDependencies": {
         "@effect/platform-node": "catalog:",
@@ -332,10 +332,10 @@
       },
     },
     "packages/storage-sql": {
-      "name": "@effect-agent/storage-sql",
+      "name": "@yielded/agent-storage-sql",
       "version": "0.1.0-beta.165",
       "dependencies": {
-        "effect-agent": "workspace:*",
+        "@yielded/agent": "workspace:*",
       },
       "devDependencies": {
         "@effect/vitest": "catalog:",
@@ -348,13 +348,13 @@
       },
     },
     "packages/storage-sqlite": {
-      "name": "@effect-agent/storage-sqlite",
+      "name": "@yielded/agent-storage-sqlite",
       "version": "0.1.0-beta.165",
       "dependencies": {
-        "@effect-agent/storage-sql": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/sql-sqlite-node": "catalog:",
-        "effect-agent": "workspace:*",
+        "@yielded/agent": "workspace:*",
+        "@yielded/agent-storage-sql": "workspace:*",
       },
       "devDependencies": {
         "@effect/vitest": "catalog:",
@@ -367,21 +367,21 @@
       },
     },
     "packages/testing": {
-      "name": "@effect-agent/testing",
+      "name": "@yielded/agent-testing",
       "version": "0.1.0-beta.165",
       "dependencies": {
-        "effect-agent": "workspace:*",
+        "@yielded/agent": "workspace:*",
       },
       "devDependencies": {
-        "@effect-agent/ai-decision": "workspace:*",
-        "@effect-agent/platform-node": "workspace:*",
-        "@effect-agent/storage-memory": "workspace:*",
-        "@effect-agent/storage-postgres": "workspace:*",
-        "@effect-agent/storage-sqlite": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/sql-pg": "catalog:",
         "@effect/sql-sqlite-node": "catalog:",
         "@effect/vitest": "catalog:",
+        "@yielded/agent-ai-decision": "workspace:*",
+        "@yielded/agent-platform-node": "workspace:*",
+        "@yielded/agent-storage-memory": "workspace:*",
+        "@yielded/agent-storage-postgres": "workspace:*",
+        "@yielded/agent-storage-sqlite": "workspace:*",
         "effect": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
@@ -391,15 +391,15 @@
       },
     },
     "packages/workflow": {
-      "name": "@effect-agent/workflow",
+      "name": "@yielded/agent-workflow",
       "version": "0.1.0-beta.165",
       "dependencies": {
-        "effect-agent": "workspace:*",
+        "@yielded/agent": "workspace:*",
       },
       "devDependencies": {
-        "@effect-agent/storage-memory": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
+        "@yielded/agent-storage-memory": "workspace:*",
         "effect": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
@@ -409,14 +409,14 @@
       },
     },
     "tooling/browser-run-worker-proof": {
-      "name": "@effect-agent/example-browser-run-worker-proof",
+      "name": "@yielded/agent-example-browser-run-worker-proof",
       "version": "0.0.0",
       "dependencies": {
-        "@effect-agent/platform-cloudflare": "workspace:*",
         "@effect/ai-openai": "catalog:",
         "@effect/platform-node": "catalog:",
+        "@yielded/agent": "workspace:*",
+        "@yielded/agent-platform-cloudflare": "workspace:*",
         "effect": "catalog:",
-        "effect-agent": "workspace:*",
       },
       "devDependencies": {
         "@cloudflare/workers-types": "catalog:",
@@ -431,14 +431,14 @@
       },
     },
     "tooling/cloudflare-memory": {
-      "name": "@effect-agent/example-cloudflare-memory",
+      "name": "@yielded/agent-example-cloudflare-memory",
       "version": "0.0.0",
       "dependencies": {
-        "@effect-agent/platform-cloudflare": "workspace:*",
-        "@effect-agent/storage-cloudflare": "workspace:*",
         "@effect/platform-node": "catalog:",
+        "@yielded/agent": "workspace:*",
+        "@yielded/agent-platform-cloudflare": "workspace:*",
+        "@yielded/agent-storage-cloudflare": "workspace:*",
         "effect": "catalog:",
-        "effect-agent": "workspace:*",
         "effect-cf": "catalog:",
       },
       "devDependencies": {
@@ -452,16 +452,16 @@
       },
     },
     "tooling/context-continuity-eval": {
-      "name": "@effect-agent/example-context-continuity-eval",
+      "name": "@yielded/agent-example-context-continuity-eval",
       "version": "0.0.0",
       "dependencies": {
-        "@effect-agent/platform-cloudflare": "workspace:*",
-        "@effect-agent/platform-node": "workspace:*",
         "@effect/ai-openai": "catalog:",
         "@effect/platform-browser": "catalog:",
         "@effect/platform-node": "catalog:",
+        "@yielded/agent": "workspace:*",
+        "@yielded/agent-platform-cloudflare": "workspace:*",
+        "@yielded/agent-platform-node": "workspace:*",
         "effect": "catalog:",
-        "effect-agent": "workspace:*",
         "effect-cf": "catalog:",
       },
       "devDependencies": {
@@ -477,32 +477,32 @@
       },
     },
     "tooling/pr-review-eval": {
-      "name": "@effect-agent/example-pr-review-eval",
+      "name": "@yielded/agent-example-pr-review-eval",
       "version": "0.0.0",
       "dependencies": {
-        "@effect-agent/pr-review": "workspace:*",
-        "@effect-agent/pr-review-action": "workspace:*",
         "@effect/ai-openai": "catalog:",
         "@effect/platform-node": "catalog:",
+        "@yielded/agent-pr-review": "workspace:*",
+        "@yielded/agent-pr-review-action": "workspace:*",
         "effect": "catalog:",
       },
       "devDependencies": {
-        "@effect-agent/testing": "workspace:*",
         "@effect/vitest": "catalog:",
         "@types/node": "catalog:",
+        "@yielded/agent-testing": "workspace:*",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
       },
     },
     "tooling/runtime-benchmark": {
-      "name": "@effect-agent/example-runtime-benchmark",
+      "name": "@yielded/agent-example-runtime-benchmark",
       "version": "0.0.0",
       "dependencies": {
-        "@effect-agent/platform-node": "workspace:*",
-        "@effect-agent/testing": "workspace:*",
         "@effect/platform-node": "catalog:",
+        "@yielded/agent": "workspace:*",
+        "@yielded/agent-platform-node": "workspace:*",
+        "@yielded/agent-testing": "workspace:*",
         "effect": "catalog:",
-        "effect-agent": "workspace:*",
       },
       "devDependencies": {
         "@types/node": "catalog:",
@@ -510,16 +510,16 @@
       },
     },
     "tooling/semantic-memory-eval": {
-      "name": "@effect-agent/example-semantic-memory-eval",
+      "name": "@yielded/agent-example-semantic-memory-eval",
       "version": "0.0.0",
       "dependencies": {
-        "@effect-agent/storage-memory": "workspace:*",
-        "@effect-agent/storage-sqlite": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/sql-sqlite-node": "catalog:",
         "@huggingface/transformers": "4.2.0",
+        "@yielded/agent": "workspace:*",
+        "@yielded/agent-storage-memory": "workspace:*",
+        "@yielded/agent-storage-sqlite": "workspace:*",
         "effect": "catalog:",
-        "effect-agent": "workspace:*",
       },
       "devDependencies": {
         "@types/node": "catalog:",
@@ -570,7 +570,7 @@
     "@types/react-dom": "19.2.3",
     "@types/scheduler": "0.26.0",
     "@vitejs/plugin-react": "6.0.4",
-    "@yielded/starlight-theme": "0.2.1",
+    "@yielded/starlight-theme": "0.2.2",
     "ai": "7.0.42",
     "alchemy": "2.0.0-beta.80",
     "astro": "7.3.5",
@@ -836,50 +836,6 @@
     "@ec-ts/twoslash-vue": ["@ec-ts/twoslash-vue@1.0.0", "", { "dependencies": { "@ec-ts/twoslash": "^1.0.0", "@vue/language-core": "^3.2.5", "twoslash-protocol": "^0.3.6" }, "peerDependencies": { "typescript": "^5.5.0" } }, "sha512-3bB0/1DPPLHjS0eok2Cne7xQjCQVU5AWScEBGYTqsKuTCTukDUMxUiYI54rDPQME3OLnpysiORi0FQKLA96pAg=="],
 
     "@ec-ts/vfs": ["@ec-ts/vfs@1.0.0", "", { "peerDependencies": { "typescript": "^5.5.0" } }, "sha512-GQYRPMp58p9ak+TOwSLB/HZ+iknFyTRjqMTdXDkitNN3h5yjHuO+yeeO+/cuXiv7dyXGLYs4HaYrFgRKImp8yg=="],
-
-    "@effect-agent/ai-decision": ["@effect-agent/ai-decision@workspace:packages/ai-decision"],
-
-    "@effect-agent/docs": ["@effect-agent/docs@workspace:docs"],
-
-    "@effect-agent/example-browser-run-worker-proof": ["@effect-agent/example-browser-run-worker-proof@workspace:tooling/browser-run-worker-proof"],
-
-    "@effect-agent/example-browser-speed": ["@effect-agent/example-browser-speed@workspace:examples/browser-speed"],
-
-    "@effect-agent/example-cloudflare-memory": ["@effect-agent/example-cloudflare-memory@workspace:tooling/cloudflare-memory"],
-
-    "@effect-agent/example-context-continuity-eval": ["@effect-agent/example-context-continuity-eval@workspace:tooling/context-continuity-eval"],
-
-    "@effect-agent/example-pr-review-eval": ["@effect-agent/example-pr-review-eval@workspace:tooling/pr-review-eval"],
-
-    "@effect-agent/example-runtime-benchmark": ["@effect-agent/example-runtime-benchmark@workspace:tooling/runtime-benchmark"],
-
-    "@effect-agent/example-semantic-memory-eval": ["@effect-agent/example-semantic-memory-eval@workspace:tooling/semantic-memory-eval"],
-
-    "@effect-agent/example-travel-planner": ["@effect-agent/example-travel-planner@workspace:examples/travel-planner"],
-
-    "@effect-agent/platform-cloudflare": ["@effect-agent/platform-cloudflare@workspace:packages/platform-cloudflare"],
-
-    "@effect-agent/platform-node": ["@effect-agent/platform-node@workspace:packages/platform-node"],
-
-    "@effect-agent/pr-review": ["@effect-agent/pr-review@workspace:packages/pr-review"],
-
-    "@effect-agent/pr-review-action": ["@effect-agent/pr-review-action@workspace:packages/pr-review-action"],
-
-    "@effect-agent/sandbox-local": ["@effect-agent/sandbox-local@workspace:packages/sandbox-local"],
-
-    "@effect-agent/storage-cloudflare": ["@effect-agent/storage-cloudflare@workspace:packages/storage-cloudflare"],
-
-    "@effect-agent/storage-memory": ["@effect-agent/storage-memory@workspace:packages/storage-memory"],
-
-    "@effect-agent/storage-postgres": ["@effect-agent/storage-postgres@workspace:packages/storage-postgres"],
-
-    "@effect-agent/storage-sql": ["@effect-agent/storage-sql@workspace:packages/storage-sql"],
-
-    "@effect-agent/storage-sqlite": ["@effect-agent/storage-sqlite@workspace:packages/storage-sqlite"],
-
-    "@effect-agent/testing": ["@effect-agent/testing@workspace:packages/testing"],
-
-    "@effect-agent/workflow": ["@effect-agent/workflow@workspace:packages/workflow"],
 
     "@effect/ai-anthropic": ["@effect/ai-anthropic@4.0.0", "", { "peerDependencies": { "effect": "^4.0.0" } }, "sha512-/xZYmvRE9yDLKiz1pOIx0CVaB+o0zdJd6sTG9KQbFSkM+Ule0U/6yeN+Q6KD9I7Z73t3WxhK9Xmg1eqU6+IVmQ=="],
 
@@ -1791,6 +1747,52 @@
 
     "@vue/shared": ["@vue/shared@3.5.40", "", {}, "sha512-WxnBtruIqOoV3rA4jeKDWzrYI5h7Cp4+pjwDi8kWGHz+IslhiN+wguLVVhtv2l8VoU02rzDCVfDjgCl1lNpZVg=="],
 
+    "@yielded/agent": ["@yielded/agent@workspace:packages/effect-agent"],
+
+    "@yielded/agent-ai-decision": ["@yielded/agent-ai-decision@workspace:packages/ai-decision"],
+
+    "@yielded/agent-docs": ["@yielded/agent-docs@workspace:docs"],
+
+    "@yielded/agent-example-browser-run-worker-proof": ["@yielded/agent-example-browser-run-worker-proof@workspace:tooling/browser-run-worker-proof"],
+
+    "@yielded/agent-example-browser-speed": ["@yielded/agent-example-browser-speed@workspace:examples/browser-speed"],
+
+    "@yielded/agent-example-cloudflare-memory": ["@yielded/agent-example-cloudflare-memory@workspace:tooling/cloudflare-memory"],
+
+    "@yielded/agent-example-context-continuity-eval": ["@yielded/agent-example-context-continuity-eval@workspace:tooling/context-continuity-eval"],
+
+    "@yielded/agent-example-pr-review-eval": ["@yielded/agent-example-pr-review-eval@workspace:tooling/pr-review-eval"],
+
+    "@yielded/agent-example-runtime-benchmark": ["@yielded/agent-example-runtime-benchmark@workspace:tooling/runtime-benchmark"],
+
+    "@yielded/agent-example-semantic-memory-eval": ["@yielded/agent-example-semantic-memory-eval@workspace:tooling/semantic-memory-eval"],
+
+    "@yielded/agent-example-travel-planner": ["@yielded/agent-example-travel-planner@workspace:examples/travel-planner"],
+
+    "@yielded/agent-platform-cloudflare": ["@yielded/agent-platform-cloudflare@workspace:packages/platform-cloudflare"],
+
+    "@yielded/agent-platform-node": ["@yielded/agent-platform-node@workspace:packages/platform-node"],
+
+    "@yielded/agent-pr-review": ["@yielded/agent-pr-review@workspace:packages/pr-review"],
+
+    "@yielded/agent-pr-review-action": ["@yielded/agent-pr-review-action@workspace:packages/pr-review-action"],
+
+    "@yielded/agent-sandbox-local": ["@yielded/agent-sandbox-local@workspace:packages/sandbox-local"],
+
+    "@yielded/agent-storage-cloudflare": ["@yielded/agent-storage-cloudflare@workspace:packages/storage-cloudflare"],
+
+    "@yielded/agent-storage-memory": ["@yielded/agent-storage-memory@workspace:packages/storage-memory"],
+
+    "@yielded/agent-storage-postgres": ["@yielded/agent-storage-postgres@workspace:packages/storage-postgres"],
+
+    "@yielded/agent-storage-sql": ["@yielded/agent-storage-sql@workspace:packages/storage-sql"],
+
+    "@yielded/agent-storage-sqlite": ["@yielded/agent-storage-sqlite@workspace:packages/storage-sqlite"],
+
+    "@yielded/agent-testing": ["@yielded/agent-testing@workspace:packages/testing"],
+
+    "@yielded/agent-workflow": ["@yielded/agent-workflow@workspace:packages/workflow"],
+
     "@yielded/auth": ["@yielded/auth@0.1.0-beta.11", "", { "peerDependencies": { "effect": "^4.0.0" } }, "sha512-B8U3mD00OtjeF6iMsqWS5HehEYGuz6ziD0mF5OkQYtHPUQMngndIH38myYUo/WWUcH/STj+P5Lt2Mx54kKoGbw=="],
 
     "@yielded/auth-crypto": ["@yielded/auth-crypto@0.1.0-beta.1", "", { "dependencies": { "@noble/ciphers": "2.1.1", "@noble/hashes": "2.3.0", "@yielded/auth": "0.1.0-beta.11" }, "peerDependencies": { "effect": "^4.0.0" } }, "sha512-HA9zNKc+wuRVzj7ughHHIXIahIiD0T6FxdBH2cL6gZ8rwFffetDBVfDQ2eRDYp8PKCi1dgopcdwt7NduhfygIQ=="],
@@ -1801,7 +1803,7 @@
 
     "@yielded/auth-persistence-drizzle": ["@yielded/auth-persistence-drizzle@0.1.0-beta.1", "", { "dependencies": { "@noble/hashes": "2.3.0", "@yielded/auth": "0.1.0-beta.11", "@yielded/auth-crypto": "0.1.0-beta.1", "@yielded/auth-persistence": "0.1.0-beta.11" }, "peerDependencies": { "@effect/sql-d1": ">=4.0.0", "@effect/sql-libsql": ">=4.0.0", "@effect/sql-mysql2": ">=4.0.0", "@effect/sql-pg": ">=4.0.0", "@effect/sql-pglite": ">=4.0.0", "@effect/sql-sqlite-bun": ">=4.0.0", "@effect/sql-sqlite-do": ">=4.0.0", "@effect/sql-sqlite-node": ">=4.0.0", "@effect/sql-sqlite-wasm": ">=4.0.0", "drizzle-orm": ">=1.0.0-rc.4", "effect": "^4.0.0" }, "optionalPeers": ["@effect/sql-d1", "@effect/sql-libsql", "@effect/sql-mysql2", "@effect/sql-pg", "@effect/sql-pglite", "@effect/sql-sqlite-bun", "@effect/sql-sqlite-do", "@effect/sql-sqlite-node", "@effect/sql-sqlite-wasm"] }, "sha512-gsc2f+fFlJ3oWqoJvqupbl+CP/4sT4FRzTpB4czVMWv+TeW8Uy2zgm4tcJyfmqHGRXGZVycX/s4dQLsjgzDYPA=="],
 
-    "@yielded/starlight-theme": ["@yielded/starlight-theme@0.2.1", "", { "dependencies": { "@fontsource-variable/ibm-plex-sans": "^5.3.0", "@fontsource/ibm-plex-mono": "^5.3.0", "@fontsource/ibm-plex-sans": "^5.3.0", "@resvg/resvg-js": "^2.6.2", "github-slugger": "^2.0.0", "mdast-util-from-markdown": "^2.0.3", "mdast-util-gfm": "^3.1.0", "mermaid": "^12.0.0", "micromark-extension-gfm": "^3.0.0", "satori": "^0.33.5" }, "peerDependencies": { "@astrojs/starlight": ">=0.42.0", "astro": ">=7.2.10" } }, "sha512-5csuMGafOaOJFe43+M883Njv+RhXioHxCBpQz+OyJC8b/6DGu9BjwqXMS5MYsEqQJDE1TbNC7cTPKLFeuvk6aw=="],
+    "@yielded/starlight-theme": ["@yielded/starlight-theme@0.2.2", "", { "dependencies": { "@fontsource-variable/ibm-plex-sans": "^5.3.0", "@fontsource/ibm-plex-mono": "^5.3.0", "@fontsource/ibm-plex-sans": "^5.3.0", "@resvg/resvg-js": "^2.6.2", "github-slugger": "^2.0.0", "mdast-util-from-markdown": "^2.0.3", "mdast-util-gfm": "^3.1.0", "mermaid": "^12.0.0", "micromark-extension-gfm": "^3.0.0", "satori": "^0.33.5" }, "peerDependencies": { "@astrojs/starlight": ">=0.42.0", "astro": ">=7.2.10" } }, "sha512-Jq/l7INND8IYYAwpIy5T9oACEoVlYtSdGzgBI1ArJefHAroF/E5S+BZ7BoYukksZFqBoz3H4Wnc6/lFWiIPM2Q=="],
 
     "@yuku-codegen/binding-android-arm64": ["@yuku-codegen/binding-android-arm64@0.9.5", "", { "os": "android", "cpu": "arm64" }, "sha512-jrOY5WM+AaAqkv51fHP1x28ifto4WgcZVzodLUyMU1jMWn5Sq+VciRdk/n8E0Ey5w4p4cWWE+m5GfXWOYh7Kzw=="],
 
@@ -2196,8 +2198,6 @@
     "dunder-proto": ["dunder-proto@1.0.1", "", { "dependencies": { "call-bind-apply-helpers": "^1.0.1", "es-errors": "^1.3.0", "gopd": "^1.2.0" } }, "sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A=="],
 
     "effect": ["effect@4.0.0", "", {}, "sha512-ooc1TG5t+FfzgYnFz2ff6BBKyZ7EwBRVXC7c4RhQUAD6/TZ2gTXXMeb4WX7a19ozQo4J73/QW+S00YAIresoMQ=="],
-
-    "effect-agent": ["effect-agent@workspace:packages/effect-agent"],
 
     "effect-cf": ["effect-cf@0.53.0", "", { "peerDependencies": { "@cloudflare/computer": "^0.2.0", "@cloudflare/sandbox": "^0.13.0-next.738.2 || ^1.0.0", "@cloudflare/vitest-plugin": "^1.0.0", "@cloudflare/workers-types": "^5.20260926.1", "@effect/sql-d1": "^4.0.0", "@effect/sql-pg": "^4.0.0", "@effect/sql-sqlite-do": "^4.0.0", "@modelcontextprotocol/server": "^2.0.0", "effect": "^4.0.0" }, "optionalPeers": ["@cloudflare/computer", "@cloudflare/sandbox", "@cloudflare/vitest-plugin", "@cloudflare/workers-types", "@effect/sql-pg", "@modelcontextprotocol/server"] }, "sha512-4lP6sXFCUwx0fFcZsFWazZZRfEzCxKspTvwKWUheSk34dLb1vkgl2UsrniXSoRTWIGFHasZfZjONZYxcOryWWw=="],
 
@@ -3339,8 +3339,6 @@
 
     "@cloudflare/vitest-pool-workers/zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
 
-    "@effect-agent/docs/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
-
     "@effect/platform-node-shared/ws": ["ws@8.22.0", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg=="],
 
     "@effect/sql-d1/@cloudflare/workers-types": ["@cloudflare/workers-types@5.20261001.1", "", {}, "sha512-o8Q1YbLge+dCWtwoNwmZcGQdtoknQMNtkZS2FQc0kIXRfztTCslKnRS+nWSIypVnGptuZBpppeZ9w9THsKBX2Q=="],
@@ -3450,6 +3448,8 @@
     "@vue/compiler-core/entities": ["entities@7.0.1", "", {}, "sha512-TWrgLOFUQTH994YUyl1yT4uyavY5nNB5muff+RtWaqNVCAK408b5ZnnbNAUEWLTCpum9w6arT70i1XdQ4UeOPA=="],
 
     "@vue/compiler-core/estree-walker": ["estree-walker@2.0.2", "", {}, "sha512-Rfkk/Mp/DL7JVje3u18FxFujQlTNR2q6QfMSMB7AvCBx91NGj/ba3kCfza0f6dVDbw7YlRf/nDrn7pQrCCyQ/w=="],
+
+    "@yielded/agent-docs/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
 
     "anymatch/picomatch": ["picomatch@2.3.2", "", {}, "sha512-V7+vQEJ06Z+c5tSye8S+nHUfI51xoXIXjHQ99cQtKUkQqqO1kO/KCJUfZXuB47h/YBlDhah2H3hdUGXn8ie0oA=="],
 

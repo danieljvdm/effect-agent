@@ -1,7 +1,7 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, it } from "@effect/vitest";
+import { submissionLedgerConformanceCases } from "@yielded/agent/testing/submission-ledger-conformance";
 import { Effect, Layer, String } from "effect";
-import { submissionLedgerConformanceCases } from "effect-agent/testing/submission-ledger-conformance";
 
 import { storage as makeStorage, withTemporaryDatabase } from "./harness.ts";
 

@@ -1,6 +1,6 @@
+import type { PersistedJson } from "@yielded/agent/records";
+import { CanonicalRecordEnvelope } from "@yielded/agent/records";
 import { Schema } from "effect";
-import type { PersistedJson } from "effect-agent/records";
-import { CanonicalRecordEnvelope } from "effect-agent/records";
 import { describe, expect, it } from "vite-plus/test";
 
 import { hasSearchPathToRead, originalArchiveRecord } from "../src/evidence.ts";
@@ -49,7 +49,7 @@ const read = (sequence: number, recordId: string, text: string) =>
   });
 
 // The live model followed a search hit to an earlier read result, then to its original source:
-// https://github.com/danieljvdm/effect-agent/actions/runs/34245755789
+// https://github.com/yielded-dev/agent/actions/runs/34245755789
 describe("canonical retrieval evidence", () => {
   it("accepts a direct hit and a citation path ending at the verified original read", () => {
     expect(

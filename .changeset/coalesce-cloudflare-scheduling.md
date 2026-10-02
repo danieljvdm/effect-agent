@@ -1,8 +1,8 @@
 ---
-"@effect-agent/platform-cloudflare": patch
-"@effect-agent/storage-cloudflare": patch
-"@effect-agent/storage-sql": patch
-"effect-agent": patch
+"@yielded/agent-platform-cloudflare": patch
+"@yielded/agent-storage-cloudflare": patch
+"@yielded/agent-storage-sql": patch
+"@yielded/agent": patch
 ---
 
 Coalesce Cloudflare maintenance scheduling writes within each transaction and reuse its queue view without changing retry, publication, or recovery behavior.

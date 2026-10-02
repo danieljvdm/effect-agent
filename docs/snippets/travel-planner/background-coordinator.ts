@@ -1,5 +1,5 @@
+import { Subagent, Agent } from "@yielded/agent";
 import { Schema } from "effect";
-import { Subagent, Agent } from "effect-agent";
 
 import { CoordinatorInput } from "./background-input.ts";
 import { Researcher } from "./researcher.ts";

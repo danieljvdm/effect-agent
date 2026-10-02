@@ -1,13 +1,13 @@
-import { ThreadObjectNamespace } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { ThreadObjectNamespace } from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
 import {
   CloudflareSchedulingClient,
   ScheduleOwnerNamespace,
   makeScheduleOwnerObjectClass,
-} from "@effect-agent/platform-cloudflare/cloudflare-scheduling";
+} from "@yielded/agent-platform-cloudflare/cloudflare-scheduling";
+import { type DurableSubmitAgent } from "@yielded/agent/durable-agent-runtime";
+import { type ScheduleAuthorizer } from "@yielded/agent/schedule";
+import { type ScheduleCreateOptions, Scheduling } from "@yielded/agent/scheduling";
 import { Effect, Layer, type Schema } from "effect";
-import { type DurableSubmitAgent } from "effect-agent/durable-agent-runtime";
-import { type ScheduleAuthorizer } from "effect-agent/schedule";
-import { type ScheduleCreateOptions, Scheduling } from "effect-agent/scheduling";
 import { WorkerEnvironment } from "effect-cf";
 
 /**

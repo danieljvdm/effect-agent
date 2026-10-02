@@ -1,9 +1,9 @@
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import { type RuntimeBinding } from "@yielded/agent/agent-runtime";
+import * as Subagent from "@yielded/agent/subagent";
+import { SubagentPolicy } from "@yielded/agent/subagent";
 import { Context, Deferred, Effect, Layer, Ref, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { type RuntimeBinding } from "effect-agent/agent-runtime";
-import * as Subagent from "effect-agent/subagent";
-import { SubagentPolicy } from "effect-agent/subagent";
 import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/ai";
 
 import type { ScriptedTurnInput } from "../../ScriptedModel.ts";

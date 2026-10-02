@@ -1,7 +1,7 @@
+import { ContextHistoryPage } from "@yielded/agent/context-history";
+import { type CanonicalRecordEnvelope } from "@yielded/agent/records";
+import { project } from "@yielded/agent/thread-context-history-projection";
 import { Effect, Option, Schema } from "effect";
-import { ContextHistoryPage } from "effect-agent/context-history";
-import { type CanonicalRecordEnvelope } from "effect-agent/records";
-import { project } from "effect-agent/thread-context-history-projection";
 
 import { check, type Check, type ProjectStatus, type WindowEvidence } from "./contracts.ts";
 import { originalArchiveRecord, hasSearchPathToRead } from "./evidence.ts";

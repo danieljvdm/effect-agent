@@ -83,7 +83,7 @@ export CHECKOUT_RUN_ID="checkout-$(openssl rand -hex 6)"
 export CHECKOUT_TOKEN="$(openssl rand -hex 32)"
 export CHECKOUT_PASSWORD="$(openssl rand -hex 32)"
 export CHECKOUT_MODEL=gpt-6-luna
-vp run --no-cache -F @effect-agent/example-browser-run-worker-proof prove:live
+vp run --no-cache -F @yielded/agent-example-browser-run-worker-proof prove:live
 ```
 
 Missing configuration, a dirty checkout, a mismatched SHA, an existing report, or an
@@ -117,7 +117,7 @@ Keep the same clean revision, environment, report, and private `.alchemy` direct
 Recovery performs closure and retirement only:
 
 ```sh
-CHECKOUT_CLEANUP=true vp run --no-cache -F @effect-agent/example-browser-run-worker-proof prove:live
+CHECKOUT_CLEANUP=true vp run --no-cache -F @yielded/agent-example-browser-run-worker-proof prove:live
 ```
 
 Recovery never deploys or calls `/run`. An absent owner is acceptable after recorded

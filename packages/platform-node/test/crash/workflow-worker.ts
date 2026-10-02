@@ -1,9 +1,9 @@
-import { AgentWorkflow } from "@effect-agent/workflow";
-import { WorkflowAgentHost } from "@effect-agent/workflow/workflow-agent-host";
-import { WorkflowDispatchFailpoint } from "@effect-agent/workflow/workflow-dispatch";
+import { AgentWorkflow } from "@yielded/agent-workflow";
+import { WorkflowAgentHost } from "@yielded/agent-workflow/workflow-agent-host";
+import { WorkflowDispatchFailpoint } from "@yielded/agent-workflow/workflow-dispatch";
+import * as Agent from "@yielded/agent/agent";
+import { digestDefinitions } from "@yielded/agent/digest";
 import { Config, Console, Effect, FileSystem, Layer, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { digestDefinitions } from "effect-agent/digest";
 import { Tool, Toolkit, type Response } from "effect/ai";
 import { Workflow } from "effect/workflow";
 

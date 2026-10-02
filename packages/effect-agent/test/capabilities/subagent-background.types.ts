@@ -1,16 +1,16 @@
-import { Context, type Crypto, Effect, type Layer, Schema, SchemaGetter } from "effect";
-import * as Agent from "effect-agent/agent";
-import type { AgentRunDispositionError } from "effect-agent/agent-error";
-import { MessageRef, type MessageStatus } from "effect-agent/messaging";
-import { IdempotencyKey, type JoinedToHost, Receipt } from "effect-agent/receipt";
-import * as Subagent from "effect-agent/subagent";
-import { SubagentGrant } from "effect-agent/subagent-contract";
+import * as Agent from "@yielded/agent/agent";
+import type { AgentRunDispositionError } from "@yielded/agent/agent-error";
+import { MessageRef, type MessageStatus } from "@yielded/agent/messaging";
+import { IdempotencyKey, type JoinedToHost, Receipt } from "@yielded/agent/receipt";
+import * as Subagent from "@yielded/agent/subagent";
+import { SubagentGrant } from "@yielded/agent/subagent-contract";
 import type {
   FollowUpWorkerRequest,
   StartWorkerRequest,
   SubagentHost,
-} from "effect-agent/subagent-host";
-import type { WorkerError } from "effect-agent/worker";
+} from "@yielded/agent/subagent-host";
+import type { WorkerError } from "@yielded/agent/worker";
+import { Context, type Crypto, Effect, type Layer, Schema, SchemaGetter } from "effect";
 import type { Tool } from "effect/ai";
 import { Toolkit } from "effect/ai";
 

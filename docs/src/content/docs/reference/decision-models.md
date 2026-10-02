@@ -8,7 +8,7 @@ description: Native Effect decisions, language-model adapters, TypeSafe configur
 Use `Decision` and `DecisionModel` from `effect/ai` to evaluate schema-defined input.
 The model returns evidence; application code owns thresholds, routing, and side effects.
 Start with the [decision guide](/guide/tools/#decision-transitions) or the
-[complete example](https://github.com/danieljvdm/effect-agent/blob/main/packages/ai-decision/examples/decision.ts).
+[complete example](https://github.com/yielded-dev/agent/blob/main/packages/ai-decision/examples/decision.ts).
 
 ## Definitions and answers
 
@@ -71,7 +71,7 @@ The language model adapter keeps strict validation; invalid sums fail with
 Provide `LanguageModelDecisionModel.layer` with any native language model that supports structured output.
 
 ```ts twoslash
-import { LanguageModelDecisionModel } from "@effect-agent/ai-decision";
+import { LanguageModelDecisionModel } from "@yielded/agent-ai-decision";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Effect, Layer, Schema } from "effect";
 import { Decision, DecisionModel } from "effect/ai";
@@ -115,8 +115,8 @@ propagate. Configure model options on the supplied Layer and compose retry, time
 policies explicitly; this adapter does not automatically retry another provider.
 
 The Layer requires `LanguageModel` and provides `DecisionModel`. Import it from the package root
-or `@effect-agent/ai-decision/language-model-decision-model`. The
-[provider-neutral example](https://github.com/danieljvdm/effect-agent/blob/main/packages/ai-decision/examples/language-model.ts)
+or `@yielded/agent-ai-decision/language-model-decision-model`. The
+[provider-neutral example](https://github.com/yielded-dev/agent/blob/main/packages/ai-decision/examples/language-model.ts)
 uses the same decision API without selecting a provider.
 
 ## AutoModel
@@ -129,7 +129,7 @@ and follow-up runs. Each new subagent selects independently from its delegated t
 
 ```
 
-Import `AutoModel` from `@effect-agent/ai-decision`. At least two profiles are required.
+Import `AutoModel` from `@yielded/agent-ai-decision`. At least two profiles are required.
 Each profile pairs a native Effect model Layer with a description. Configure reasoning effort
 and provider options on that Layer; describe capability, cost, and appropriate tasks in the
 catalog. Supply Jev through [`TypeSafeDecisionModel`](#typesafe-client), or use another
@@ -138,7 +138,7 @@ catalog. Supply Jev through [`TypeSafeDecisionModel`](#typesafe-client), or use 
 ```ts twoslash
 import { Assistant, Research, ThreadModels } from "./auto-model.ts";
 import { Effect, Layer } from "effect";
-import { AgentRuntime, Subagent } from "effect-agent";
+import { AgentRuntime, Subagent } from "@yielded/agent";
 // ---cut---
 const program = AgentRuntime.run(Assistant, "Compare train and bus travel.").pipe(
   Effect.provide(ThreadModels),
@@ -157,7 +157,7 @@ for direct `LanguageModel` calls, explicitly `resolve` a thread and provide the 
 
 ```
 
-The [complete example](https://github.com/danieljvdm/effect-agent/blob/main/docs/snippets/travel-planner/auto-model.ts)
+The [complete example](https://github.com/yielded-dev/agent/blob/main/docs/snippets/travel-planner/auto-model.ts)
 includes Jev, provider clients, and shared Layer assembly.
 
 ### Thread ownership
@@ -238,7 +238,7 @@ For low-level access, obtain `TypeSafeClient.TypeSafeClient` and call
 `TypeSafeSchema` exposes their wire schemas. System One uses `choice`, `score`, and `noul`
 questions. Use `DecisionModel.decide` for request-derived answer types and validated
 probability distributions; `systemOne` returns the provider's wire answer union.
-The [direct example](https://github.com/danieljvdm/effect-agent/blob/main/packages/ai-decision/examples/evaluate.ts)
+The [direct example](https://github.com/yielded-dev/agent/blob/main/packages/ai-decision/examples/evaluate.ts)
 shows bounded retries and a timeout.
 
 ## Errors and policies
@@ -267,6 +267,6 @@ HTTP error text may include submitted content; the host controls tracing and log
 | `TypeSafeClient.Config.layer` + `TypeSafeClient.layer` | `TypeSafeClient.layerConfig()`                             |
 | `client.evaluate(request)`                             | `client.systemOne(request)`                                |
 
-`@effect-agent/ai-decision` exports `AutoModel` and `LanguageModelDecisionModel`. Import the shared
+`@yielded/agent-ai-decision` exports `AutoModel` and `LanguageModelDecisionModel`. Import the shared
 decision APIs directly from Effect; provider integrations come directly from upstream. Custom providers implement
 `DecisionModel.make({ decide })`, returning tagged provider answers and usage.

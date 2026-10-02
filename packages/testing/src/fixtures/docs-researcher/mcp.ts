@@ -1,12 +1,12 @@
-import type { JsonSchema } from "effect";
-import { Effect, JsonPointer, Layer, Schema } from "effect";
 import {
   McpConnectionRequest,
   McpConnector,
   McpServerIdentity,
   McpToolkitMismatch,
   type McpConnection,
-} from "effect-agent/mcp";
+} from "@yielded/agent/mcp";
+import type { JsonSchema } from "effect";
+import { Effect, JsonPointer, Layer, Schema } from "effect";
 import { Tool } from "effect/ai";
 import * as McpSchema from "effect/ai/McpSchema";
 

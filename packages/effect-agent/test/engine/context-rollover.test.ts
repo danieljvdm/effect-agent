@@ -1,26 +1,26 @@
 import { expect, layer } from "@effect/vitest";
-import { Effect, Exit, Layer, Ref, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import type { CompactionError } from "effect-agent/context-compactor";
-import { ContextCompactor } from "effect-agent/context-compactor";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import type { CompactionError } from "@yielded/agent/context-compactor";
+import { ContextCompactor } from "@yielded/agent/context-compactor";
 import {
   ContextRolloverRequest,
   ContextRolloverTool,
   ContextWindow,
   ModelCallContext,
-} from "effect-agent/context-window";
-import { IdGenerator } from "effect-agent/id-generator";
-import { RunId, ThreadId, TurnId } from "effect-agent/identifiers";
-import { type RunEvent } from "effect-agent/run-event";
+} from "@yielded/agent/context-window";
+import { IdGenerator } from "@yielded/agent/id-generator";
+import { RunId, ThreadId, TurnId } from "@yielded/agent/identifiers";
+import { type RunEvent } from "@yielded/agent/run-event";
 import {
   RunContextPreparationPassthrough,
   type RunInputHook,
   type RunContextHook,
   type RunTransientContextHook,
-} from "effect-agent/run-options";
-import { ThreadHistory } from "effect-agent/thread-history";
+} from "@yielded/agent/run-options";
+import { ThreadHistory } from "@yielded/agent/thread-history";
+import { Effect, Exit, Layer, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/ai";
 
 let threadSequence = 0;

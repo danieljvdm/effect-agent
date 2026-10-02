@@ -9,15 +9,15 @@ Connect PostgreSQL storage to your agent using your application's native Effect 
 
 ```ts twoslash
 import { planner as agent } from "./node-agent.ts";
-import { Identifiers } from "effect-agent";
+import { Identifiers } from "@yielded/agent";
 declare const input: string;
 declare const threadId: Identifiers.ThreadId;
 // ---cut---
-import { PostgresStorage } from "@effect-agent/storage-postgres";
+import { PostgresStorage } from "@yielded/agent-storage-postgres";
 import { NodeCrypto } from "@effect/platform-node";
 import { PgClient } from "@effect/sql-pg";
 import { Config, Effect, Layer } from "effect";
-import { AgentRuntime, PersistentHistory } from "effect-agent";
+import { AgentRuntime, PersistentHistory } from "@yielded/agent";
 
 const Database = PgClient.layerConfig({
   url: Config.Redacted("DATABASE_URL"),
@@ -36,7 +36,7 @@ const program = AgentRuntime.run(agent, input, { threadId }).pipe(Effect.provide
 ## Install and connect
 
 ```sh
-bun add @effect-agent/storage-postgres@beta effect
+bun add @yielded/agent-storage-postgres@beta effect
 ```
 
 Requires PostgreSQL 16 or newer. Create the database and set `DATABASE_URL` to its connection URL.

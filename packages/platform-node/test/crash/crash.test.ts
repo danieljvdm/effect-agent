@@ -1,10 +1,9 @@
-import { NodeDurableHost } from "@effect-agent/platform-node/node-durable-host";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
-import { Effect, Option, Schema } from "effect";
-import * as Agent from "effect-agent/agent";
-import { DurableAgentRuntime, recoveryRepairRecordId } from "effect-agent/durable-agent-runtime";
-import { ProducerId, type CanonicalRecordEnvelope } from "effect-agent/records";
+import { NodeDurableHost } from "@yielded/agent-platform-node/node-durable-host";
+import * as Agent from "@yielded/agent/agent";
+import { DurableAgentRuntime, recoveryRepairRecordId } from "@yielded/agent/durable-agent-runtime";
+import { ProducerId, type CanonicalRecordEnvelope } from "@yielded/agent/records";
 import {
   modelResponseInterruptedRecordId,
   modelResponseRecordId,
@@ -16,7 +15,7 @@ import {
   toolCallSettledRecordId,
   toolCallUnknownRecordId,
   toolStepSettledRecordId,
-} from "effect-agent/run-journal";
+} from "@yielded/agent/run-journal";
 import {
   AbortCommand,
   ClaimRequest,
@@ -25,7 +24,8 @@ import {
   SubmissionLedger,
   submissionInputRecordId,
   submissionSettlementRecordId,
-} from "effect-agent/submission-ledger";
+} from "@yielded/agent/submission-ledger";
+import { Effect, Option, Schema } from "effect";
 import { Prompt } from "effect/ai";
 
 import {

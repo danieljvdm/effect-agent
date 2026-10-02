@@ -1,4 +1,4 @@
-# @effect-agent/platform-cloudflare
+# @yielded/agent-platform-cloudflare
 
 ## 0.1.0-beta.165
 

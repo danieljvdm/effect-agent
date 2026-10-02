@@ -34,7 +34,7 @@ verified time, and hops for the **same start and destination**; a task-board win
 Wikipedia winner. Page text is untrusted input. Tools do not expose arbitrary JavaScript or URLs.
 
 The reusable browser toolkits and model + Jev element matching come from
-`effect-agent/browser-use`. `BrowserUse.make({ grounding, mode })` pairs tools with their handlers.
+`@yielded/agent/browser-use`. `BrowserUse.make({ grounding, mode })` pairs tools with their handlers.
 This example supplies the `BrowserActions` adapter and reads native Effect selection spans.
 Wikipedia eligibility, route choice, verification, model
 configuration, and the comparison UI remain here. [Consumer setup](../../docs/src/content/docs/guide/browser.md#opt-into-decision-grounded-browser-tools).
@@ -48,7 +48,7 @@ From the repository root:
 
 ```sh
 vp install
-vp run -F @effect-agent/example-browser-speed build
+vp run -F @yielded/agent-example-browser-speed build
 cp examples/browser-speed/.dev.vars.example examples/browser-speed/.dev.vars
 ```
 
@@ -67,8 +67,8 @@ binding. Browser Run uses the real service during local development; agent runs 
 model. Start these commands in separate terminals:
 
 ```sh
-vp run -F @effect-agent/example-browser-speed worker
-vp run -F @effect-agent/example-browser-speed dev
+vp run -F @yielded/agent-example-browser-speed worker
+vp run -F @yielded/agent-example-browser-speed dev
 ```
 
 Open **http://127.0.0.1:5191** and press **Start race**. Mars → Nelson Mandela is already filled in.
@@ -218,23 +218,23 @@ for a lost request. Unsupported owner state fails decoding without resetting sto
 ## Validate and deploy
 
 ```sh
-vp run -F @effect-agent/example-browser-speed check
-vp run -F @effect-agent/example-browser-speed test
-vp run -F @effect-agent/example-browser-speed build
+vp run -F @yielded/agent-example-browser-speed check
+vp run -F @yielded/agent-example-browser-speed test
+vp run -F @yielded/agent-example-browser-speed build
 ```
 
 The ordinary suite covers verification and lifecycle behavior without credentials. To exercise
 task-board presets and Wikipedia navigation in real local Chromium, set `BROWSER_TEST_EXECUTABLE`:
 
 ```sh
-BROWSER_TEST_EXECUTABLE="/path/to/chrome" vp run -F @effect-agent/example-browser-speed test
+BROWSER_TEST_EXECUTABLE="/path/to/chrome" vp run -F @yielded/agent-example-browser-speed test
 ```
 
 That test substitutes only model HTTP responses; it retains native Effect AI decoding, tool
 execution, Chromium, and independent verification. It does not establish hosted performance.
 
 For a hosted lab, configure the same values as Worker secrets using the repository's credential
-workflow, then run `vp run -F @effect-agent/example-browser-speed deploy`. The Worker is named
+workflow, then run `vp run -F @yielded/agent-example-browser-speed deploy`. The Worker is named
 `effect-agent-browser-speed`; its assets and browser-owner Durable Object are declared in
 `wrangler.jsonc`. This configuration serves the lab on its `workers.dev` hostname: protect that
 entire hostname with Cloudflare Access before deploying, including `/api/*`. The demo has no

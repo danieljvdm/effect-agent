@@ -1,27 +1,31 @@
+import { NodeCrypto } from "@effect/platform-node";
+import { SqliteClient } from "@effect/sql-sqlite-node";
 import {
   NodeDurableAgentRuntime,
   type NodeDurableAgentRuntimeOptions,
-} from "@effect-agent/platform-node/node-durable-agent-runtime";
+} from "@yielded/agent-platform-node/node-durable-agent-runtime";
 import {
   NodeWorkflowRepairTrigger,
   SqlWorkflowDispatchStore,
-} from "@effect-agent/platform-node/node-workflow";
-import { WorkflowAgentHost } from "@effect-agent/workflow/workflow-agent-host";
+} from "@yielded/agent-platform-node/node-workflow";
+import { WorkflowAgentHost } from "@yielded/agent-workflow/workflow-agent-host";
 import {
   WorkflowDispatchScan,
   WorkflowDispatchStore,
-} from "@effect-agent/workflow/workflow-dispatch";
-import { NodeCrypto } from "@effect/platform-node";
-import { SqliteClient } from "@effect/sql-sqlite-node";
+} from "@yielded/agent-workflow/workflow-dispatch";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import { type AgentRegistration } from "@yielded/agent/agent-registration";
+import { digestDefinitions } from "@yielded/agent/digest";
+import { ThreadId } from "@yielded/agent/identifiers";
+import {
+  DefinitionDigestInput,
+  DeploymentId,
+  type DefinitionDigests,
+} from "@yielded/agent/records";
+import { IdempotencyKey, Principal } from "@yielded/agent/submission-ledger";
+import { ThreadRead, ThreadStore } from "@yielded/agent/thread-store";
 import { Effect, FileSystem, Layer, Ref, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { type AgentRegistration } from "effect-agent/agent-registration";
-import { digestDefinitions } from "effect-agent/digest";
-import { ThreadId } from "effect-agent/identifiers";
-import { DefinitionDigestInput, DeploymentId, type DefinitionDigests } from "effect-agent/records";
-import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
-import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 import { LanguageModel, Model, Toolkit, type Prompt, type Response } from "effect/ai";
 import { ClusterWorkflowEngine, SingleRunner } from "effect/cluster";
 

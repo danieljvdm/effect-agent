@@ -5,7 +5,7 @@ description: Define Effect AI tools and run them with bounded, deterministic sch
 
 <a id="tools-layers"></a>
 
-Define tools and toolkits with Effect AI. Effect Agent runs their native handlers under its
+Define tools and toolkits with Effect AI. Yielded Agent runs their native handlers under its
 scheduling, policy, and thread rules.
 
 <a id="one-tool-system"></a>
@@ -81,7 +81,7 @@ const assess = Effect.gen(function* () {
 ```
 
 Provide `TypeSafeDecisionModel.model("jev-latest")` with its client Layer to run `assess`.
-The [complete decision example](https://github.com/danieljvdm/effect-agent/blob/main/packages/ai-decision/examples/decision.ts)
+The [complete decision example](https://github.com/yielded-dev/agent/blob/main/packages/ai-decision/examples/decision.ts)
 shows provider setup, all three queries, and an application state transition.
 
 The input Schema encodes the data sent to the provider, so include only data it should receive.
@@ -97,7 +97,7 @@ to act. Choose retry and timeout policies explicitly. See the
 A native Effect AI tool can run a fixed Jev assessment inside its handler. The language model
 chooses when to call the tool; Jev answers the questions defined by the handler.
 
-The [tool example](https://github.com/danieljvdm/effect-agent/blob/main/packages/ai-decision/examples/tool.ts)
+The [tool example](https://github.com/yielded-dev/agent/blob/main/packages/ai-decision/examples/tool.ts)
 declares the input and result schemas, exposes `AiError` failures, and uses `Toolkit.toLayer`
 to call the native `DecisionModel`. Supply `TicketToolsLive` with your other handlers and a
 [configured decision model Layer](/reference/decision-models/#typesafe-client) when executing the tool.
@@ -112,7 +112,7 @@ expose matching schemas after discovery. All tools retain their native Effect AI
 handlers; omitting selection configuration and discovery preserves eager exposure.
 
 ```ts twoslash
-import { Agent, ToolDiscovery, ToolExposure } from "effect-agent";
+import { Agent, ToolDiscovery, ToolExposure } from "@yielded/agent";
 import { Effect, Layer, Schema } from "effect";
 import { Tool, Toolkit } from "effect/ai";
 
@@ -189,7 +189,7 @@ namespace. Return ranked `Descriptor.id` values. Every ID is validated before li
 unknown or duplicate IDs fail closed. Native tools and each Code Mode alias have separate IDs.
 
 ```ts twoslash
-import { ToolDiscovery } from "effect-agent";
+import { ToolDiscovery } from "@yielded/agent";
 import { Context, Effect, Schema } from "effect";
 
 class SearchUnavailable extends Schema.TaggedError<SearchUnavailable>()("SearchUnavailable", {
@@ -220,7 +220,7 @@ a fresh Scope per invocation; failure, defect, timeout and interruption close ac
 An existing ordinary readonly search tool can use the same contract: annotate it with
 `ToolExposure.DiscoveryTool` and return a decoded `toolNames` array containing registered native
 names. The runtime validates that selection before recording it. Discovery tools must use the
-`ToolExecutionClass` annotation from `effect-agent/durable-step` with value `"readonly"`;
+`ToolExecutionClass` annotation from `@yielded/agent/durable-step` with value `"readonly"`;
 uncertain and orchestration tools have different durable settlement paths and are refused.
 
 <a id="tool-selection"></a>
@@ -230,8 +230,8 @@ uncertain and orchestration tools have different durable settlement paths and ar
 Host context and workflow state can use the same mechanism directly:
 
 ```ts twoslash
-import { RunToolVisibility, Selection } from "effect-agent/tool-exposure";
-import type { RunOptions } from "effect-agent/run-options";
+import { RunToolVisibility, Selection } from "@yielded/agent/tool-exposure";
+import type { RunOptions } from "@yielded/agent/run-options";
 import { Effect, Layer } from "effect";
 
 export const options: RunOptions = {
@@ -310,7 +310,7 @@ fails the run. Declaring a `failure` Schema does not opt into recovery. Choose `
 when the model should receive the failure as a tool result and decide what to do next:
 
 ```ts twoslash
-import { Agent } from "effect-agent";
+import { Agent } from "@yielded/agent";
 import { Effect, Schema } from "effect";
 import { Tool, Toolkit } from "effect/ai";
 
@@ -407,7 +407,7 @@ const options = {
 Use sequential execution for mutating tools whose effects depend on order. Every other batch still
 has a finite concurrency limit.
 
-Durable hosts provide `RunToolScheduling` from `effect-agent/run-options` when constructing
+Durable hosts provide `RunToolScheduling` from `@yielded/agent/run-options` when constructing
 the runtime. Its `toolRequiresSequential` predicate inserts barriers around those tools while
 independent neighboring calls run concurrently. The runtime captures this host choice across
 replacement attempts; a worker's ambient reference cannot replace it. Ephemeral runs use the same
@@ -417,7 +417,7 @@ reference unless `RunOptions.scheduling` is explicitly supplied.
 
 ## Approve before execution
 
-Effect AI's `needsApproval` marks a tool for approval. Effect Agent turns its native
+Effect AI's `needsApproval` marks a tool for approval. Yielded Agent turns its native
 request into a typed Effect service with stable run identity, normalized resource targets, a
 bounded preview, expiration, audit, and a deny or unresolved decision.
 
@@ -433,7 +433,7 @@ allowing the outer execution Tool does not grant permission to its inner Tools.
 This policy permits only the `search` tool:
 
 ```ts twoslash
-import { RunToolAuthorization } from "effect-agent/run-options";
+import { RunToolAuthorization } from "@yielded/agent/run-options";
 import { Effect, Layer } from "effect";
 
 export const searchOnly = RunToolAuthorization.of({
@@ -468,11 +468,11 @@ need execution; it reuses recorded results without executing or authorizing them
 Return a denied decision only for an actual policy refusal. Its optional `cause` retains the
 original policy evidence privately; keep `reason` safe for model context. If storage, transport,
 or state validation prevents a check, fail with `AgentToolAuthorizationCheckError` from
-`effect-agent/agent-error`, supplying the tool identity, a safe `message`, and the original Effect
+`@yielded/agent/agent-error`, supplying the tool identity, a safe `message`, and the original Effect
 `cause`. This distinct failure stops execution and is reported at the failed Run boundary.
 Do not convert interruption or defects into a denial.
 
-`FailureDiagnostic.Value` and `FailureDiagnostic.Cause` from `effect-agent/failure-diagnostic`
+`FailureDiagnostic.Value` and `FailureDiagnostic.Cause` from `@yielded/agent/failure-diagnostic`
 retain original local values and encode structured diagnostic data across private JSON boundaries.
 The projection preserves tags, messages, reason/code, stacks, nested causes and Effect failure kinds;
 it excludes arbitrary payload fields and redacts common credential forms. Diagnostics are private
@@ -517,7 +517,7 @@ process and needs `ChildProcessSpawner`, which `NodeServices.layer` supplies on 
 requirements stay in the Layer's `R`.
 
 ```ts twoslash
-import { Mcp, McpClient } from "effect-agent";
+import { Mcp, McpClient } from "@yielded/agent";
 import { FetchHttpClient } from "effect/http";
 import { Effect, Layer } from "effect";
 
@@ -571,7 +571,7 @@ handling, and durable child recovery.
 Use `WebSearch.native` to let the agent's own model search and answer in the same call:
 
 ```ts twoslash
-import { WebSearch } from "effect-agent";
+import { WebSearch } from "@yielded/agent";
 import { OpenAiTool } from "@effect/ai-openai";
 
 const SearchTools = WebSearch.native({
@@ -604,8 +604,8 @@ result. Its handler uses a separately supplied LanguageModel. Include `WebSearch
 agent's toolkit, then provide this handler Layer:
 
 ```ts twoslash
-import { WebSearch } from "effect-agent";
-import * as Gateway from "@effect-agent/platform-cloudflare/cloudflare-ai-gateway";
+import { WebSearch } from "@yielded/agent";
+import * as Gateway from "@yielded/agent-platform-cloudflare/cloudflare-ai-gateway";
 import { OpenAiClient, OpenAiLanguageModel, OpenAiTool } from "@effect/ai-openai";
 import { Layer, Redacted } from "effect";
 import { FetchHttpClient } from "effect/http";

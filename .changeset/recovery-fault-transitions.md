@@ -1,5 +1,5 @@
 ---
-"@effect-agent/platform-cloudflare": minor
+"@yielded/agent-platform-cloudflare": minor
 ---
 
 Deliver durable per-submission recovery fault create, change, and clear events without notifying hosts for retry bookkeeping.

@@ -28,8 +28,8 @@ export default defineConfig({
         ssr: {
           enabled: true,
           // Bundle this entry so unused effect-cf native exports are removed in Node tests.
-          include: ["@effect-agent/platform-cloudflare/cloudflare-bindings"],
-          exclude: ["effect", "effect-agent"],
+          include: ["@yielded/agent-platform-cloudflare/cloudflare-bindings"],
+          exclude: ["effect", "@yielded/agent"],
           rolldownOptions: { external: [/^cloudflare:/] },
         },
       },

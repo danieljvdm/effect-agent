@@ -1,5 +1,5 @@
+import { ToolExecutionClass } from "@yielded/agent/durable-step";
 import { Effect, Layer, Schema } from "effect";
-import { ToolExecutionClass } from "effect-agent/durable-step";
 import { Tool, Toolkit } from "effect/ai";
 
 import {

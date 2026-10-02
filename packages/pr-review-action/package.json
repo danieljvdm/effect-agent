@@ -1,5 +1,5 @@
 {
-  "name": "@effect-agent/pr-review-action",
+  "name": "@yielded/agent-pr-review-action",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -12,9 +12,9 @@
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
-    "@effect-agent/pr-review": "workspace:*",
     "@effect/ai-openai": "catalog:",
     "@effect/platform-node": "catalog:",
+    "@yielded/agent-pr-review": "workspace:*",
     "diff": "catalog:",
     "effect": "catalog:"
   },

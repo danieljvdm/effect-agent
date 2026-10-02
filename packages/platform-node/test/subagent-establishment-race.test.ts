@@ -1,6 +1,15 @@
-import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/node-durable-agent-runtime";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
+import { NodeDurableAgentRuntime } from "@yielded/agent-platform-node/node-durable-agent-runtime";
+import * as Agent from "@yielded/agent/agent";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import { ThreadId, ToolCallId } from "@yielded/agent/identifiers";
+import { DefinitionDigestInput } from "@yielded/agent/records";
+import { childThreadIdFor } from "@yielded/agent/run-journal";
+import * as Subagent from "@yielded/agent/subagent";
+import { SubagentReservationsMemoryLive } from "@yielded/agent/subagent-reservations";
+import { IdempotencyKey, Principal } from "@yielded/agent/submission-ledger";
+import { ThreadExportRequest, ThreadStore } from "@yielded/agent/thread-store";
 import {
   Context,
   Deferred,
@@ -13,15 +22,6 @@ import {
   Schema,
   Stream,
 } from "effect";
-import * as Agent from "effect-agent/agent";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { ThreadId, ToolCallId } from "effect-agent/identifiers";
-import { DefinitionDigestInput } from "effect-agent/records";
-import { childThreadIdFor } from "effect-agent/run-journal";
-import * as Subagent from "effect-agent/subagent";
-import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
-import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
-import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { LanguageModel, Model, Toolkit, type Response } from "effect/ai";
 
 const callId = Schema.decodeSync(ToolCallId)("scout-call");

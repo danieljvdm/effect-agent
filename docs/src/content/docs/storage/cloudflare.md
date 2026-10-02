@@ -18,7 +18,7 @@ Failed transactions discard cached state.
 
 ## Run durable agents
 
-Use [`@effect-agent/platform-cloudflare`](/platforms/cloudflare/) for the complete
+Use [`@yielded/agent-platform-cloudflare`](/platforms/cloudflare/) for the complete
 host. `ThreadObject.layer` and `ThreadObject.make` assemble storage, registrations,
 admission, RPC, and alarm-driven recovery. The
 [Cloudflare setup](/platforms/cloudflare/#create-the-thread-object) includes the
@@ -32,7 +32,7 @@ If your application already owns a SQLite Durable Object, follow
 its database and alarm slot with the runtime. Reuse the host's Effect SQL client
 for application queries.
 
-`@effect-agent/storage-cloudflare` also exposes `DoThreadStore` and
+`@yielded/agent-storage-cloudflare` also exposes `DoThreadStore` and
 `DoSubmissionLedger` for custom assemblies. Their convenience Layers accept
 `ctx.storage` and supply the SQL client and Crypto. Both stores must use the same
 database so ownership claims fence the same records. These adapters provide storage

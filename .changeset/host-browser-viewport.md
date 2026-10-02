@@ -1,5 +1,5 @@
 ---
-"@effect-agent/platform-cloudflare": minor
+"@yielded/agent-platform-cloudflare": minor
 ---
 
 Expose a validated launch viewport and host-only session resizing without spending the agent action budget.

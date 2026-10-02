@@ -1,4 +1,4 @@
-import { ReviewReasoningEffort } from "@effect-agent/pr-review-action/review-openai";
+import { ReviewReasoningEffort } from "@yielded/agent-pr-review-action/review-openai";
 import {
   ReviewCompaction,
   ReviewContextTokenLimit,
@@ -6,7 +6,7 @@ import {
   ReviewOutcome,
   ReviewRequest,
   ReviewSeverity,
-} from "@effect-agent/pr-review/review";
+} from "@yielded/agent-pr-review/review";
 import { Schema } from "effect";
 
 const BoundedIdentifier = Schema.NonEmptyString.check(

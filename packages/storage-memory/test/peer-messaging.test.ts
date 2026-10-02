@@ -1,49 +1,49 @@
-import { memoryMessageDeliveryStoreLayer } from "@effect-agent/storage-memory/memory-message-delivery-store";
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Context, Duration, Effect, Layer, Option, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { DurableWorkerBinding } from "effect-agent/agent-registration";
+import { memoryMessageDeliveryStoreLayer } from "@yielded/agent-storage-memory/memory-message-delivery-store";
+import { MemorySubmissionLedgerLive } from "@yielded/agent-storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@yielded/agent-storage-memory/memory-thread-store";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import { DurableWorkerBinding } from "@yielded/agent/agent-registration";
 import {
   DurableAgentRuntime,
   DurableRuntimeConfig,
   type DurableSubmitOptions,
-} from "effect-agent/durable-agent-runtime";
-import { DurableRuntimeFailpoint } from "effect-agent/durable-failpoint";
-import { ThreadId } from "effect-agent/identifiers";
+} from "@yielded/agent/durable-agent-runtime";
+import { DurableRuntimeFailpoint } from "@yielded/agent/durable-failpoint";
+import { ThreadId } from "@yielded/agent/identifiers";
 import {
   MessageDeliveryDriver,
   MessageDeliveryFailpoint,
   MessageDeliveryFailpointError,
   MessageDeliveryStore,
-} from "effect-agent/message-delivery";
-import { MessageRef, MessagingError } from "effect-agent/messaging";
+} from "@yielded/agent/message-delivery";
+import { MessageRef, MessagingError } from "@yielded/agent/messaging";
 import {
   PeerAuthorizer,
   PeerDeliveryLifetime,
   PeerMessageCapacity,
   PeerRoutes,
   type PeerAuthorizationRequest,
-} from "effect-agent/messaging-host";
-import { PreparedInputAdmission } from "effect-agent/prepared-input-admission";
-import { IdempotencyKey, Principal } from "effect-agent/receipt";
+} from "@yielded/agent/messaging-host";
+import { PreparedInputAdmission } from "@yielded/agent/prepared-input-admission";
+import { IdempotencyKey, Principal } from "@yielded/agent/receipt";
 import {
   DefinitionDigests,
   DeploymentId,
   Digest,
   PersistedJson,
   ProducerId,
-} from "effect-agent/records";
-import { RunToolAuthorization } from "effect-agent/run-options";
-import { ScheduledInputRefused, ScheduledInputRetryable } from "effect-agent/schedule";
-import { SubmissionLedger, SubmissionLookupByKey } from "effect-agent/submission-ledger";
-import { PreparedInput } from "effect-agent/subscription";
-import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
-import { ToolReconciler } from "effect-agent/tool-reconciler";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
+} from "@yielded/agent/records";
+import { RunToolAuthorization } from "@yielded/agent/run-options";
+import { ScheduledInputRefused, ScheduledInputRetryable } from "@yielded/agent/schedule";
+import { SubmissionLedger, SubmissionLookupByKey } from "@yielded/agent/submission-ledger";
+import { PreparedInput } from "@yielded/agent/subscription";
+import { ThreadExportRequest, ThreadStore } from "@yielded/agent/thread-store";
+import { ToolReconciler } from "@yielded/agent/tool-reconciler";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
+import { Context, Duration, Effect, Layer, Option, Schema, Stream } from "effect";
 import { LanguageModel, Model, Toolkit, type Response } from "effect/ai";
 import { TestClock } from "effect/testing";
 

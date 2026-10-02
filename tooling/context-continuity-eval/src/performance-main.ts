@@ -1,4 +1,5 @@
 import { NodeCrypto, NodeRuntime, NodeServices } from "@effect/platform-node";
+import { digestJson } from "@yielded/agent/digest";
 import {
   Clock,
   Config,
@@ -14,7 +15,6 @@ import {
   Schedule,
   Schema,
 } from "effect";
-import { digestJson } from "effect-agent/digest";
 import { Command, Flag } from "effect/cli";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 

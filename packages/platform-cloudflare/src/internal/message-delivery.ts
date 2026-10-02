@@ -1,11 +1,11 @@
-import { Clock, Context, Effect, Layer, Option } from "effect";
-import { type ThreadId } from "effect-agent/identifiers";
+import { type ThreadId } from "@yielded/agent/identifiers";
 import {
   MessageDeliveryDriver,
   MessageDeliveryError,
   MessageDeliveryStore,
-} from "effect-agent/message-delivery";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
+} from "@yielded/agent/message-delivery";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
+import { Clock, Context, Effect, Layer, Option } from "effect";
 
 import { DurableAlarmError, ThreadMessageDelivery, ThreadMutationGate } from "../Alarm.ts";
 import { ThreadObjectPlacement } from "../CloudflareBindings.ts";

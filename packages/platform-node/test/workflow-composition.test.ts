@@ -1,13 +1,13 @@
-import { AgentWorkflow } from "@effect-agent/workflow";
-import { WorkflowAgentHost } from "@effect-agent/workflow/workflow-agent-host";
-import { WorkflowDispatchFailpoint } from "@effect-agent/workflow/workflow-dispatch";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
+import { Agent } from "@yielded/agent";
+import { AgentWorkflow } from "@yielded/agent-workflow";
+import { WorkflowAgentHost } from "@yielded/agent-workflow/workflow-agent-host";
+import { WorkflowDispatchFailpoint } from "@yielded/agent-workflow/workflow-dispatch";
+import type { Receipt } from "@yielded/agent/durable-agent-runtime";
+import { ToolCallId } from "@yielded/agent/identifiers";
+import { AbortCommand, ApprovalDecisionCommand } from "@yielded/agent/submission-ledger";
 import { Deferred, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
-import { Agent } from "effect-agent";
-import type { Receipt } from "effect-agent/durable-agent-runtime";
-import { ToolCallId } from "effect-agent/identifiers";
-import { AbortCommand, ApprovalDecisionCommand } from "effect-agent/submission-ledger";
 import { Tool, Toolkit, type Response } from "effect/ai";
 import { Workflow } from "effect/workflow";
 

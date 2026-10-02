@@ -1,37 +1,25 @@
+import { BrowserCrypto } from "@effect/platform-browser";
+import { SqliteClient } from "@effect/sql-sqlite-do";
 import {
   DoStorageCompatibilityError,
   DoStorageFailpointError,
   DoValueBoundExceeded,
-} from "@effect-agent/storage-cloudflare/do-storage-error";
-import { DoStorageFailpoint } from "@effect-agent/storage-cloudflare/do-storage-failpoint";
-import { CurrentDoStorageVersion } from "@effect-agent/storage-cloudflare/do-storage-version";
-import { ledgerLayer } from "@effect-agent/storage-cloudflare/do-submission-ledger";
+} from "@yielded/agent-storage-cloudflare/do-storage-error";
+import { DoStorageFailpoint } from "@yielded/agent-storage-cloudflare/do-storage-failpoint";
+import { CurrentDoStorageVersion } from "@yielded/agent-storage-cloudflare/do-storage-version";
+import { ledgerLayer } from "@yielded/agent-storage-cloudflare/do-submission-ledger";
 import {
   threadStoreLayer,
   invalidate,
   layer,
   storageConfigLayer,
-} from "@effect-agent/storage-cloudflare/do-thread-store";
-import { BrowserCrypto } from "@effect/platform-browser";
-import { SqliteClient } from "@effect/sql-sqlite-do";
-import {
-  Cause,
-  Deferred,
-  Fiber,
-  Effect,
-  Exit,
-  Layer,
-  Option,
-  Schema,
-  Stream,
-  Tracer,
-} from "effect";
-import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
-import { CanonicalBatch, CanonicalRecord, UserInputRecorded } from "effect-agent/records";
+} from "@yielded/agent-storage-cloudflare/do-thread-store";
+import { EMPTY_TAIL_DIGEST } from "@yielded/agent/digest";
+import { CanonicalBatch, CanonicalRecord, UserInputRecorded } from "@yielded/agent/records";
 import {
   threadStoreConformanceCases,
   threadCheckpointConformanceCases,
-} from "effect-agent/testing/thread-store-conformance";
+} from "@yielded/agent/testing/thread-store-conformance";
 import {
   ThreadCheckpoint,
   ThreadTailRequest,
@@ -45,7 +33,19 @@ import {
   LoadCheckpointRequest,
   SaveCheckpointRequest,
   SaveRecoveryCheckpointRequest,
-} from "effect-agent/thread-store";
+} from "@yielded/agent/thread-store";
+import {
+  Cause,
+  Deferred,
+  Fiber,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  Schema,
+  Stream,
+  Tracer,
+} from "effect";
 import * as SqlClientService from "effect/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -820,4 +820,4 @@ describe("DoThreadStore", () => {
       ),
     ));
 });
-import { SubmissionId } from "effect-agent/identifiers";
+import { SubmissionId } from "@yielded/agent/identifiers";

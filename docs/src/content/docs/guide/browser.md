@@ -28,7 +28,7 @@ model Tools and agent journals.
 In your application, install the browser adapters:
 
 ```sh
-bun add @effect-agent/platform-cloudflare@beta effect
+bun add @yielded/agent-platform-cloudflare@beta effect
 ```
 
 Keep framework packages at the [same release](/guide/getting-started/#installation-and-compatibility).
@@ -120,7 +120,7 @@ operation.
 batching once; the host supplies the page adapter and provider.
 
 ```ts twoslash
-import { BrowserUse } from "effect-agent";
+import { BrowserUse } from "@yielded/agent";
 import { TypeSafeClient, TypeSafeDecisionModel } from "@effect/ai-typesafe";
 import { Config, Layer } from "effect";
 import { FetchHttpClient } from "effect/http";
@@ -146,7 +146,7 @@ ordinary Language Model. Grounding introduces no fallback planner.
 exposed page data, revalidates targets before input, and enforces navigation and action authority.
 It returns acknowledged action counts even when later observation fails; no handler replays
 completed actions. Browser lifetime, credentials, approvals, and outcome verification stay with
-the host. See the [browser speed lab](https://github.com/danieljvdm/effect-agent/tree/main/examples/browser-speed) for a complete
+the host. See the [browser speed lab](https://github.com/yielded-dev/agent/tree/main/examples/browser-speed) for a complete
 adapter using Cloudflare Browser Sessions, tracing, and an independent verifier.
 
 Build one grounded handler Layer per page/run. It serializes observation and selection, keeps the
@@ -168,14 +168,14 @@ application owns the Cloudflare credentials and provides the `HttpClient`; the r
 typed Effect channel.
 
 ```ts twoslash
-import { browserRestCaptureLayer } from "@effect-agent/platform-cloudflare/browser-rest-capture";
+import { browserRestCaptureLayer } from "@yielded/agent-platform-cloudflare/browser-rest-capture";
 import {
   CapturePageMarkdown,
   PageCapture,
   PageCaptureLimits,
   PageCaptureRequest,
   PageUrlTarget,
-} from "effect-agent/page-capture";
+} from "@yielded/agent/page-capture";
 import { Config, Effect } from "effect";
 import { FetchHttpClient } from "effect/http";
 
@@ -203,16 +203,16 @@ or structured data.
 
 ## Give an agent a capture Tool
 
-Use `WebCapture` from `effect-agent` to wrap capture in a native Effect AI Tool. Fix the allowed
+Use `WebCapture` from `@yielded/agent` to wrap capture in a native Effect AI Tool. Fix the allowed
 hosts, actions, and output size in the definition. In a Worker, the Cloudflare package assembles
 the capture adapter, binding, and handlers in one Layer:
 
 ```ts twoslash
-import { WebCapture } from "effect-agent";
+import { WebCapture } from "@yielded/agent";
 import {
   CloudflareBrowser,
   type CloudflareBrowserOptions,
-} from "@effect-agent/platform-cloudflare/cloudflare-browser";
+} from "@yielded/agent-platform-cloudflare/cloudflare-browser";
 import { Toolkit } from "effect/ai";
 
 declare const env: { BROWSER: CloudflareBrowserOptions["browser"] };
@@ -241,11 +241,11 @@ It preserves the definition's host policy, output bounds, typed failures, and re
 For REST capture, use the Node-safe REST subpath and supply an HTTP client:
 
 ```ts twoslash
-import { WebCapture } from "effect-agent";
+import { WebCapture } from "@yielded/agent";
 import {
   CloudflareBrowserRest,
   type CloudflareBrowserRestOptions,
-} from "@effect-agent/platform-cloudflare/browser-rest-capture";
+} from "@yielded/agent-platform-cloudflare/browser-rest-capture";
 import { Layer } from "effect";
 import { Toolkit } from "effect/ai";
 import { FetchHttpClient } from "effect/http";
@@ -281,8 +281,8 @@ For a custom capture adapter, provide its Layer directly to `readPage.handlers`.
 cancels the provider job when the adapter has a job identity to clean up.
 
 ```ts twoslash
-import { browserRestCrawlLayer } from "@effect-agent/platform-cloudflare/browser-rest-crawl";
-import { PageCrawl, PageCrawlLimits, PageCrawlRequest } from "effect-agent/page-crawl";
+import { browserRestCrawlLayer } from "@yielded/agent-platform-cloudflare/browser-rest-crawl";
+import { PageCrawl, PageCrawlLimits, PageCrawlRequest } from "@yielded/agent/page-crawl";
 import { Config, Effect, Layer, Stream } from "effect";
 import { FetchHttpClient } from "effect/http";
 
@@ -348,13 +348,13 @@ an undispatched provider action can be identified without treating them as a suc
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
-import { CloudflareInteractiveBrowser } from "@effect-agent/platform-cloudflare/interactive-browser";
+import { CloudflareInteractiveBrowser } from "@yielded/agent-platform-cloudflare/interactive-browser";
 import {
   BrowserNavigateRequest,
   BrowserReadTextRequest,
   InteractiveBrowser,
   InteractiveBrowserPolicy,
-} from "effect-agent/interactive-browser";
+} from "@yielded/agent/interactive-browser";
 import { Effect, Layer, Redacted } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { WorkerEnvironment } from "effect-cf";
@@ -460,7 +460,7 @@ flowchart LR
   human["Human"] -->|authorized Live View| browser
 ```
 
-Import `BrowserSessions` from `@effect-agent/platform-cloudflare/browser-session`. Provide
+Import `BrowserSessions` from `@yielded/agent-platform-cloudflare/browser-session`. Provide
 `BrowserSessions.layer({ browser: env.BROWSER, accountId, apiToken })` and `FetchHttpClient.layer`.
 The binding runs native browser commands; the private API token permits exact-session cleanup.
 
@@ -468,7 +468,7 @@ The binding runs native browser commands; the private API token permits exact-se
 import {
   BrowserSessions,
   type BrowserSessionReference,
-} from "@effect-agent/platform-cloudflare/browser-session";
+} from "@yielded/agent-platform-cloudflare/browser-session";
 import { Effect } from "effect";
 
 declare const retain: (reference: BrowserSessionReference) => Effect.Effect<void>;
@@ -531,7 +531,7 @@ this neither extends the reference's expiry nor restores an expired browser. See
 ### Fill login or card credentials
 
 Use `session.fillCredential(request)` on that same page. Import its schemas and
-`BrowserCredentialAccess` from `@effect-agent/platform-cloudflare/browser-credentials`.
+`BrowserCredentialAccess` from `@yielded/agent-platform-cloudflare/browser-credentials`.
 Each call requires current invocation authority: the host authorizes the actual top-page,
 frame, and form-recipient origins and resolves redacted credential material from its vault.
 Bind the invocation's caller and credential identifier to one vault item; repeated authorization
@@ -553,7 +553,7 @@ nor payment acceptance. Inspect the site's result separately. An error's dispatc
 and cleanup retain partial-write and termination evidence; an uncertain fill must not be retried
 automatically. Confirmed cleanup does not undo website effects.
 
-The [runnable Worker proof](https://github.com/danieljvdm/effect-agent/blob/main/tooling/browser-run-worker-proof/src/worker.ts)
+The [runnable Worker proof](https://github.com/yielded-dev/agent/blob/main/tooling/browser-run-worker-proof/src/worker.ts)
 uses a host-bound dummy login and guarded interactive input, then independently verifies a test checkout. It does not exercise `BrowserCredentialAccess` or card filling.
 
 ### Replace the removed Protected Browser API
@@ -640,12 +640,12 @@ Do not serialize that marker as a cross-process diagnostic receipt.
 Session closure waits up to ten seconds to confirm whole-browser termination or exact-session
 absence. A pending close or transport/authentication failure is not proof of cleanup.
 `BrowserRunCleanupError` reports a sanitized reason. Correct authorization or configuration
-failures before retrying. The [interactive browser API comments](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-cloudflare/src/InteractiveBrowser.ts)
+failures before retrying. The [interactive browser API comments](https://github.com/yielded-dev/agent/blob/main/packages/platform-cloudflare/src/InteractiveBrowser.ts)
 describe action timing and lifecycle details.
 
 ## Hosted browser and checkout proof
 
-The repository includes an [opt-in temporary deployment proof](https://github.com/danieljvdm/effect-agent/tree/main/tooling/browser-run-worker-proof).
+The repository includes an [opt-in temporary deployment proof](https://github.com/yielded-dev/agent/tree/main/tooling/browser-run-worker-proof).
 It runs one real buyer with `BrowserUse` and the Cloudflare interactive browser against a test-only
 store. A host-bound password authenticates the designated buyer. The terminal submission Tool
 places the approved order once and reads its receipt after an ambiguous confirmation; the runner

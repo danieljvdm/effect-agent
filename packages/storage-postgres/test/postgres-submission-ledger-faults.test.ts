@@ -1,13 +1,11 @@
+import { NodeCrypto } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
 import {
   PostgresStorageFailpointError,
   type PostgresStorageFailpointLocation,
   PostgresWriteContention,
-} from "@effect-agent/storage-postgres/postgres-storage-error";
-import { NodeCrypto } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import type { Crypto } from "effect";
-import { Cause, DateTime, Effect, Exit, Layer, Option, Ref, Schema } from "effect";
-import { digestJson } from "effect-agent/digest";
+} from "@yielded/agent-storage-postgres/postgres-storage-error";
+import { digestJson } from "@yielded/agent/digest";
 import {
   CanonicalSequence,
   DefinitionDigests,
@@ -19,7 +17,7 @@ import {
   SubmissionSettledRecord,
   type PersistedJson,
   type SettlementOutcome,
-} from "effect-agent/records";
+} from "@yielded/agent/records";
 import {
   type ParentLinkage,
   AbortCommand,
@@ -59,8 +57,10 @@ import {
   submissionSettlementRecordId,
   type AdmissionResult,
   type OwnershipToken,
-} from "effect-agent/submission-ledger";
-import { ThreadMaterialization } from "effect-agent/thread-store";
+} from "@yielded/agent/submission-ledger";
+import { ThreadMaterialization } from "@yielded/agent/thread-store";
+import type { Crypto } from "effect";
+import { Cause, DateTime, Effect, Exit, Layer, Option, Ref, Schema } from "effect";
 import * as SqlClientService from "effect/sql/SqlClient";
 import { TestClock } from "effect/testing";
 

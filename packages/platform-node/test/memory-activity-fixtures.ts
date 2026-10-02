@@ -1,10 +1,10 @@
+import { ActivityProcessorKey } from "@yielded/agent/activity-store";
+import { ActivityPassResult } from "@yielded/agent/committed-activity";
+import * as MemoryNamespace from "@yielded/agent/memory-namespace";
+import { MemoryContent } from "@yielded/agent/memory-reference";
+import { MemoryKey, MemoryScope } from "@yielded/agent/memory-store";
+import { Digest } from "@yielded/agent/records";
 import { Schema } from "effect";
-import { ActivityProcessorKey } from "effect-agent/activity-store";
-import { ActivityPassResult } from "effect-agent/committed-activity";
-import * as MemoryNamespace from "effect-agent/memory-namespace";
-import { MemoryContent } from "effect-agent/memory-reference";
-import { MemoryKey, MemoryScope } from "effect-agent/memory-store";
-import { Digest } from "effect-agent/records";
 
 export const MEMORY_NAMESPACE = MemoryNamespace.define({
   name: "test/committed-memory",

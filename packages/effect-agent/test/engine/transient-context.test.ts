@@ -1,12 +1,12 @@
 import { expect, layer } from "@effect/vitest";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy, CompactionPolicy } from "@yielded/agent/agent-policy";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import { ContextCompactor } from "@yielded/agent/context-compactor";
+import { IdGenerator } from "@yielded/agent/id-generator";
+import { RunId, ThreadId, TurnId } from "@yielded/agent/identifiers";
+import { RunContextPreparation } from "@yielded/agent/run-options";
 import { Context, Effect, Layer, Ref, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy, CompactionPolicy } from "effect-agent/agent-policy";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import { ContextCompactor } from "effect-agent/context-compactor";
-import { IdGenerator } from "effect-agent/id-generator";
-import { RunId, ThreadId, TurnId } from "effect-agent/identifiers";
-import { RunContextPreparation } from "effect-agent/run-options";
 import { AiError, LanguageModel, Model, Prompt, type Response, Toolkit } from "effect/ai";
 
 import { ThreadHistory } from "../../src/engine/ThreadHistory.ts";

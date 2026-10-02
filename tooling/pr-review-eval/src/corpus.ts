@@ -1,4 +1,4 @@
-import { ReviewRequest } from "@effect-agent/pr-review/review";
+import { ReviewRequest } from "@yielded/agent-pr-review/review";
 import { Crypto, Effect, FileSystem, Schema, Stream } from "effect";
 import { Hex } from "effect/encoding";
 

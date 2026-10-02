@@ -1,21 +1,21 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Schema as NamespaceSchema, Effect, Ref } from "effect";
-import * as Memory from "effect-agent/memory";
-import * as MemoryNamespace from "effect-agent/memory-namespace";
+import * as Memory from "@yielded/agent/memory";
+import * as MemoryNamespace from "@yielded/agent/memory-namespace";
 import {
   MemoryAttribution,
   MemoryContent,
   type MemoryLookup,
   MemoryPassage,
   MemoryRecallLimits,
-} from "effect-agent/memory-reference";
-import { MemoryAccess, revalidateMemoryLookup } from "effect-agent/memory-revalidation";
+} from "@yielded/agent/memory-reference";
+import { MemoryAccess, revalidateMemoryLookup } from "@yielded/agent/memory-revalidation";
 import {
   MemoryScope,
   ActiveMemoryDocument,
   MemoryKey,
   MemoryReader,
-} from "effect-agent/memory-store";
+} from "@yielded/agent/memory-store";
+import { Schema as NamespaceSchema, Effect, Ref } from "effect";
 
 const TestNamespace = MemoryNamespace.define({
   name: "test/memory",

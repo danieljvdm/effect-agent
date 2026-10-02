@@ -1,6 +1,6 @@
-import { SqlStorageFailpointLocation as SqliteStorageFailpointLocation } from "@effect-agent/storage-sql/sql-storage-failpoint";
+import { SqlStorageFailpointLocation as SqliteStorageFailpointLocation } from "@yielded/agent-storage-sql/sql-storage-failpoint";
+import { CanonicalSequence, ProducerEpoch } from "@yielded/agent/records";
 import { Schema } from "effect";
-import { CanonicalSequence, ProducerEpoch } from "effect-agent/records";
 
 /** The SQLite file uses a private-development format this adapter cannot read. */
 export class SqliteStorageCompatibilityError extends Schema.TaggedError<SqliteStorageCompatibilityError>()(
@@ -96,7 +96,7 @@ export class SqliteCheckpointConflict extends Schema.TaggedError<SqliteCheckpoin
   },
 ) {}
 
-export { SqlStorageFailpointLocation as SqliteStorageFailpointLocation } from "@effect-agent/storage-sql/sql-storage-failpoint";
+export { SqlStorageFailpointLocation as SqliteStorageFailpointLocation } from "@yielded/agent-storage-sql/sql-storage-failpoint";
 
 /** Deterministic test-only fault or pause injected at a SQLite operation boundary. */
 export class SqliteStorageFailpointError extends Schema.TaggedError<SqliteStorageFailpointError>()(

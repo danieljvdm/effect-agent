@@ -1,7 +1,7 @@
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import { CanonicalRecordEnvelope, DefinitionDigestInput } from "@yielded/agent/records";
 import { Schema } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { CanonicalRecordEnvelope, DefinitionDigestInput } from "effect-agent/records";
 
 import {
   CompactionEvidence,

@@ -4772,7 +4772,7 @@ const assignmentSettlement = conformanceCase(
 );
 
 // Native turn-boundary yielding retained the active FIFO head:
-// https://github.com/danieljvdm/effect-agent/commit/2259fc05eec3bfac2a92a8d055953f3482e54735
+// https://github.com/yielded-dev/agent/commit/2259fc05eec3bfac2a92a8d055953f3482e54735
 const cooperativeHandoff = conformanceCase(
   "hands off complete Turns without bypassing ownership, ordering, cancellation or approval",
   ({ ensure, expectSome }) =>

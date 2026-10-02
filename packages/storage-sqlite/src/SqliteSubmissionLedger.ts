@@ -1,9 +1,9 @@
-import { makeSqlSubmissionLedger } from "@effect-agent/storage-sql/sql-submission-ledger";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { SqliteClient } from "@effect/sql-sqlite-node";
+import { makeSqlSubmissionLedger } from "@yielded/agent-storage-sql/sql-submission-ledger";
+import { LedgerError, SubmissionLedger } from "@yielded/agent/submission-ledger";
 import type { Crypto } from "effect";
 import { Effect, Layer } from "effect";
-import { LedgerError, SubmissionLedger } from "effect-agent/submission-ledger";
 import type * as SqlClientService from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
 

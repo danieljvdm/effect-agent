@@ -1,6 +1,5 @@
-import { Schema } from "effect";
-import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
-import { ThreadId } from "effect-agent/identifiers";
+import { DurableRuntimeFailpointError } from "@yielded/agent/durable-failpoint";
+import { ThreadId } from "@yielded/agent/identifiers";
 import {
   MessageDeliveryError,
   MessageDeliveryFailpointError,
@@ -9,8 +8,8 @@ import {
   MessageDeliveryRecord,
   MessageDeliveryPageRequest,
   MessageDeliveryPage,
-} from "effect-agent/message-delivery";
-import { CanonicalRecordEnvelope } from "effect-agent/records";
+} from "@yielded/agent/message-delivery";
+import { CanonicalRecordEnvelope } from "@yielded/agent/records";
 import {
   AbortCommand,
   WorkerStopCommand,
@@ -30,7 +29,7 @@ import {
   SubmissionLookup,
   SubmissionLookupByKey,
   SubmissionSnapshot,
-} from "effect-agent/submission-ledger";
+} from "@yielded/agent/submission-ledger";
 import {
   AppendConflict,
   AppendResult,
@@ -47,8 +46,9 @@ import {
   ThreadTailRequest,
   FenceRejected,
   FencedAppendRequest,
-} from "effect-agent/thread-store";
-import { WorkerAdmissionRequest } from "effect-agent/worker-admission";
+} from "@yielded/agent/thread-store";
+import { WorkerAdmissionRequest } from "@yielded/agent/worker-admission";
+import { Schema } from "effect";
 
 /**
  * The cross-Durable-Object port protocol (plan §1.3, D-P6-3): Schema request/response/error

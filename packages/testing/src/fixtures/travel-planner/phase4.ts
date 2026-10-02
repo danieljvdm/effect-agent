@@ -1,17 +1,17 @@
-import { Effect, Layer, Schema } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { type DurableSubmitOptions, type Receipt } from "effect-agent/durable-agent-runtime";
-import { ToolExecutionClass } from "effect-agent/durable-step";
-import { type ThreadId } from "effect-agent/identifiers";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import { type DurableSubmitOptions, type Receipt } from "@yielded/agent/durable-agent-runtime";
+import { ToolExecutionClass } from "@yielded/agent/durable-step";
+import { type ThreadId } from "@yielded/agent/identifiers";
 import {
   CanonicalRecordEnvelope,
   DefinitionDigests,
   DeploymentId,
   Digest,
   ProducerId,
-} from "effect-agent/records";
-import { Principal, type IdempotencyKey } from "effect-agent/submission-ledger";
+} from "@yielded/agent/records";
+import { Principal, type IdempotencyKey } from "@yielded/agent/submission-ledger";
+import { Effect, Layer, Schema } from "effect";
 import { Model, Tool, Toolkit } from "effect/ai";
 
 import { ScriptedModel, type ScriptedTurnInput } from "../../ScriptedModel.ts";

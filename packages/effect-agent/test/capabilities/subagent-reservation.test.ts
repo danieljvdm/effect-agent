@@ -1,13 +1,16 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Schema } from "effect";
-import { RunId, ToolCallId } from "effect-agent/identifiers";
-import { SubagentDelegationCaps, SubagentReservationAmounts } from "effect-agent/subagent-contract";
-import type { SubagentParentBudgetView } from "effect-agent/subagent-reservations";
+import { RunId, ToolCallId } from "@yielded/agent/identifiers";
+import {
+  SubagentDelegationCaps,
+  SubagentReservationAmounts,
+} from "@yielded/agent/subagent-contract";
+import type { SubagentParentBudgetView } from "@yielded/agent/subagent-reservations";
 import {
   SubagentReservationRequest,
   SubagentReservations,
   SubagentReservationsMemoryLive,
-} from "effect-agent/subagent-reservations";
+} from "@yielded/agent/subagent-reservations";
+import { Deferred, Effect, Fiber, Schema } from "effect";
 
 const decodeRunId = Schema.decodeSync(RunId);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);

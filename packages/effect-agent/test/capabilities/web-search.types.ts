@@ -1,6 +1,6 @@
+import * as WebSearch from "@yielded/agent/web-search";
 import type { Layer } from "effect";
 import { Context, Effect, Schema, SchemaGetter, Stream } from "effect";
-import * as WebSearch from "effect-agent/web-search";
 import type { AiError, LanguageModel } from "effect/ai";
 import { Tool } from "effect/ai";
 import type { expectTypeOf as ExpectTypeOf } from "vite-plus/test";

@@ -1,5 +1,5 @@
 ---
-"@effect-agent/pr-review": minor
+"@yielded/agent-pr-review": minor
 ---
 
 Replace the reviewer with a provider-neutral, single-pass agent and move GitHub and provider policy

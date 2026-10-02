@@ -1,9 +1,10 @@
 // #region catalog
-import { AutoModel } from "@effect-agent/ai-decision";
+
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { TypeSafeClient, TypeSafeDecisionModel } from "@effect/ai-typesafe";
+import { Agent, AgentRuntime, Identifiers, InMemory, Subagent } from "@yielded/agent";
+import { AutoModel } from "@yielded/agent-ai-decision";
 import { Config, Effect, Layer, Schema } from "effect";
-import { Agent, AgentRuntime, Identifiers, InMemory, Subagent } from "effect-agent";
 import { Toolkit } from "effect/ai";
 import { FetchHttpClient } from "effect/http";
 

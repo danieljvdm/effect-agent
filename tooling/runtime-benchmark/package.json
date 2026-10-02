@@ -1,5 +1,5 @@
 {
-  "name": "@effect-agent/example-runtime-benchmark",
+  "name": "@yielded/agent-example-runtime-benchmark",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -8,11 +8,11 @@
     "test": "vp test"
   },
   "dependencies": {
-    "@effect-agent/platform-node": "workspace:*",
-    "@effect-agent/testing": "workspace:*",
     "@effect/platform-node": "catalog:",
-    "effect": "catalog:",
-    "effect-agent": "workspace:*"
+    "@yielded/agent": "workspace:*",
+    "@yielded/agent-platform-node": "workspace:*",
+    "@yielded/agent-testing": "workspace:*",
+    "effect": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

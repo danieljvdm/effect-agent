@@ -1,9 +1,24 @@
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
-import { SqliteStorageFailpointError } from "@effect-agent/storage-sqlite/sqlite-storage-error";
-import { layer as sqliteStore } from "@effect-agent/storage-sqlite/sqlite-thread-store";
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
+import { Output, PersistentHistory } from "@yielded/agent";
+import { MemoryThreadStoreLive } from "@yielded/agent-storage-memory/memory-thread-store";
+import { SqliteStorageFailpointError } from "@yielded/agent-storage-sqlite/sqlite-storage-error";
+import { layer as sqliteStore } from "@yielded/agent-storage-sqlite/sqlite-thread-store";
+import { ScriptedModel, type ScriptedTurnInput } from "@yielded/agent-testing/scripted-model";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import { ThreadId } from "@yielded/agent/identifiers";
+import { ProducerEpoch } from "@yielded/agent/records";
+import { type RunEvent } from "@yielded/agent/run-event";
+import { RunContextPreparationPassthrough } from "@yielded/agent/run-options";
+import { ThreadHistory } from "@yielded/agent/thread-history";
+import { replayThread } from "@yielded/agent/thread-projection";
+import {
+  ThreadExportRequest,
+  ThreadMaterialization,
+  ThreadStore,
+} from "@yielded/agent/thread-store";
 import {
   Cause,
   Deferred,
@@ -18,17 +33,6 @@ import {
   SchemaIssue,
   Stream,
 } from "effect";
-import { Output, PersistentHistory } from "effect-agent";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import { ThreadId } from "effect-agent/identifiers";
-import { ProducerEpoch } from "effect-agent/records";
-import { type RunEvent } from "effect-agent/run-event";
-import { RunContextPreparationPassthrough } from "effect-agent/run-options";
-import { ThreadHistory } from "effect-agent/thread-history";
-import { replayThread } from "effect-agent/thread-projection";
-import { ThreadExportRequest, ThreadMaterialization, ThreadStore } from "effect-agent/thread-store";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/ai";
 
 const threadId = Schema.decodeSync(ThreadId)("retained-history");
@@ -123,7 +127,7 @@ const withDatabase = <A, E, R>(use: (filename: string) => Effect.Effect<A, E, R>
   ).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, services)));
 
 describe("persistent threads", () => {
-  // https://github.com/danieljvdm/effect-agent/issues/692
+  // https://github.com/yielded-dev/agent/issues/692
   // Use the live runner without an Effect timeout: another racing fiber hides the hang.
   it("completes sequential SQLite history runs across scheduler yields", () => {
     const chat = Agent.make("history-scheduler", {

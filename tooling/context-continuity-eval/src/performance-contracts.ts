@@ -1,6 +1,6 @@
+import * as Agent from "@yielded/agent/agent";
+import { CanonicalRecordEnvelope, DefinitionDigestInput } from "@yielded/agent/records";
 import { Schema } from "effect";
-import * as Agent from "effect-agent/agent";
-import { CanonicalRecordEnvelope, DefinitionDigestInput } from "effect-agent/records";
 import { Tool, Toolkit } from "effect/ai";
 
 import { ModelUsage } from "./contracts.ts";

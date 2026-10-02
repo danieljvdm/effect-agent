@@ -1,6 +1,6 @@
 ---
-"@effect-agent/platform-cloudflare": minor
-"effect-agent": minor
+"@yielded/agent-platform-cloudflare": minor
+"@yielded/agent": minor
 ---
 
 Authorize every still-executable model-declared call in a fresh or resumed application Tool batch

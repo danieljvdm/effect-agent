@@ -1,23 +1,23 @@
-import { Context, Effect, Layer, Option, Schema, SchemaGetter, type Scope, Stream } from "effect";
-import { AgentRuntime, Output } from "effect-agent";
-import * as Agent from "effect-agent/agent";
-import type { AgentOutputError } from "effect-agent/agent-error";
-import { AgentPolicy } from "effect-agent/agent-policy";
+import { AgentRuntime, Output } from "@yielded/agent";
+import * as Agent from "@yielded/agent/agent";
+import type { AgentOutputError } from "@yielded/agent/agent-error";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
 import {
   type AgentResult,
   type AgentRuntimeFailure,
   type AgentRuntimeRequirements,
   type AgentCompletionProjectionRequirements,
-} from "effect-agent/agent-runtime";
-import { ModelCallContext } from "effect-agent/context-window";
+} from "@yielded/agent/agent-runtime";
+import { ModelCallContext } from "@yielded/agent/context-window";
 import {
   AgentUpdateAcceptance,
   ModelUsageAccounting,
   type RunBufferLimits,
   type RunContextHook,
-} from "effect-agent/run-options";
-import { type ThreadHistory } from "effect-agent/thread-history";
-import { RunToolVisibility } from "effect-agent/tool-exposure";
+} from "@yielded/agent/run-options";
+import { type ThreadHistory } from "@yielded/agent/thread-history";
+import { RunToolVisibility } from "@yielded/agent/tool-exposure";
+import { Context, Effect, Layer, Option, Schema, SchemaGetter, type Scope, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/ai";
 import type { expectTypeOf as ExpectTypeOf } from "vite-plus/test";
 

@@ -1,5 +1,27 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
+import { type PreparedActivity } from "@yielded/agent/activity-store";
+import {
+  ActivityClaim,
+  ActivityMutationFailure,
+  ActivityProcessorKey,
+  ActivityProcessorStore,
+} from "@yielded/agent/activity-store";
+import { ActivityPassLimits, processCommittedActivity } from "@yielded/agent/committed-activity";
+import { EMPTY_TAIL_DIGEST } from "@yielded/agent/digest";
+import { ThreadId } from "@yielded/agent/identifiers";
+import {
+  BatchId,
+  CanonicalRecordEnvelope,
+  CanonicalSequence,
+  DeploymentId,
+  ObservationOffset,
+  ProducerEpoch,
+  RecordEnvelope,
+  RecordId,
+  UserInputRecorded,
+} from "@yielded/agent/records";
+import { ThreadStore, ThreadTail } from "@yielded/agent/thread-store";
 import {
   Cause,
   Clock,
@@ -12,28 +34,6 @@ import {
   Schema,
   Stream,
 } from "effect";
-import { type PreparedActivity } from "effect-agent/activity-store";
-import {
-  ActivityClaim,
-  ActivityMutationFailure,
-  ActivityProcessorKey,
-  ActivityProcessorStore,
-} from "effect-agent/activity-store";
-import { ActivityPassLimits, processCommittedActivity } from "effect-agent/committed-activity";
-import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
-import { ThreadId } from "effect-agent/identifiers";
-import {
-  BatchId,
-  CanonicalRecordEnvelope,
-  CanonicalSequence,
-  DeploymentId,
-  ObservationOffset,
-  ProducerEpoch,
-  RecordEnvelope,
-  RecordId,
-  UserInputRecorded,
-} from "effect-agent/records";
-import { ThreadStore, ThreadTail } from "effect-agent/thread-store";
 import { TestClock } from "effect/testing";
 
 const threadId = Schema.decodeSync(ThreadId)("dan-chad");

@@ -1,14 +1,14 @@
+import { describe, expect, it } from "@effect/vitest";
 import {
   BrowserRunInteractiveBinding,
   browserRunInteractiveLayer,
-} from "@effect-agent/platform-cloudflare/interactive-browser";
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, Fiber, Layer, Logger } from "effect";
+} from "@yielded/agent-platform-cloudflare/interactive-browser";
 import {
   BrowserClickRequest,
   InteractiveBrowser,
   InteractiveBrowserPolicy,
-} from "effect-agent/interactive-browser";
+} from "@yielded/agent/interactive-browser";
+import { Effect, Fiber, Layer, Logger } from "effect";
 import { afterEach, beforeEach, vi } from "vite-plus/test";
 
 import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";

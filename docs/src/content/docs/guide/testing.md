@@ -5,14 +5,14 @@ description: Script model turns and test agent behavior with Effect layers.
 
 <a id="deterministic-testing"></a>
 
-`@effect-agent/testing` provides a deterministic Effect AI `LanguageModel` layer. Use it to test
+`@yielded/agent-testing` provides a deterministic Effect AI `LanguageModel` layer. Use it to test
 the real interpreter without network access, credentials, provider latency, or model variance.
 
 ## Provide a scripted model layer
 
 ```ts
 import { Model } from "effect/ai";
-import { ScriptedModel } from "@effect-agent/testing/scripted-model";
+import { ScriptedModel } from "@yielded/agent-testing/scripted-model";
 
 const TestModel = Model.make("scripted", "test-model", ScriptedModel.layer(turns));
 ```
@@ -24,24 +24,24 @@ finalization.
 ## Choose a testing entry point
 
 The package root exports the `ScriptedModel` module namespace. Import its service, request,
-turn, hook types, and schemas directly from `@effect-agent/testing/scripted-model`.
+turn, hook types, and schemas directly from `@yielded/agent-testing/scripted-model`.
 Specialized helpers have separate paths:
 
-| Import                                            | Contents                                                |
-| ------------------------------------------------- | ------------------------------------------------------- |
-| `@effect-agent/testing/certification`             | Durable adapter certification                           |
-| `@effect-agent/testing/chaos`                     | Seeded plans and convergence checks                     |
-| `@effect-agent/testing/code-executor-conformance` | `CodeExecutor` adapter conformance                      |
-| `@effect-agent/testing/code-executor-substitute`  | Deterministic in-process executor substitute            |
-| `@effect-agent/testing/travel-planner`            | Travel Planner definitions, services, and scenarios     |
-| `@effect-agent/testing/docs-researcher`           | Docs Researcher definitions and MCP delegation fixtures |
+| Import                                             | Contents                                                |
+| -------------------------------------------------- | ------------------------------------------------------- |
+| `@yielded/agent-testing/certification`             | Durable adapter certification                           |
+| `@yielded/agent-testing/chaos`                     | Seeded plans and convergence checks                     |
+| `@yielded/agent-testing/code-executor-conformance` | `CodeExecutor` adapter conformance                      |
+| `@yielded/agent-testing/code-executor-substitute`  | Deterministic in-process executor substitute            |
+| `@yielded/agent-testing/travel-planner`            | Travel Planner definitions, services, and scenarios     |
+| `@yielded/agent-testing/docs-researcher`           | Docs Researcher definitions and MCP delegation fixtures |
 
 These paths ship JavaScript and declarations. Install the storage and runtime adapters used by
 your tests directly.
 
-Mutable runtime failpoint controls live in `effect-agent/testing/durable-failpoint-test-control`.
+Mutable runtime failpoint controls live in `@yielded/agent/testing/durable-failpoint-test-control`.
 Its `.layer` provides the production failpoint service and mutable test control over one Ref.
-`@effect-agent/storage-cloudflare/testing/do-storage-failpoint-testing` exports
+`@yielded/agent-storage-cloudflare/testing/do-storage-failpoint-testing` exports
 `evictionFailpointHandler`.
 
 ## Exercise the public runtime
@@ -51,9 +51,9 @@ a deterministic counter when assertions depend on stable IDs.
 
 ```ts
 import { Effect, Layer, Ref, Schema } from "effect";
-import { InMemory } from "effect-agent";
-import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
-import { IdGenerator } from "effect-agent/id-generator";
+import { InMemory } from "@yielded/agent";
+import { ThreadId, RunId, TurnId } from "@yielded/agent/identifiers";
+import { IdGenerator } from "@yielded/agent/id-generator";
 
 const DeterministicIdGeneratorLive = Layer.effect(
   IdGenerator,

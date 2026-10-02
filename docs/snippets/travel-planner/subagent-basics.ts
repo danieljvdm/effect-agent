@@ -1,5 +1,5 @@
+import { Agent, Subagent } from "@yielded/agent";
 import { Schema } from "effect";
-import { Agent, Subagent } from "effect-agent";
 import { Toolkit } from "effect/ai";
 
 export const Summarize = Subagent.make("summarize", {

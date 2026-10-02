@@ -1,6 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Result, Schema } from "effect";
-import type { ActivityMutationFailpoint } from "effect-agent/activity-store";
+import type { ActivityMutationFailpoint } from "@yielded/agent/activity-store";
 import {
   ActivityBusy,
   ActivityClaimRequest,
@@ -11,7 +10,8 @@ import {
   ActivityStoreError,
   ActivityWorkConflict,
   PreparedActivity,
-} from "effect-agent/activity-store";
+} from "@yielded/agent/activity-store";
+import { Cause, Deferred, Effect, Exit, Fiber, Result, Schema } from "effect";
 import * as SqlClientService from "effect/sql/SqlClient";
 import { TestClock } from "effect/testing";
 

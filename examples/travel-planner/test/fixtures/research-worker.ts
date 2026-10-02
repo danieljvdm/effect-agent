@@ -1,8 +1,8 @@
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { ThreadObjectIdentity } from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
+import { ThreadId } from "@yielded/agent/identifiers";
+import { ThreadExport, ThreadExportRequest, ThreadStore } from "@yielded/agent/thread-store";
+import { WorkerCompletion, WorkerUpdate } from "@yielded/agent/worker";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
-import { ThreadId } from "effect-agent/identifiers";
-import { ThreadExport, ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
-import { WorkerCompletion, WorkerUpdate } from "effect-agent/worker";
 import { DurableObject, WorkerEnvironment } from "effect-cf";
 import { LanguageModel, Model, Toolkit, type Prompt, type Response as AiResponse } from "effect/ai";
 

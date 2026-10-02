@@ -1,19 +1,19 @@
-import { Effect, type Layer, Schema } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import type { ContextHistory, ContextHistoryError } from "effect-agent/context-history";
-import type { ContextWindow } from "effect-agent/context-window";
-import type { DurableStep, DurableStepError } from "effect-agent/durable-step";
-import * as MemoryNamespace from "effect-agent/memory-namespace";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import type { ContextHistory, ContextHistoryError } from "@yielded/agent/context-history";
+import type { ContextWindow } from "@yielded/agent/context-window";
+import type { DurableStep, DurableStepError } from "@yielded/agent/durable-step";
+import * as MemoryNamespace from "@yielded/agent/memory-namespace";
 import type {
   MemoryConflict,
   MemoryReader,
   MemoryStorageError,
   MemoryWriter,
-} from "effect-agent/memory-store";
-import { MemoryKey, MemoryScope } from "effect-agent/memory-store";
-import type { ThreadHistory } from "effect-agent/thread-history";
+} from "@yielded/agent/memory-store";
+import { MemoryKey, MemoryScope } from "@yielded/agent/memory-store";
+import type { ThreadHistory } from "@yielded/agent/thread-history";
+import { Effect, type Layer, Schema } from "effect";
 import type { IdGenerator as EffectAiIdGenerator, LanguageModel, Model, Tool } from "effect/ai";
 import type { expectTypeOf as ExpectTypeOf } from "vite-plus/test";
 

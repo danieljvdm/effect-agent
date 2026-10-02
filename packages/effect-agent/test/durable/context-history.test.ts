@@ -1,22 +1,22 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect";
 import {
   ContextHistory,
   ContextHistoryError,
   ContextHistoryRead,
   ContextHistorySearch,
-} from "effect-agent/context-history";
-import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
-import { ThreadId } from "effect-agent/identifiers";
-import type { RecordEnvelope } from "effect-agent/records";
+} from "@yielded/agent/context-history";
+import { EMPTY_TAIL_DIGEST } from "@yielded/agent/digest";
+import { ThreadId } from "@yielded/agent/identifiers";
+import type { RecordEnvelope } from "@yielded/agent/records";
 import {
   CanonicalRecordEnvelope,
   CanonicalSequence,
   ProducerEpoch,
   PersistedJson,
-} from "effect-agent/records";
-import * as ThreadContextHistory from "effect-agent/thread-context-history";
-import { ThreadStore, ThreadStoreError, ThreadTail } from "effect-agent/thread-store";
+} from "@yielded/agent/records";
+import * as ThreadContextHistory from "@yielded/agent/thread-context-history";
+import { ThreadStore, ThreadStoreError, ThreadTail } from "@yielded/agent/thread-store";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect";
 import { Prompt } from "effect/ai";
 import { TestClock } from "effect/testing";
 

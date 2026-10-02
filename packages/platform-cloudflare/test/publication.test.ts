@@ -1,13 +1,13 @@
-import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Clock, Effect, Option, Schema } from "effect";
-import * as AgentUpdates from "effect-agent/agent-updates";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { ThreadId } from "effect-agent/identifiers";
+import * as AgentUpdates from "@yielded/agent/agent-updates";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import { ThreadId } from "@yielded/agent/identifiers";
 import {
   ApprovalDecisionCommand,
   IdempotencyKey,
   SubmissionLedger,
-} from "effect-agent/submission-ledger";
+} from "@yielded/agent/submission-ledger";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { Clock, Effect, Option, Schema } from "effect";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -192,8 +192,8 @@ const latch = () => {
 };
 
 describe("durable host publication", () => {
-  // Regressions: https://github.com/danieljvdm/effect-agent/pull/713 and
-  // https://github.com/danieljvdm/effect-agent/pull/715 publish only the start prefix during work.
+  // Regressions: https://github.com/yielded-dev/agent/pull/713 and
+  // https://github.com/yielded-dev/agent/pull/715 publish only the start prefix during work.
   // The existing held-Tool case has no intermediate updates; hold real execution and
   // the destination independently to expose publication lag without timing a provider.
   it(
@@ -312,7 +312,7 @@ describe("durable host publication", () => {
   );
 
   // The user requested test-first recovery proof for retiring the persisted lane introduced by
-  // https://github.com/danieljvdm/effect-agent/pull/715. Ordinary fresh-Object checks cannot
+  // https://github.com/yielded-dev/agent/pull/715. Ordinary fresh-Object checks cannot
   // expose an unhandled old due row. Written and passed on the baseline before changing lanes.
   it("recovers a pending start-only lane from an older Object incarnation", () =>
     withThread(async (thread, _now, advance) => {

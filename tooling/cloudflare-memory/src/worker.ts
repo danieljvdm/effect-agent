@@ -1,18 +1,18 @@
 import {
   MemoryObject,
   CloudflareMemoryClient,
-} from "@effect-agent/platform-cloudflare/cloudflare-memory";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
+} from "@yielded/agent-platform-cloudflare/cloudflare-memory";
+import * as ThreadObject from "@yielded/agent-platform-cloudflare/thread-object";
 import {
   MemoryOwnerAuthorizer,
   MemoryOwnerIdentity,
   MemoryRpcError,
   memoryWireBytes,
-} from "@effect-agent/storage-cloudflare/memory-protocol";
+} from "@yielded/agent-storage-cloudflare/memory-protocol";
+import * as Memory from "@yielded/agent/memory";
+import { MemoryAccess } from "@yielded/agent/memory-revalidation";
+import { Principal } from "@yielded/agent/submission-ledger";
 import { Clock, Effect, Layer, Schema } from "effect";
-import * as Memory from "effect-agent/memory";
-import { MemoryAccess } from "effect-agent/memory-revalidation";
-import { Principal } from "effect-agent/submission-ledger";
 import { DurableObject, WorkerEnvironment } from "effect-cf";
 
 import {

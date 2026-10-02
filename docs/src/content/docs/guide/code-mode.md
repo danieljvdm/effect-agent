@@ -25,10 +25,10 @@ Tool broker to an application-owned Tool handler. The handler decides which reso
 
 ## Build an analyst
 
-In your Effect Agent application, add the Cloudflare executor:
+In your Yielded Agent application, add the Cloudflare executor:
 
 ```sh
-bun add @effect-agent/platform-cloudflare@beta effect
+bun add @yielded/agent-platform-cloudflare@beta effect
 ```
 
 Keep framework packages at the [same release](/guide/getting-started/#installation-and-compatibility).
@@ -39,9 +39,9 @@ rows. The linked warehouse example replaces the fixed data with a brokered SQL q
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
-import { InMemory, CodeMode, Agent, AgentRuntime } from "effect-agent";
-import { ToolExecutionClass } from "effect-agent/durable-step";
-import { CloudflareCodeMode } from "@effect-agent/platform-cloudflare/cloudflare-code-mode";
+import { InMemory, CodeMode, Agent, AgentRuntime } from "@yielded/agent";
+import { ToolExecutionClass } from "@yielded/agent/durable-step";
+import { CloudflareCodeMode } from "@yielded/agent-platform-cloudflare/cloudflare-code-mode";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { Tool, Toolkit } from "effect/ai";
@@ -149,8 +149,8 @@ declarations out of the initial tool description. Add `ToolDiscovery.make` besid
 tool. Discovery returns only matching, currently eligible methods and their encoded schemas.
 
 ```ts twoslash
-import { Agent, CodeMode, ToolDiscovery } from "effect-agent";
-import { ToolExecutionClass } from "effect-agent/durable-step";
+import { Agent, CodeMode, ToolDiscovery } from "@yielded/agent";
+import { ToolExecutionClass } from "@yielded/agent/durable-step";
 import { Schema } from "effect";
 import { Tool, Toolkit } from "effect/ai";
 
@@ -271,7 +271,7 @@ requires separate checkpoint/resume semantics.
 
 ## Run generated code on Cloudflare
 
-`@effect-agent/platform-cloudflare` supplies `dynamicWorkerCodeExecutorLayer`. It loads each pass
+`@yielded/agent-platform-cloudflare` supplies `dynamicWorkerCodeExecutorLayer`. It loads each pass
 into a fresh Cloudflare Dynamic Worker with `globalOutbound: null`. Generated code has no ambient
 network, bindings, secrets, filesystem, or environment. Its only host authority is the scoped RPC
 capability for allowlisted Tool calls.
@@ -301,7 +301,7 @@ outlive a request. A warehouse application can use a Durable Object for its invo
 
 ## Application integration
 
-Use the [canonical Cloudflare application](https://github.com/danieljvdm/effect-agent/tree/main/examples/travel-planner)
+Use the [canonical Cloudflare application](https://github.com/yielded-dev/agent/tree/main/examples/travel-planner)
 for the repository's deployment setup. A Code Mode integration additionally needs a Worker Loader
 binding and a bounded Tool allowlist. The broker prevents calls to unlisted Tools, but the
 application's handlers still decide which tenant, table, account, or secret may be accessed.

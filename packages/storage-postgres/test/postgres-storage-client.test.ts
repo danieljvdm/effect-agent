@@ -1,10 +1,10 @@
-import * as PostgresStorage from "@effect-agent/storage-postgres/postgres-storage";
-import { PostgresStorageError } from "@effect-agent/storage-postgres/postgres-storage-error";
 import { NodeCrypto } from "@effect/platform-node";
 import { PgClient } from "@effect/sql-pg";
 import { expect, it } from "@effect/vitest";
+import * as PostgresStorage from "@yielded/agent-storage-postgres/postgres-storage";
+import { PostgresStorageError } from "@yielded/agent-storage-postgres/postgres-storage-error";
+import { ThreadStore } from "@yielded/agent/thread-store";
 import { Cause, Effect, Exit, Redacted, Schema, String } from "effect";
-import { ThreadStore } from "effect-agent/thread-store";
 import * as SqlClient from "effect/sql/SqlClient";
 import { TestClock } from "effect/testing";
 

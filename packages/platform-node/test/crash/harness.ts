@@ -2,13 +2,26 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { expect } from "@effect/vitest";
 import {
   NodeDurableAgentRuntime,
   type NodeDurableAgentRuntimeOptions,
-} from "@effect-agent/platform-node/node-durable-agent-runtime";
-import { NodeDurableHost } from "@effect-agent/platform-node/node-durable-host";
-import { type SqliteStorageFailpointLocation } from "@effect-agent/storage-sqlite/sqlite-storage-error";
-import { expect } from "@effect/vitest";
+} from "@yielded/agent-platform-node/node-durable-agent-runtime";
+import { NodeDurableHost } from "@yielded/agent-platform-node/node-durable-host";
+import { type SqliteStorageFailpointLocation } from "@yielded/agent-storage-sqlite/sqlite-storage-error";
+import { type ResolvedBinding } from "@yielded/agent/agent-registration";
+import { type DurableRuntimeFailpointLocation } from "@yielded/agent/durable-failpoint";
+import { type SubmissionId } from "@yielded/agent/identifiers";
+import { type CanonicalRecordEnvelope } from "@yielded/agent/records";
+import {
+  SubmissionLedger,
+  SubmissionLookupById,
+  SubmissionLookupByKey,
+  submissionInputRecordId,
+  submissionSettlementRecordId,
+  type SubmissionSnapshot,
+} from "@yielded/agent/submission-ledger";
+import { ThreadRead, ThreadStore } from "@yielded/agent/thread-store";
 import {
   Cause,
   Duration,
@@ -20,19 +33,6 @@ import {
   Stream,
   type Scope,
 } from "effect";
-import { type ResolvedBinding } from "effect-agent/agent-registration";
-import { type DurableRuntimeFailpointLocation } from "effect-agent/durable-failpoint";
-import { type SubmissionId } from "effect-agent/identifiers";
-import { type CanonicalRecordEnvelope } from "effect-agent/records";
-import {
-  SubmissionLedger,
-  SubmissionLookupById,
-  SubmissionLookupByKey,
-  submissionInputRecordId,
-  submissionSettlementRecordId,
-  type SubmissionSnapshot,
-} from "effect-agent/submission-ledger";
-import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 
 import {
   CRASH_DEPLOYMENT_ID,

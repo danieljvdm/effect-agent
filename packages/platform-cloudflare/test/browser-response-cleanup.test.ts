@@ -1,23 +1,23 @@
+import { expect, it } from "@effect/vitest";
 import {
   BrowserQuickActionBrowserBinding,
   browserQuickActionCaptureLayer,
   browserQuickActionScreenshotLayer,
   type BrowserQuickActionClient,
-} from "@effect-agent/platform-cloudflare/cloudflare-browser";
-import { expect, it } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Logger } from "effect";
+} from "@yielded/agent-platform-cloudflare/cloudflare-browser";
 import {
   CapturePageMarkdown,
   PageCapture,
   PageCaptureRequest,
   PageUrlTarget,
   type PageCaptureError,
-} from "effect-agent/page-capture";
+} from "@yielded/agent/page-capture";
 import {
   PageScreenshot,
   PageScreenshotRequest,
   type PageScreenshotError,
-} from "effect-agent/page-screenshot";
+} from "@yielded/agent/page-screenshot";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Logger } from "effect";
 import { TestClock } from "effect/testing";
 
 const capture = (

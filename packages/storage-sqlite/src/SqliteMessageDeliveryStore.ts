@@ -1,9 +1,9 @@
-import { makeSqlMessageDeliveryStore } from "@effect-agent/storage-sql/sql-message-delivery-store";
-import { Effect, Layer } from "effect";
+import { makeSqlMessageDeliveryStore } from "@yielded/agent-storage-sql/sql-message-delivery-store";
 import {
   MessageDeliveryStore,
   type MessageDeliveryStoreLimits,
-} from "effect-agent/message-delivery";
+} from "@yielded/agent/message-delivery";
+import { Effect, Layer } from "effect";
 
 import { initializeSqliteJournal } from "./internal/sqlite-journal.ts";
 

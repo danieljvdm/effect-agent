@@ -1,17 +1,17 @@
 ---
-title: What is Effect Agent?
+title: What is Yielded Agent?
 description: An agent harness toolkit for TypeScript, built on Effect and Effect AI.
 ---
 
 <a id="what-is-effect-agent"></a>
 
-Effect Agent is an agent harness toolkit for TypeScript, built on Effect and Effect AI.
+Yielded Agent (formerly Effect Agent) is an agent harness toolkit for TypeScript, built on Effect and Effect AI.
 You supply a model, tools, instructions, and input/output schemas. It runs the agent loop,
 executes tool calls, and validates the result.
 
 ## What it adds to Effect AI
 
-Effect AI provides models, tools, and provider integrations. Effect Agent uses those directly and adds:
+Effect AI provides models, tools, and provider integrations. Yielded Agent uses those directly and adds:
 
 - [Durable execution](/concepts/durability/) to recover accepted work after a crash on Node.js or Cloudflare.
 - [Limits](/concepts/budgets/) on turns, tool calls, time, and token usage.

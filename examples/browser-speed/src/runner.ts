@@ -4,9 +4,9 @@ import {
   OpenAiLanguageModel as CompletionsModel,
 } from "@effect/ai-openai-compat";
 import { TypeSafeClient, TypeSafeDecisionModel } from "@effect/ai-typesafe";
+import { Agent, AgentRuntime, InMemory } from "@yielded/agent";
+import * as BrowserUse from "@yielded/agent/browser-use";
 import { Effect, Layer, Redacted, Schema } from "effect";
-import { Agent, AgentRuntime, InMemory } from "effect-agent";
-import * as BrowserUse from "effect-agent/browser-use";
 import { Toolkit } from "effect/ai";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 

@@ -1,6 +1,29 @@
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, describe, it } from "@effect/vitest";
+import { MemoryThreadStoreLive } from "@yielded/agent-storage-memory/memory-thread-store";
+import { EMPTY_TAIL_DIGEST } from "@yielded/agent/digest";
+import { ThreadId, RunId, SubmissionId } from "@yielded/agent/identifiers";
+import {
+  CanonicalBatch,
+  CanonicalRecord,
+  CanonicalSequence,
+  ProducerEpoch,
+  UserInputRecorded,
+  type CanonicalRecordPayload,
+} from "@yielded/agent/records";
+import {
+  threadStoreConformanceCases,
+  threadCheckpointConformanceCases,
+} from "@yielded/agent/testing/thread-store-conformance";
+import {
+  type AppendResult,
+  ThreadExportRequest,
+  ThreadMaterialization,
+  ThreadObservation,
+  ThreadRead,
+  ThreadStore,
+  FencedAppendRequest,
+} from "@yielded/agent/thread-store";
 import {
   Cause,
   Context,
@@ -14,29 +37,6 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
-import { ThreadId, RunId, SubmissionId } from "effect-agent/identifiers";
-import {
-  CanonicalBatch,
-  CanonicalRecord,
-  CanonicalSequence,
-  ProducerEpoch,
-  UserInputRecorded,
-  type CanonicalRecordPayload,
-} from "effect-agent/records";
-import {
-  threadStoreConformanceCases,
-  threadCheckpointConformanceCases,
-} from "effect-agent/testing/thread-store-conformance";
-import {
-  type AppendResult,
-  ThreadExportRequest,
-  ThreadMaterialization,
-  ThreadObservation,
-  ThreadRead,
-  ThreadStore,
-  FencedAppendRequest,
-} from "effect-agent/thread-store";
 
 const testLayer = MemoryThreadStoreLive.pipe(Layer.provide(NodeCrypto.layer));
 

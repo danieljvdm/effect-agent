@@ -1,7 +1,6 @@
-import { Effect, Schema } from "effect";
-import * as MemoryNamespace from "effect-agent/memory-namespace";
-import { type MemoryNamespaceError } from "effect-agent/memory-namespace";
-import { MemoryAccess } from "effect-agent/memory-revalidation";
+import * as MemoryNamespace from "@yielded/agent/memory-namespace";
+import { type MemoryNamespaceError } from "@yielded/agent/memory-namespace";
+import { MemoryAccess } from "@yielded/agent/memory-revalidation";
 import {
   type MemoryDocument,
   ActiveMemoryDocument,
@@ -13,8 +12,8 @@ import {
   MemoryWrite,
   type MemoryWriteError,
   MemoryWriter,
-} from "effect-agent/memory-store";
-import { indexMemorySource, SemanticIndexLimits } from "effect-agent/semantic-memory";
+} from "@yielded/agent/memory-store";
+import { indexMemorySource, SemanticIndexLimits } from "@yielded/agent/semantic-memory";
 import {
   type SemanticMemoryProfile,
   MemoryIndexCandidate,
@@ -23,7 +22,8 @@ import {
   MemoryIndexSearch,
   MemoryIndexSource,
   SemanticMemoryIndex,
-} from "effect-agent/semantic-memory-index";
+} from "@yielded/agent/semantic-memory-index";
+import { Effect, Schema } from "effect";
 
 const TenantId = Schema.NonEmptyString.pipe(Schema.brand("app/TenantId"));
 const UserId = Schema.NonEmptyString.pipe(Schema.brand("app/UserId"));

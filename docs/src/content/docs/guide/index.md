@@ -7,7 +7,7 @@ description: Build, run, and operate Effect agents with step-by-step guides and 
 
 Build an agent, give it tools, and run it in your application. Start with
 [Getting started](/guide/getting-started/) for a working example, or read
-[What is Effect Agent?](/guide/introduction/) for an introduction.
+[What is Yielded Agent?](/guide/introduction/) for an introduction.
 
 ## Build your agent
 

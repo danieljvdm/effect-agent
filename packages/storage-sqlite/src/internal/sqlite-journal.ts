@@ -1,20 +1,20 @@
-import { makeSqlJournal } from "@effect-agent/storage-sql/sql-journal";
-import { createMessageDeliveryPendingIndex } from "@effect-agent/storage-sql/sql-message-delivery-store";
-import { makeRowDecoder, makeSqlTransaction } from "@effect-agent/storage-sql/sql-storage";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { SqliteMigrator } from "@effect/sql-sqlite-node";
+import { makeSqlJournal } from "@yielded/agent-storage-sql/sql-journal";
+import { createMessageDeliveryPendingIndex } from "@yielded/agent-storage-sql/sql-message-delivery-store";
+import { makeRowDecoder, makeSqlTransaction } from "@yielded/agent-storage-sql/sql-storage";
 import {
   checkV2ThreadLayout,
   upgradeV2Schedules,
   upgradeV2Subscriptions,
-} from "@effect-agent/storage-sql/sql-storage-v2-upgrade";
+} from "@yielded/agent-storage-sql/sql-storage-v2-upgrade";
 import {
   createNativeReadIndexes,
   seedNativeReadIndexes,
-} from "@effect-agent/storage-sql/sql-thread-native-reads";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { SqliteMigrator } from "@effect/sql-sqlite-node";
+} from "@yielded/agent-storage-sql/sql-thread-native-reads";
+import { ScheduleFailpoint, ScheduleFailpointError } from "@yielded/agent/schedule";
+import { SubscriptionFailpoint, SubscriptionFailpointError } from "@yielded/agent/subscription";
 import { Effect, Schema } from "effect";
-import { ScheduleFailpoint, ScheduleFailpointError } from "effect-agent/schedule";
-import { SubscriptionFailpoint, SubscriptionFailpointError } from "effect-agent/subscription";
 import * as SqlClient from "effect/sql/SqlClient";
 import { isSqlError, type SqlError } from "effect/sql/SqlError";
 

@@ -1,28 +1,27 @@
+import { SqliteMigrator } from "@effect/sql-sqlite-do";
 import {
   makeSqlLifecyclePublication,
   type SqlLifecycleRetainMany,
   SqlLifecycleSource,
   SqlLifecycleRetainer,
-} from "@effect-agent/storage-sql/sql-lifecycle-publication";
-import { createMessageDeliveryPendingIndex } from "@effect-agent/storage-sql/sql-message-delivery-store";
-import { SqlStorageProgress } from "@effect-agent/storage-sql/sql-storage-progress";
-import { checkV2ThreadLayout } from "@effect-agent/storage-sql/sql-storage-v2-upgrade";
+} from "@yielded/agent-storage-sql/sql-lifecycle-publication";
+import { createMessageDeliveryPendingIndex } from "@yielded/agent-storage-sql/sql-message-delivery-store";
+import { SqlStorageProgress } from "@yielded/agent-storage-sql/sql-storage-progress";
+import { checkV2ThreadLayout } from "@yielded/agent-storage-sql/sql-storage-v2-upgrade";
 import {
   createNativeReadIndexes,
   seedNativeReadIndexes,
   indexCanonicalRecord,
   canonicalRecordOutstanding,
-} from "@effect-agent/storage-sql/sql-thread-native-reads";
-import { SqliteMigrator } from "@effect/sql-sqlite-do";
-import { Cause, Clock, Effect, Option, Schema, Stream } from "effect";
-import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
-import { ThreadId } from "effect-agent/identifiers";
+} from "@yielded/agent-storage-sql/sql-thread-native-reads";
+import { EMPTY_TAIL_DIGEST } from "@yielded/agent/digest";
+import { ThreadId } from "@yielded/agent/identifiers";
 import {
   LifecyclePublicationFact,
   LifecyclePublicationError,
-} from "effect-agent/lifecycle-publication";
-import { CanonicalRecord, CanonicalSequence, ProducerEpoch } from "effect-agent/records";
-import { SqlStorageOwner } from "effect-agent/sql-memory-store";
+} from "@yielded/agent/lifecycle-publication";
+import { CanonicalRecord, CanonicalSequence, ProducerEpoch } from "@yielded/agent/records";
+import { SqlStorageOwner } from "@yielded/agent/sql-memory-store";
 import {
   MAX_THREAD_EXPORT_RECORDS,
   CheckpointRejected,
@@ -30,7 +29,8 @@ import {
   ThreadNotMaterialized,
   ThreadStoreDiagnostic,
   type SaveRecoveryCheckpointRequest,
-} from "effect-agent/thread-store";
+} from "@yielded/agent/thread-store";
+import { Cause, Clock, Effect, Option, Schema, Stream } from "effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { SqlError } from "effect/sql/SqlError";
 

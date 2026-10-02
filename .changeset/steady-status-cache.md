@@ -1,5 +1,5 @@
 ---
-"effect-agent": patch
+"@yielded/agent": patch
 ---
 
 Preserve OpenAI implicit prompt-cache boundaries when `runStatus: "appended"` is enabled.

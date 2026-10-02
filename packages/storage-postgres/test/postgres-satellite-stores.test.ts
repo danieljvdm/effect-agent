@@ -1,25 +1,25 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Result, Schema } from "effect";
-import { MessageDeliveryStore } from "effect-agent/message-delivery";
-import { Digest } from "effect-agent/records";
-import { ScheduleRecord, ScheduleStore } from "effect-agent/schedule";
+import { MessageDeliveryStore } from "@yielded/agent/message-delivery";
+import { Digest } from "@yielded/agent/records";
+import { ScheduleRecord, ScheduleStore } from "@yielded/agent/schedule";
 import {
   defaultSubscriptionLimits,
   SubscriptionConfiguration,
   SubscriptionDelivery,
   SubscriptionRecord,
   SubscriptionStore,
-} from "effect-agent/subscription";
+} from "@yielded/agent/subscription";
 import {
   makeMessageDeliveryFixture,
   messageDeliveryStoreConformanceCases,
-} from "effect-agent/testing/message-delivery-store-conformance";
-import { scheduleStoreConformanceCases } from "effect-agent/testing/schedule-store-conformance";
+} from "@yielded/agent/testing/message-delivery-store-conformance";
+import { scheduleStoreConformanceCases } from "@yielded/agent/testing/schedule-store-conformance";
 import {
   subscriptionConformancePartition,
   subscriptionStoreConformanceCases,
-} from "effect-agent/testing/subscription-store-conformance";
+} from "@yielded/agent/testing/subscription-store-conformance";
+import { Effect, Layer, Result, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
 import { storage, withTemporaryDatabase } from "./harness.ts";

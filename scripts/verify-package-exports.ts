@@ -317,7 +317,7 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
           });
           for (const { specifier, typeOnly } of imports) {
             const layer =
-              pkg.manifest.name === "effect-agent" && relative.startsWith("src/")
+              pkg.manifest.name === "@yielded/agent" && relative.startsWith("src/")
                 ? relative.split("/")[1]
                 : undefined;
 
@@ -353,7 +353,7 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
               );
 
             if (
-              pkg.manifest.name === "@effect-agent/ai-decision" &&
+              pkg.manifest.name === "@yielded/agent-ai-decision" &&
               relative.startsWith("src/") &&
               specifier !== "effect" &&
               !specifier.startsWith("effect/")
@@ -368,9 +368,9 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
 
             if (!owner) {
               if (
-                specifier.startsWith("@effect-agent/") ||
-                specifier === "effect-agent" ||
-                specifier.startsWith("effect-agent/")
+                specifier.startsWith("@yielded/agent-") ||
+                specifier === "@yielded/agent" ||
+                specifier.startsWith("@yielded/agent/")
               )
                 report(file, `${specifier} references an unknown workspace package`);
               continue;

@@ -1,5 +1,5 @@
 ---
-"effect-agent": patch
+"@yielded/agent": patch
 ---
 
 Reduce fresh durable startup work for uncompacted histories and speed up native prompt token estimation while preserving admission and recovery behavior.

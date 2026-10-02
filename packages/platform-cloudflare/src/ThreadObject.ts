@@ -7,8 +7,7 @@ import {
   PortSucceeded,
   type PortRequest,
   type PortResponse,
-} from "@effect-agent/storage-cloudflare/port-protocol";
-import { Effect, Layer, Option, Schema, Stream } from "effect";
+} from "@yielded/agent-storage-cloudflare/port-protocol";
 import {
   IntegrityReport,
   ObligationReport,
@@ -16,25 +15,25 @@ import {
   RecoveryExplanation,
   RetryCommand,
   RetryRefused,
-} from "effect-agent/admin";
-import { DigestError } from "effect-agent/digest";
+} from "@yielded/agent/admin";
+import { DigestError } from "@yielded/agent/digest";
 import {
   ApprovalSuspensionError,
   DurableAgentRuntime,
   DurableRuntimeConfig,
   RecoveryReport,
   type DurableSubmitAgent,
-} from "effect-agent/durable-agent-runtime";
-import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
-import { type AgentId, type ThreadId } from "effect-agent/identifiers";
-import { SubmissionId } from "effect-agent/identifiers";
+} from "@yielded/agent/durable-agent-runtime";
+import { DurableRuntimeFailpointError } from "@yielded/agent/durable-failpoint";
+import { type AgentId, type ThreadId } from "@yielded/agent/identifiers";
+import { SubmissionId } from "@yielded/agent/identifiers";
 import {
   OperationAuthorizationRequest,
   OperationAuthorizer,
   OperationDenied,
-} from "effect-agent/operation-authorizer";
-import { PersistedJson } from "effect-agent/records";
-import { RunJournalError } from "effect-agent/run-journal";
+} from "@yielded/agent/operation-authorizer";
+import { PersistedJson } from "@yielded/agent/records";
+import { RunJournalError } from "@yielded/agent/run-journal";
 import {
   AdmissionPolicyError,
   LedgerError,
@@ -42,7 +41,7 @@ import {
   SettlementConflict,
   SubmissionLedger,
   SubmissionLookupByKey,
-} from "effect-agent/submission-ledger";
+} from "@yielded/agent/submission-ledger";
 import {
   AppendConflict,
   ThreadNotMaterialized,
@@ -50,8 +49,9 @@ import {
   ThreadStore,
   ThreadStoreError,
   FenceRejected,
-} from "effect-agent/thread-store";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
+} from "@yielded/agent/thread-store";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
+import { Effect, Layer, Option, Schema, Stream } from "effect";
 import {
   DurableObject as EffectCfDurableObject,
   DurableObjectState as EffectCfDurableObjectState,

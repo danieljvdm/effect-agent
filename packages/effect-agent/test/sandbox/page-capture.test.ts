@@ -1,5 +1,5 @@
+import { CapturePageStructured } from "@yielded/agent/page-capture";
 import { Schema } from "effect";
-import { CapturePageStructured } from "effect-agent/page-capture";
 import { describe, expect, it } from "vite-plus/test";
 
 describe("Structured capture graph bounds", () => {

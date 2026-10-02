@@ -1,4 +1,4 @@
-# @effect-agent/ai-decision
+# @yielded/agent-ai-decision
 
 ## 0.1.0-beta.165
 

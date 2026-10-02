@@ -1,12 +1,12 @@
+import { BrowserCrypto } from "@effect/platform-browser";
+import { describe, expect, it } from "@effect/vitest";
 import {
   threadNamespaceLayer,
   type ThreadObjectRpc,
-} from "@effect-agent/platform-cloudflare/cloudflare-bindings";
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
-import { BrowserCrypto } from "@effect/platform-browser";
-import { describe, expect, it } from "@effect/vitest";
+} from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
+import { CloudflareThreadClient } from "@yielded/agent-platform-cloudflare/cloudflare-thread-client";
+import { CanonicalSequence } from "@yielded/agent/records";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
-import { CanonicalSequence } from "effect-agent/records";
 import { TestClock } from "effect/testing";
 
 import { decodeThreadId } from "./fixtures.ts";

@@ -1,9 +1,21 @@
-import { DoStorageFailpoint } from "@effect-agent/storage-cloudflare/do-storage-failpoint";
-import { submissionLedgerLayer } from "@effect-agent/storage-cloudflare/do-submission-ledger";
+import { DoStorageFailpoint } from "@yielded/agent-storage-cloudflare/do-storage-failpoint";
+import { submissionLedgerLayer } from "@yielded/agent-storage-cloudflare/do-submission-ledger";
 import {
   storageConfigLayer,
   threadStoreLayer,
-} from "@effect-agent/storage-cloudflare/do-thread-store";
+} from "@yielded/agent-storage-cloudflare/do-thread-store";
+import { CurrentBindingSelection, type BindingSelection } from "@yielded/agent/agent-registration";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import { ProducerId } from "@yielded/agent/records";
+import {
+  ClaimRequest,
+  RecoverySnapshotRequest,
+  ReleaseOwnershipRequest,
+  SubmissionLedger,
+  SubmissionLookupById,
+  LedgerError,
+} from "@yielded/agent/submission-ledger";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
 import { runInDurableObject } from "cloudflare:test";
 import {
   Cause,
@@ -18,18 +30,6 @@ import {
   Option,
   Stream,
 } from "effect";
-import { CurrentBindingSelection, type BindingSelection } from "effect-agent/agent-registration";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { ProducerId } from "effect-agent/records";
-import {
-  ClaimRequest,
-  RecoverySnapshotRequest,
-  ReleaseOwnershipRequest,
-  SubmissionLedger,
-  SubmissionLookupById,
-  LedgerError,
-} from "effect-agent/submission-ledger";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vite-plus/test";
@@ -308,7 +308,7 @@ describe("maintenance retry deadlines", () => {
         );
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
     ));
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/8085bda
+  // Regression: https://github.com/yielded-dev/agent/commit/8085bda
   it("drains newly enrolled host work when instrumentation returns fresh SQL handles", () =>
     runInDurableObject(stubFor(`instrumented-due-queue-${crypto.randomUUID()}`), (instance) =>
       instance[DurableObject.RunSymbol](
@@ -505,7 +505,7 @@ describe("maintenance retry deadlines", () => {
       ),
   );
 
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/e1c3ce677e82589a4b133840e640464472ec2c3f
+  // Regression: https://github.com/yielded-dev/agent/commit/e1c3ce677e82589a4b133840e640464472ec2c3f
   it("gives each due post-native lane a turn across full passes and coordinator rebuilds", () =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -583,7 +583,7 @@ describe("maintenance retry deadlines", () => {
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
     ));
 
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/0e83011e
+  // Regression: https://github.com/yielded-dev/agent/commit/0e83011e
   it.each([false, true])("runs one post-native wave after attempt cleanup (failed: %s)", (failed) =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -1080,7 +1080,7 @@ describe("maintenance retry deadlines", () => {
           expect(Exit.isSuccess(yield* run(pass))).toBe(true);
           expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBeNull();
           expect(yield* snapshot).toEqual(parked);
-          // Regression: https://github.com/danieljvdm/effect-agent/commit/35b5e858
+          // Regression: https://github.com/yielded-dev/agent/commit/35b5e858
           // Equivalent metadata ordering must not wake or report parked work again.
           reorderMetadata = true;
           yield* run(ensure);

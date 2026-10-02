@@ -2,7 +2,7 @@ import {
   type DoMemoryStorageLimits,
   defaultDoMemoryStorageLimits,
   doMemoryStoreLayerWithFailpoints,
-} from "@effect-agent/storage-cloudflare/do-memory-store";
+} from "@yielded/agent-storage-cloudflare/do-memory-store";
 import {
   type MemoryOwnerAuthorizer,
   decodeMemoryWire,
@@ -15,13 +15,12 @@ import {
   MemoryRpcError,
   MemoryRpcLimits,
   type MemoryOwnerFailure,
-} from "@effect-agent/storage-cloudflare/memory-protocol";
-import { Clock, Context, Effect, Layer, Schema } from "effect";
-import * as Memory from "effect-agent/memory";
-import * as MemoryNamespace from "effect-agent/memory-namespace";
-import { MemoryNamespaceAddress } from "effect-agent/memory-namespace";
-import { type MemoryLookup, MemoryRecallLimits } from "effect-agent/memory-reference";
-import { MemoryAccess } from "effect-agent/memory-revalidation";
+} from "@yielded/agent-storage-cloudflare/memory-protocol";
+import * as Memory from "@yielded/agent/memory";
+import * as MemoryNamespace from "@yielded/agent/memory-namespace";
+import { MemoryNamespaceAddress } from "@yielded/agent/memory-namespace";
+import { type MemoryLookup, MemoryRecallLimits } from "@yielded/agent/memory-reference";
+import { MemoryAccess } from "@yielded/agent/memory-revalidation";
 import {
   type MemoryReader,
   type MemoryWrite,
@@ -30,13 +29,14 @@ import {
   MemoryMutationFailpoint,
   MemoryStorageError,
   MemoryWriter,
-} from "effect-agent/memory-store";
+} from "@yielded/agent/memory-store";
 import {
   type MemoryIndexSearch,
   type SemanticMemoryProfile,
-} from "effect-agent/semantic-memory-index";
-import { type SemanticCandidateLimits } from "effect-agent/semantic-memory-revalidation";
-import { Principal } from "effect-agent/submission-ledger";
+} from "@yielded/agent/semantic-memory-index";
+import { type SemanticCandidateLimits } from "@yielded/agent/semantic-memory-revalidation";
+import { Principal } from "@yielded/agent/submission-ledger";
+import { Clock, Context, Effect, Layer, Schema } from "effect";
 import {
   DurableObject as EffectCfDurableObject,
   DurableObjectState,

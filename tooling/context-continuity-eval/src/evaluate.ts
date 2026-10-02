@@ -1,5 +1,21 @@
-import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/node-durable-agent-runtime";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { NodeDurableAgentRuntime } from "@yielded/agent-platform-node/node-durable-agent-runtime";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import { contextWindowId } from "@yielded/agent/compaction";
+import * as ContextTools from "@yielded/agent/context-tools";
+import { digestDefinitions, digestDefinition } from "@yielded/agent/digest";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import { DurableRuntimeFailpointError } from "@yielded/agent/durable-failpoint";
+import { ThreadId } from "@yielded/agent/identifiers";
+import * as MemoryNotes from "@yielded/agent/memory-notes";
+import { MemoryKey, MemoryReader } from "@yielded/agent/memory-store";
+import { CanonicalRecordEnvelope, DefinitionDigestInput } from "@yielded/agent/records";
+import { runIdForSubmission } from "@yielded/agent/run-journal";
+import { memoryStoreLayer } from "@yielded/agent/sql-memory-store";
+import { IdempotencyKey, Principal } from "@yielded/agent/submission-ledger";
+import * as ThreadContextHistory from "@yielded/agent/thread-context-history";
+import { ThreadStore } from "@yielded/agent/thread-store";
 import {
   Clock,
   Console,
@@ -13,22 +29,6 @@ import {
   Ref,
   Schema,
 } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { contextWindowId } from "effect-agent/compaction";
-import * as ContextTools from "effect-agent/context-tools";
-import { digestDefinitions, digestDefinition } from "effect-agent/digest";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
-import { ThreadId } from "effect-agent/identifiers";
-import * as MemoryNotes from "effect-agent/memory-notes";
-import { MemoryKey, MemoryReader } from "effect-agent/memory-store";
-import { CanonicalRecordEnvelope, DefinitionDigestInput } from "effect-agent/records";
-import { runIdForSubmission } from "effect-agent/run-journal";
-import { memoryStoreLayer } from "effect-agent/sql-memory-store";
-import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
-import * as ThreadContextHistory from "effect-agent/thread-context-history";
-import { ThreadStore } from "effect-agent/thread-store";
 import { IdGenerator, Toolkit } from "effect/ai";
 
 import {

@@ -1,5 +1,5 @@
 ---
-"effect-agent": patch
+"@yielded/agent": patch
 ---
 
 Return retained worker delivery states with stable message references and inspect the same operation through destination acceptance and settlement.

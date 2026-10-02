@@ -1,4 +1,3 @@
-import { Clock, Duration, Effect, Fiber, Layer, Option, Queue, Schema } from "effect";
 import {
   CodeExecutionHost,
   CodeExecutionProtocolError,
@@ -17,8 +16,9 @@ import {
   type CodeExecutionLimits,
   type CodeExecutionNamespace,
   type CodeExecutionRequest,
-} from "effect-agent/code-executor";
-import { SandboxImplementation } from "effect-agent/sandbox";
+} from "@yielded/agent/code-executor";
+import { SandboxImplementation } from "@yielded/agent/sandbox";
+import { Clock, Duration, Effect, Fiber, Layer, Option, Queue, Schema } from "effect";
 
 /**
  * The deterministic in-process executor substitute (C1 of ADR-0017). It runs

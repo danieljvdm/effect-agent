@@ -1,12 +1,12 @@
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
+import { ThreadObjectIdentity } from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
+import * as ThreadObject from "@yielded/agent-platform-cloudflare/thread-object";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import { digestDefinitions } from "@yielded/agent/digest";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import { DefinitionDigestInput } from "@yielded/agent/records";
+import { IdempotencyKey, Principal } from "@yielded/agent/submission-ledger";
 import { Context, Deferred, Effect, Layer, Ref, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { digestDefinitions } from "effect-agent/digest";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { DefinitionDigestInput } from "effect-agent/records";
-import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import { DurableObject } from "effect-cf";
 import { LanguageModel, Model, Tool, Toolkit, type Response as AiResponse } from "effect/ai";
 

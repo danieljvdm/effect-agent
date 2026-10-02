@@ -1,8 +1,8 @@
 ---
-"effect-agent": patch
-"@effect-agent/storage-sql": patch
-"@effect-agent/storage-cloudflare": patch
-"@effect-agent/platform-cloudflare": patch
+"@yielded/agent": patch
+"@yielded/agent-storage-sql": patch
+"@yielded/agent-storage-cloudflare": patch
+"@yielded/agent-platform-cloudflare": patch
 ---
 
 Park accepted message deliveries without status polling and acknowledge native sources on terminal settlement. Bound no-progress Cloudflare maintenance and reuse canonical hydration codecs and a bounded multi-page cache.

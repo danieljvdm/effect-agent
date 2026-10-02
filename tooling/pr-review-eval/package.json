@@ -1,5 +1,5 @@
 {
-  "name": "@effect-agent/example-pr-review-eval",
+  "name": "@yielded/agent-example-pr-review-eval",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,16 +11,16 @@
     "test": "vp test"
   },
   "dependencies": {
-    "@effect-agent/pr-review": "workspace:*",
-    "@effect-agent/pr-review-action": "workspace:*",
     "@effect/ai-openai": "catalog:",
     "@effect/platform-node": "catalog:",
+    "@yielded/agent-pr-review": "workspace:*",
+    "@yielded/agent-pr-review-action": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@effect-agent/testing": "workspace:*",
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
+    "@yielded/agent-testing": "workspace:*",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   }

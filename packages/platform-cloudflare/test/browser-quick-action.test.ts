@@ -3,8 +3,7 @@ import {
   BrowserQuickActionRpcError,
   browserQuickActionCaptureLayer,
   type BrowserQuickActionClient,
-} from "@effect-agent/platform-cloudflare/cloudflare-browser";
-import { Effect, Layer } from "effect";
+} from "@yielded/agent-platform-cloudflare/cloudflare-browser";
 import {
   CapturePageMarkdown,
   PageCapture,
@@ -12,7 +11,8 @@ import {
   PageCaptureRequest,
   PageUrlTarget,
   type PageCaptureError,
-} from "effect-agent/page-capture";
+} from "@yielded/agent/page-capture";
+import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 interface RecordedCall {

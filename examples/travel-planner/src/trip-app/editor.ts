@@ -1,9 +1,9 @@
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import { OpenAiTool } from "@effect/ai-openai";
+import { Subagent, Agent, Output } from "@yielded/agent";
+import { ThreadObjectIdentity } from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
+import { ThreadId } from "@yielded/agent/identifiers";
+import { SubagentGrant } from "@yielded/agent/subagent-contract";
 import { Effect, Schema } from "effect";
-import { Subagent, Agent, Output } from "effect-agent";
-import { ThreadId } from "effect-agent/identifiers";
-import { SubagentGrant } from "effect-agent/subagent-contract";
 import { Tool, Toolkit } from "effect/ai";
 
 import { DeliverResponse } from "../agent.ts";

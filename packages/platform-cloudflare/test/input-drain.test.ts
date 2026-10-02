@@ -1,22 +1,22 @@
 import {
   DurableObjectContext,
   threadNamespaceLayer,
-} from "@effect-agent/platform-cloudflare/cloudflare-bindings";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
+} from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
+import * as ThreadObject from "@yielded/agent-platform-cloudflare/thread-object";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import { LedgerError, SubmissionLedger } from "@yielded/agent/submission-ledger";
+import { ThreadStore, ThreadExportRequest } from "@yielded/agent/thread-store";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Effect, Layer, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { LedgerError, SubmissionLedger } from "effect-agent/submission-ledger";
-import { ThreadStore, ThreadExportRequest } from "effect-agent/thread-store";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 import { expect, it } from "vite-plus/test";
 
 import { submitOptions } from "./fixtures.ts";
 import { stubFor } from "./harness.ts";
 
-// Regression: https://github.com/danieljvdm/effect-agent/commit/efa46d1378493e60102080798064fa8e73f477b9
+// Regression: https://github.com/yielded-dev/agent/commit/efa46d1378493e60102080798064fa8e73f477b9
 // A returned Tool failure was followed by a failed input-drain authority read, leaving
 // the completed call unknown and blocking its FIFO successor indefinitely.
 it("preserves a returned Tool result across an input-drain failure without replaying its handler", () => {

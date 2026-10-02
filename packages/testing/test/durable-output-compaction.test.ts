@@ -1,25 +1,25 @@
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
+import { MemorySubmissionLedgerLive } from "@yielded/agent-storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@yielded/agent-storage-memory/memory-thread-store";
+import * as Agent from "@yielded/agent/agent";
+import { CompactionPolicy } from "@yielded/agent/agent-policy";
+import { CLEARED_TOOL_RESULT, CONTEXT_ROLLOVER_PREFIX } from "@yielded/agent/compaction";
+import { ContextRolloverRequest, ContextRolloverTool } from "@yielded/agent/context-window";
+import { DurableAgentRuntime, DurableRuntimeConfig } from "@yielded/agent/durable-agent-runtime";
+import { DurableRuntimeFailpointError } from "@yielded/agent/durable-failpoint";
+import { ToolExecutionClass } from "@yielded/agent/durable-step";
+import { ThreadId } from "@yielded/agent/identifiers";
+import * as Output from "@yielded/agent/output";
+import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "@yielded/agent/records";
+import { projectRunJournal, runIdForSubmission } from "@yielded/agent/run-journal";
+import { RunToolAuthorization } from "@yielded/agent/run-options";
+import { IdempotencyKey, Principal } from "@yielded/agent/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "@yielded/agent/testing/durable-failpoint-test-control";
+import { ThreadRead, ThreadStore } from "@yielded/agent/thread-store";
+import { ToolReconciler } from "@yielded/agent/tool-reconciler";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
 import { Cause, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { CompactionPolicy } from "effect-agent/agent-policy";
-import { CLEARED_TOOL_RESULT, CONTEXT_ROLLOVER_PREFIX } from "effect-agent/compaction";
-import { ContextRolloverRequest, ContextRolloverTool } from "effect-agent/context-window";
-import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
-import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
-import { ToolExecutionClass } from "effect-agent/durable-step";
-import { ThreadId } from "effect-agent/identifiers";
-import * as Output from "effect-agent/output";
-import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "effect-agent/records";
-import { projectRunJournal, runIdForSubmission } from "effect-agent/run-journal";
-import { RunToolAuthorization } from "effect-agent/run-options";
-import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
-import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
-import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
-import { ToolReconciler } from "effect-agent/tool-reconciler";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/ai";
 
 const digest = Digest.make("a".repeat(64));
@@ -121,7 +121,7 @@ const expectCrash = <A, E>(exit: Exit.Exit<A, E>) => {
 };
 
 layer(testLayer)("durable output and current-Run pruning", (it) => {
-  // https://github.com/danieljvdm/effect-agent/issues/745
+  // https://github.com/yielded-dev/agent/issues/745
   it.effect(
     "keeps replying when summary retention falls between a user message and its reply",
     () =>

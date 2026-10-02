@@ -1,6 +1,6 @@
+import { IdGenerator } from "@yielded/agent/id-generator";
+import { RunId, ThreadId, TurnId } from "@yielded/agent/identifiers";
 import { Effect, Layer, Schema } from "effect";
-import { IdGenerator } from "effect-agent/id-generator";
-import { RunId, ThreadId, TurnId } from "effect-agent/identifiers";
 import { IdGenerator as EffectAiIdGenerator } from "effect/ai";
 
 /** Supply the same identity authority to current code and releases predating default IDs. */

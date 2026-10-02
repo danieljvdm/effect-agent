@@ -1,19 +1,19 @@
 import {
   MemoryObject,
   CloudflareMemoryClient,
-} from "@effect-agent/platform-cloudflare/cloudflare-memory";
+} from "@yielded/agent-platform-cloudflare/cloudflare-memory";
 import {
   MemoryOwnerAuthorizer,
   MemoryOwnerIdentity,
   MemoryRpcError,
-} from "@effect-agent/storage-cloudflare/memory-protocol";
+} from "@yielded/agent-storage-cloudflare/memory-protocol";
+import * as MemoryNamespace from "@yielded/agent/memory-namespace";
+import { type MemoryLookup, type MemoryRecallLimits } from "@yielded/agent/memory-reference";
+import { MemoryAccess } from "@yielded/agent/memory-revalidation";
+import { type MemoryWrite } from "@yielded/agent/memory-store";
+import { MemoryKey, MemoryScope } from "@yielded/agent/memory-store";
+import { Principal } from "@yielded/agent/submission-ledger";
 import { Effect, Layer, Schema } from "effect";
-import * as MemoryNamespace from "effect-agent/memory-namespace";
-import { type MemoryLookup, type MemoryRecallLimits } from "effect-agent/memory-reference";
-import { MemoryAccess } from "effect-agent/memory-revalidation";
-import { type MemoryWrite } from "effect-agent/memory-store";
-import { MemoryKey, MemoryScope } from "effect-agent/memory-store";
-import { Principal } from "effect-agent/submission-ledger";
 
 export const Projects = MemoryNamespace.define({
   name: "application/projects",

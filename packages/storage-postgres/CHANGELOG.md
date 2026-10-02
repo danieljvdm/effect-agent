@@ -1,4 +1,4 @@
-# @effect-agent/storage-postgres
+# @yielded/agent-storage-postgres
 
 ## 0.1.0-beta.165
 

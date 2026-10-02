@@ -1,7 +1,7 @@
 ---
-"effect-agent": patch
-"@effect-agent/storage-cloudflare": patch
-"@effect-agent/platform-cloudflare": patch
+"@yielded/agent": patch
+"@yielded/agent-storage-cloudflare": patch
+"@yielded/agent-platform-cloudflare": patch
 ---
 
 Admit background workers through one destination RPC and read child completion receipts concurrently only when capacity could block admission.

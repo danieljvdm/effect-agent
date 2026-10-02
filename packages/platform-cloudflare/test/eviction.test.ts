@@ -1,13 +1,13 @@
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
-import { type DoStorageFailpointLocation } from "@effect-agent/storage-cloudflare/do-storage-error";
-import { Effect } from "effect";
-import { type Receipt } from "effect-agent/durable-agent-runtime";
-import { type DurableRuntimeFailpointLocation } from "effect-agent/durable-failpoint";
+import { CloudflareThreadClient } from "@yielded/agent-platform-cloudflare/cloudflare-thread-client";
+import { type DoStorageFailpointLocation } from "@yielded/agent-storage-cloudflare/do-storage-error";
+import { type Receipt } from "@yielded/agent/durable-agent-runtime";
+import { type DurableRuntimeFailpointLocation } from "@yielded/agent/durable-failpoint";
 import {
   ApprovalDecisionCommand,
   ResolutionNeverHappened,
   UnknownResolutionCommand,
-} from "effect-agent/submission-ledger";
+} from "@yielded/agent/submission-ledger";
+import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import {

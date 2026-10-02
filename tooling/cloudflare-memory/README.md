@@ -8,7 +8,7 @@ Deploy under a fresh temporary Worker name using this example's Wrangler depende
 `BENCH_TOKEN` with `wrangler secret put`, and run from the repository root:
 
 ```sh
-vp run --no-cache -F @effect-agent/example-cloudflare-memory measure \
+vp run --no-cache -F @yielded/agent-example-cloudflare-memory measure \
   --url https://YOUR-TEMPORARY-WORKER.workers.dev --samples 200 \
   --inactivity-seconds 90 --revision YOUR-SOURCE-REVISION \
   --output /tmp/kom19-cloudflare-memory.json
@@ -41,7 +41,7 @@ does not prove eviction. Local workerd results must not be reported as deployed 
 Run the separate heap benchmark without deploying or supplying a model key:
 
 ```sh
-vp run --no-cache -F @effect-agent/example-cloudflare-memory measure:heap \
+vp run --no-cache -F @yielded/agent-example-cloudflare-memory measure:heap \
   --out-dir /tmp/effect-agent-heap --samples 3 --objects 4
 ```
 

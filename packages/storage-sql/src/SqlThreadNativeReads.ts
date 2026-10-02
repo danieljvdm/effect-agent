@@ -1,4 +1,3 @@
-import { Context, Effect, Schema } from "effect";
 import {
   CanonicalRecord,
   CanonicalRecordEnvelope,
@@ -6,13 +5,13 @@ import {
   Digest,
   ProducerEpoch,
   RecordId,
-} from "effect-agent/records";
+} from "@yielded/agent/records";
 import {
   runIdForSubmission,
   subagentLineageRecordId,
   workerOriginRecordId,
-} from "effect-agent/run-journal";
-import type { ThreadStore } from "effect-agent/thread-store";
+} from "@yielded/agent/run-journal";
+import type { ThreadStore } from "@yielded/agent/thread-store";
 import {
   SelectedThreadRead,
   ThreadPeerCountRequest,
@@ -20,7 +19,8 @@ import {
   ThreadIdentityRequest,
   ThreadNotMaterialized,
   ThreadStoreError,
-} from "effect-agent/thread-store";
+} from "@yielded/agent/thread-store";
+import { Context, Effect, Schema } from "effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
 

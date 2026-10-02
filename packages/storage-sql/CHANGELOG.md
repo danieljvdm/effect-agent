@@ -1,4 +1,4 @@
-# @effect-agent/storage-sql
+# @yielded/agent-storage-sql
 
 ## 0.1.0-beta.165
 

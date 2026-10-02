@@ -1,5 +1,5 @@
+import * as MemoryNamespace from "@yielded/agent/memory-namespace";
 import { Effect, Schema } from "effect";
-import * as MemoryNamespace from "effect-agent/memory-namespace";
 import { describe, expect, it } from "vite-plus/test";
 
 const definition = MemoryNamespace.define({

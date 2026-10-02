@@ -1,8 +1,8 @@
+import { type ThreadId } from "@yielded/agent/identifiers";
+import { SubmissionLedger } from "@yielded/agent/submission-ledger";
+import { makeWakeSubscriptionHub, WakeScheduler } from "@yielded/agent/wake-scheduler";
 import type { Duration } from "effect";
 import { Context, Effect, Layer, PubSub, Stream } from "effect";
-import { type ThreadId } from "effect-agent/identifiers";
-import { SubmissionLedger } from "effect-agent/submission-ledger";
-import { makeWakeSubscriptionHub, WakeScheduler } from "effect-agent/wake-scheduler";
 
 /**
  * Bounded in-process wake buffer. Wake hints are droppable by contract (the ledger-scan fallback

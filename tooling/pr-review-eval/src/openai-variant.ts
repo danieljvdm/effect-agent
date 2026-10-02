@@ -1,3 +1,4 @@
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import {
   makeReviewOpenAi,
   reviewCostLimitMicrousd,
@@ -5,15 +6,14 @@ import {
   reviewMaxCostUsd,
   reviewModel,
   reviewReasoningEffort,
-} from "@effect-agent/pr-review-action/review-openai";
+} from "@yielded/agent-pr-review-action/review-openai";
 import {
   makeReviewer,
   ReviewCompaction,
   ReviewContextTokenLimit,
   type ReviewRequest,
-} from "@effect-agent/pr-review/review";
-import { type ReviewRepository } from "@effect-agent/pr-review/review-repository";
-import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+} from "@yielded/agent-pr-review/review";
+import { type ReviewRepository } from "@yielded/agent-pr-review/review-repository";
 import { Config, Effect, Layer, Option, Schema } from "effect";
 import { AiError } from "effect/ai";
 import { FetchHttpClient } from "effect/http";

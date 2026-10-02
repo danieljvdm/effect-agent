@@ -4,14 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { NodeServices } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
 import {
   ReviewChange,
   ReviewOutcome,
   ReviewReport,
   ReviewRequest,
-} from "@effect-agent/pr-review/review";
-import { NodeServices } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
+} from "@yielded/agent-pr-review/review";
 import { Effect, Result, Schema, Stream } from "effect";
 
 import { EvalCase, EvalCaseId, EvalSuite, EvalVariantConfiguration } from "../src/contracts.ts";

@@ -1,7 +1,7 @@
 import {
   BrowserSessionReference,
   BrowserSessions,
-} from "@effect-agent/platform-cloudflare/browser-session";
+} from "@yielded/agent-platform-cloudflare/browser-session";
 import { Cause, Clock, Effect, Exit, Fiber, Option, Redacted, Schema } from "effect";
 
 import { Browser, makeBrowser } from "./browser.ts";

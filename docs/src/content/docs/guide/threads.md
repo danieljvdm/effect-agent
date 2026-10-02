@@ -15,7 +15,7 @@ that conversation.
 of its application Scope. Runs with the same Thread ID load that conversation automatically:
 
 ```ts
-import { AgentRuntime, InMemory } from "effect-agent";
+import { AgentRuntime, InMemory } from "@yielded/agent";
 import { Effect } from "effect";
 
 const conversation = Effect.gen(function* () {
@@ -84,7 +84,7 @@ unbounded retention, finite memory, and unlimited fresh conversations cannot coe
 ## Inspect a conversation
 
 ```ts
-import { Thread } from "effect-agent";
+import { Thread } from "@yielded/agent";
 
 const inspect = Effect.gen(function* () {
   const threads = yield* Thread.Store;
@@ -106,7 +106,7 @@ successful Run as a whole. The [SQLite](/storage/sqlite/) and [PostgreSQL](/stor
 guides show how to build its `History` Layer. With that Layer, one agent can serve many thread IDs:
 
 ```ts
-import { AgentRuntime, ThreadHistory } from "effect-agent";
+import { AgentRuntime, ThreadHistory } from "@yielded/agent";
 import { Effect } from "effect";
 
 const program = Effect.gen(function* () {
@@ -197,7 +197,7 @@ agent would otherwise stop. Neither changes work already in progress.
 
 ## Read canonical history
 
-The durable modules in `effect-agent` define versioned record schemas and a pure reducer. The thread log
+The durable modules in `@yielded/agent` define versioned record schemas and a pure reducer. The thread log
 is append-only. It records user input, completed model output, settled tool calls, compaction, run
 completion or failure, and repairs. Partial tool argument deltas and live queue state are absent.
 

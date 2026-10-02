@@ -100,13 +100,13 @@ concepts succinctly: what a feature does, how it fits, and how to use it.
 
 ```text
 effect <- ai-decision (thread model selection)
-effect-agent <- storage-sql <- storage-sqlite / storage-postgres / storage-cloudflare
-effect-agent <- storage-memory
-effect-agent <- workflow
-effect-agent + selected adapters <- platform packages
-effect-agent <- sandbox-local
-effect-agent <- testing
-effect-agent <- pr-review
+@yielded/agent <- storage-sql <- storage-sqlite / storage-postgres / storage-cloudflare
+@yielded/agent <- storage-memory
+@yielded/agent <- workflow
+@yielded/agent + selected adapters <- platform packages
+@yielded/agent <- sandbox-local
+@yielded/agent <- testing
+@yielded/agent <- pr-review
 ```
 
 Within `packages/effect-agent/src`, dependencies point inward:
@@ -120,7 +120,7 @@ or deepen an inward port and implement an outward adapter.
 
 Framework code lives only in `packages/*`; do not create an `apps/` workspace. Runnable consumer
 benches live in `examples/*`, remain leaf workspaces, and may depend inward on public framework
-packages and `@effect-agent/testing`. Create a new framework package only for a
+packages and `@yielded/agent-testing`. Create a new framework package only for a
 genuinely new framework concern agreed with the repository owner. Provider integrations remain upstream Effect AI Layers, not framework provider
 packages.
 
@@ -138,7 +138,7 @@ packages.
   agent merge instead of being overwritten. Add a new skill from the approved catalog with
   `bunx @danieljvdm/dev-kit@latest skills add <name>`.
 - Contributor agent skills are repository tooling. They are not runtime Skill definitions and
-  must not be imported by `@effect-agent/*`.
+  must not be imported by `@yielded/agent*`.
 - Before handoff, run `vp run ready`.
 - For live model calls, follow [live credentials](docs/TOOLCHAIN.md#live-credentials). When
   `INFISICAL_UNIVERSAL_AUTH_CLIENT_ID` is set, load keys through that machine identity rather than

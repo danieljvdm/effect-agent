@@ -1,17 +1,16 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Exit, Layer, Option, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { DurableWorkerBinding } from "effect-agent/agent-registration";
-import { ContextCompactor } from "effect-agent/context-compactor";
-import { digestJson } from "effect-agent/digest";
-import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
-import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
-import { DurableStep, DurableStepError, ToolExecutionClass } from "effect-agent/durable-step";
-import { RunId, SubmissionId, ThreadId, ToolCallId } from "effect-agent/identifiers";
-import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "effect-agent/records";
-import { runIdForSubmission } from "effect-agent/run-journal";
-import { RunContextPreparation, RunToolAuthorization } from "effect-agent/run-options";
+import * as Agent from "@yielded/agent/agent";
+import { DurableWorkerBinding } from "@yielded/agent/agent-registration";
+import { ContextCompactor } from "@yielded/agent/context-compactor";
+import { digestJson } from "@yielded/agent/digest";
+import { DurableAgentRuntime, DurableRuntimeConfig } from "@yielded/agent/durable-agent-runtime";
+import { DurableRuntimeFailpointError } from "@yielded/agent/durable-failpoint";
+import { DurableStep, DurableStepError, ToolExecutionClass } from "@yielded/agent/durable-step";
+import { RunId, SubmissionId, ThreadId, ToolCallId } from "@yielded/agent/identifiers";
+import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "@yielded/agent/records";
+import { runIdForSubmission } from "@yielded/agent/run-journal";
+import { RunContextPreparation, RunToolAuthorization } from "@yielded/agent/run-options";
 import {
   ApprovalDecisionCommand,
   IdempotencyKey,
@@ -20,16 +19,17 @@ import {
   ResolutionCompletedWithResult,
   SubmissionLedger,
   UnknownResolutionCommand,
-} from "effect-agent/submission-ledger";
-import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
+} from "@yielded/agent/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "@yielded/agent/testing/durable-failpoint-test-control";
 import {
   LoadCheckpointRequest,
   ThreadCheckpoint,
   ThreadExportRequest,
   ThreadStore,
-} from "effect-agent/thread-store";
-import { ToolReconciler } from "effect-agent/tool-reconciler";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
+} from "@yielded/agent/thread-store";
+import { ToolReconciler } from "@yielded/agent/tool-reconciler";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
+import { Effect, Exit, Layer, Option, Schema, Stream } from "effect";
 import type { Prompt, Response } from "effect/ai";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/ai";
 
@@ -75,7 +75,7 @@ const scenarios = [
 ];
 
 describe("disposable durable recovery checkpoint", () => {
-  // https://github.com/danieljvdm/effect-agent/issues/692
+  // https://github.com/yielded-dev/agent/issues/692
   // Same-Run recovery tests do not detect replay of retired history by each new Run.
   it.effect("keeps fresh Runs bounded and falls back from incompatible Thread context", () =>
     Effect.gen(function* () {
@@ -187,7 +187,7 @@ describe("disposable durable recovery checkpoint", () => {
       }
       expect(JSON.stringify(requests.at(-1))).toContain("first fresh request");
 
-      // https://github.com/danieljvdm/effect-agent/commit/57411e0591424908211c2adc128d64b3563f1d37
+      // https://github.com/yielded-dev/agent/commit/57411e0591424908211c2adc128d64b3563f1d37
       // A valid checksum must not hide an incompatible Prompt from cache eligibility checks.
       const checkpoints = store.recoveryCheckpoints!;
       const saved = yield* checkpoints.load(LoadCheckpointRequest.make({ threadId }));

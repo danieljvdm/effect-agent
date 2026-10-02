@@ -1,5 +1,5 @@
+import { PageCaptureEngine } from "@yielded/agent/page-capture";
 import { Schema } from "effect";
-import { PageCaptureEngine } from "effect-agent/page-capture";
 import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/http-api";
 
 export const BrowserEngine = PageCaptureEngine;

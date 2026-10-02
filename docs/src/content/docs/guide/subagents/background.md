@@ -8,7 +8,7 @@ description: Give the parent background tools and send worker findings back as n
 Give the parent tools to start and steer a researcher while it keeps chatting:
 
 ```ts twoslash
-import { Subagent } from "effect-agent";
+import { Subagent } from "@yielded/agent";
 import { Researcher } from "./researcher.ts";
 
 const background = Subagent.background(Researcher, {
@@ -34,7 +34,7 @@ mapper, input union, or extra host registration is required. Existing callers mu
 Opt a worker definition into assignment completion through its typed output:
 
 ```ts twoslash
-import { Agent, Worker } from "effect-agent";
+import { Agent, Worker } from "@yielded/agent";
 import { Schema } from "effect";
 import { Toolkit } from "effect/ai";
 

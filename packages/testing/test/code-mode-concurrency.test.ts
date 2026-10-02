@@ -1,22 +1,22 @@
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
-import { inProcessCodeExecutorLayer } from "@effect-agent/testing/code-executor-substitute";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
+import { MemorySubmissionLedgerLive } from "@yielded/agent-storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@yielded/agent-storage-memory/memory-thread-store";
+import { inProcessCodeExecutorLayer } from "@yielded/agent-testing/code-executor-substitute";
+import * as Agent from "@yielded/agent/agent";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import { CodeExecutionLimits } from "@yielded/agent/code-executor";
+import * as CodeMode from "@yielded/agent/code-mode";
+import { DurableAgentRuntime, DurableRuntimeConfig } from "@yielded/agent/durable-agent-runtime";
+import { DurableRuntimeFailpoint } from "@yielded/agent/durable-failpoint";
+import { ThreadId } from "@yielded/agent/identifiers";
+import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "@yielded/agent/records";
+import { RunContextPreparationPassthrough } from "@yielded/agent/run-options";
+import { IdempotencyKey, Principal } from "@yielded/agent/submission-ledger";
+import { ThreadHistory } from "@yielded/agent/thread-history";
+import { ToolReconciler } from "@yielded/agent/tool-reconciler";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
 import { Deferred, Duration, Effect, Exit, Layer, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import { CodeExecutionLimits } from "effect-agent/code-executor";
-import * as CodeMode from "effect-agent/code-mode";
-import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
-import { DurableRuntimeFailpoint } from "effect-agent/durable-failpoint";
-import { ThreadId } from "effect-agent/identifiers";
-import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "effect-agent/records";
-import { RunContextPreparationPassthrough } from "effect-agent/run-options";
-import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
-import { ThreadHistory } from "effect-agent/thread-history";
-import { ToolReconciler } from "effect-agent/tool-reconciler";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 
 class WriteFailure extends Schema.TaggedError<WriteFailure>()("WriteFailure", {}) {}

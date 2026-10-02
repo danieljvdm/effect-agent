@@ -1,34 +1,34 @@
 import { expect, layer } from "@effect/vitest";
-import { Context, Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import * as AgentRuntime from "effect-agent/agent-runtime";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
 import {
   type AgentSpawner,
   type SubagentDurability,
   type SubagentDurabilityError,
   type ToolCallWaiting,
   type RuntimeBinding,
-} from "effect-agent/agent-runtime";
-import { IdGenerator } from "effect-agent/id-generator";
-import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
-import { type RunEventSink } from "effect-agent/run-event-sink";
-import { RunContextPreparationPassthrough } from "effect-agent/run-options";
-import * as Subagent from "effect-agent/subagent";
+} from "@yielded/agent/agent-runtime";
+import { IdGenerator } from "@yielded/agent/id-generator";
+import { ThreadId, RunId, TurnId } from "@yielded/agent/identifiers";
+import { type RunEventSink } from "@yielded/agent/run-event-sink";
+import { RunContextPreparationPassthrough } from "@yielded/agent/run-options";
+import * as Subagent from "@yielded/agent/subagent";
 import {
   type SubagentExecutionFailure,
   type SubagentPrestartDenied,
   type SubagentProjectionFailure,
   type SubagentChildRunFailure,
   SubagentPolicy,
-} from "effect-agent/subagent";
+} from "@yielded/agent/subagent";
 import {
   type SubagentBudgetExhausted,
   SubagentReservations,
   SubagentReservationsMemoryLive,
   type SubagentReservationView,
-} from "effect-agent/subagent-reservations";
-import { ThreadHistory } from "effect-agent/thread-history";
+} from "@yielded/agent/subagent-reservations";
+import { ThreadHistory } from "@yielded/agent/thread-history";
+import { Context, Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect";
 import { type AiError, LanguageModel, Model, type Response, Tool, Toolkit } from "effect/ai";
 
 type Equal<Left, Right> =

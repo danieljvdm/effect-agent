@@ -1,10 +1,9 @@
-import { MemoryScheduleStoreLive } from "@effect-agent/storage-memory/memory-schedule-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Ref, Schema, Tracer } from "effect";
-import { Receipt } from "effect-agent/durable-agent-runtime";
-import { AgentId, ThreadId, ReceiptId, SubmissionId } from "effect-agent/identifiers";
-import { DefinitionDigests, Digest } from "effect-agent/records";
+import { MemoryScheduleStoreLive } from "@yielded/agent-storage-memory/memory-schedule-store";
+import { Receipt } from "@yielded/agent/durable-agent-runtime";
+import { AgentId, ThreadId, ReceiptId, SubmissionId } from "@yielded/agent/identifiers";
+import { DefinitionDigests, Digest } from "@yielded/agent/records";
 import {
   defaultSchedulingLimits,
   type SchedulingLimits,
@@ -17,14 +16,15 @@ import {
   ScheduleStore,
   ScheduleStorageError,
   type ScheduleTimingRequest,
-} from "effect-agent/schedule";
+} from "@yielded/agent/schedule";
 import {
   type ScheduleCreateOptions,
   Scheduling,
   ScheduleDriver,
   ScheduleWakeNoop,
-} from "effect-agent/scheduling";
-import { Principal, QueueSequence } from "effect-agent/submission-ledger";
+} from "@yielded/agent/scheduling";
+import { Principal, QueueSequence } from "@yielded/agent/submission-ledger";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Ref, Schema, Tracer } from "effect";
 import * as TestClock from "effect/testing/TestClock";
 
 const Input = Schema.Struct({ text: Schema.String });

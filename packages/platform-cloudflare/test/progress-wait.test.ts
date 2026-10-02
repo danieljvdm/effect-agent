@@ -1,9 +1,9 @@
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
+import { CloudflareThreadClient } from "@yielded/agent-platform-cloudflare/cloudflare-thread-client";
+import { type Receipt } from "@yielded/agent/durable-agent-runtime";
+import type { CanonicalSequence } from "@yielded/agent/records";
+import { ApprovalDecisionCommand } from "@yielded/agent/submission-ledger";
 import { runInDurableObject } from "cloudflare:test";
 import { Effect, Fiber } from "effect";
-import { type Receipt } from "effect-agent/durable-agent-runtime";
-import type { CanonicalSequence } from "effect-agent/records";
-import { ApprovalDecisionCommand } from "effect-agent/submission-ledger";
 import { describe, expect, it, onTestFinished } from "vite-plus/test";
 
 import { ProgressWaitRegistry } from "../src/internal/progress-wait.ts";

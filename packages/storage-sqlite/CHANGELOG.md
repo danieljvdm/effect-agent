@@ -1,4 +1,4 @@
-# @effect-agent/storage-sqlite
+# @yielded/agent-storage-sqlite
 
 ## 0.1.0-beta.165
 

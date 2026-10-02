@@ -2,8 +2,8 @@ import process from "node:process";
 
 import { OpenAiClient } from "@effect/ai-openai";
 import { NodeCrypto, NodeRuntime, NodeServices } from "@effect/platform-node";
+import { CanonicalRecordEnvelope } from "@yielded/agent/records";
 import { Config, Console, Effect, FileSystem, Layer, Redacted, Schema } from "effect";
-import { CanonicalRecordEnvelope } from "effect-agent/records";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
 import { runEvaluation } from "../src/evaluate.ts";

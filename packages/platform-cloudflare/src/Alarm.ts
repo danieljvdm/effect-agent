@@ -1,3 +1,25 @@
+import { type DurableBindingFailure } from "@yielded/agent/agent-registration";
+import {
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  isolateRecovery,
+  RecoveryBlocked,
+  RecoveryFailure,
+  type DurableWorkerFailure,
+  type RecoveryReport,
+  RecoverySweepResult,
+} from "@yielded/agent/durable-agent-runtime";
+import { ThreadId, SubmissionId } from "@yielded/agent/identifiers";
+import {
+  AbortIntentRequest,
+  SubmissionLedger,
+  type SubmissionWorkItem,
+} from "@yielded/agent/submission-ledger";
+import {
+  ThreadProjectionMaintenance,
+  type ThreadProjectionError,
+} from "@yielded/agent/thread-projection-maintenance";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
 import {
   Cause,
   Clock,
@@ -19,28 +41,6 @@ import {
   Stream,
   Struct,
 } from "effect";
-import { type DurableBindingFailure } from "effect-agent/agent-registration";
-import {
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  isolateRecovery,
-  RecoveryBlocked,
-  RecoveryFailure,
-  type DurableWorkerFailure,
-  type RecoveryReport,
-  RecoverySweepResult,
-} from "effect-agent/durable-agent-runtime";
-import { ThreadId, SubmissionId } from "effect-agent/identifiers";
-import {
-  AbortIntentRequest,
-  SubmissionLedger,
-  type SubmissionWorkItem,
-} from "effect-agent/submission-ledger";
-import {
-  ThreadProjectionMaintenance,
-  type ThreadProjectionError,
-} from "effect-agent/thread-projection-maintenance";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { DurableObjectStorage } from "effect-cf";
 import { SqlClient } from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
@@ -344,7 +344,7 @@ export const ThreadMessageDelivery = Context.Reference<{
 
 /**
  * One explicitly scheduled application obligation. IDs are stable and unique within the
- * physical Object; the `effect-agent:` prefix is reserved. There is no initial host wave.
+ * physical Object; the `@yielded/agent:` prefix is reserved. There is no initial host wave.
  * Producers enroll only affected IDs through ThreadMutationGate.withMutation({ lanes })
  * or schedule(id, dueAt). A lane returns its next epoch-millisecond deadline (None = idle)
  * with its finite wave, after persisting claims, receipts and retries. No deadline callback

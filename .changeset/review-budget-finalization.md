@@ -1,5 +1,5 @@
 ---
-"@effect-agent/pr-review": patch
+"@yielded/agent-pr-review": patch
 ---
 
 Reserve a final review response when token, turn, or tool budgets stop investigation, preserving findings and usage.

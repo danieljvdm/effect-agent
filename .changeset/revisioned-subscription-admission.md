@@ -1,11 +1,11 @@
 ---
-"@effect-agent/storage-memory": patch
-"@effect-agent/storage-sqlite": patch
-"@effect-agent/storage-cloudflare": patch
-"@effect-agent/platform-node": patch
-"@effect-agent/platform-cloudflare": patch
-"@effect-agent/workflow": patch
-"effect-agent": patch
+"@yielded/agent-storage-memory": patch
+"@yielded/agent-storage-sqlite": patch
+"@yielded/agent-storage-cloudflare": patch
+"@yielded/agent-platform-node": patch
+"@yielded/agent-platform-cloudflare": patch
+"@yielded/agent-workflow": patch
+"@yielded/agent": patch
 ---
 
 Add revisioned subscription management, bounded event retention, and explicit recovery of parked admissions. Fence fresh destination admission by host policy and retain one unsettled submission per optional admission group until canonical settlement.

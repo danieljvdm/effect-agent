@@ -1,15 +1,15 @@
 import {
   DurableObjectContext,
   threadNamespaceLayer,
-} from "@effect-agent/platform-cloudflare/cloudflare-bindings";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
+} from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
+import * as ThreadObject from "@yielded/agent-platform-cloudflare/thread-object";
+import * as Agent from "@yielded/agent/agent";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import type { Receipt } from "@yielded/agent/receipt";
+import { SubmissionLedger } from "@yielded/agent/submission-ledger";
+import { ThreadStore, ThreadExportRequest } from "@yielded/agent/thread-store";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Clock, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import type { Receipt } from "effect-agent/receipt";
-import { SubmissionLedger } from "effect-agent/submission-ledger";
-import { ThreadStore, ThreadExportRequest } from "effect-agent/thread-store";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 import { expect, it } from "vite-plus/test";
 

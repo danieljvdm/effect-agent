@@ -1,35 +1,34 @@
-import { messageDeliveryStoreLayer } from "@effect-agent/storage-sqlite/sqlite-message-delivery-store";
-import { scheduleStoreLayer } from "@effect-agent/storage-sqlite/sqlite-schedule-store";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { SqliteClient } from "@effect/sql-sqlite-node";
+import { messageDeliveryStoreLayer } from "@yielded/agent-storage-sqlite/sqlite-message-delivery-store";
+import { scheduleStoreLayer } from "@yielded/agent-storage-sqlite/sqlite-schedule-store";
 import {
   SqliteStorageConfig,
   SqliteStorageConfigValue,
-} from "@effect-agent/storage-sqlite/sqlite-storage-config";
+} from "@yielded/agent-storage-sqlite/sqlite-storage-config";
 import {
   type SqliteStorageFailpoint,
   type SqliteStorageFailpointHandler,
-} from "@effect-agent/storage-sqlite/sqlite-storage-failpoint";
-import { submissionLedgerLayer } from "@effect-agent/storage-sqlite/sqlite-submission-ledger";
+} from "@yielded/agent-storage-sqlite/sqlite-storage-failpoint";
+import { submissionLedgerLayer } from "@yielded/agent-storage-sqlite/sqlite-submission-ledger";
 import {
   exclusiveHostClientLayer,
   threadStoreLayer,
   storageFailpointLayer,
   type SqliteStorageInitializationError,
-} from "@effect-agent/storage-sqlite/sqlite-thread-store";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { SqliteClient } from "@effect/sql-sqlite-node";
-import { Context, type Crypto, Duration, Effect, Layer, Ref, Schema } from "effect";
-import { type AgentRegistration, type ResolvedBinding } from "effect-agent/agent-registration";
-import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
+} from "@yielded/agent-storage-sqlite/sqlite-thread-store";
+import { type AgentRegistration, type ResolvedBinding } from "@yielded/agent/agent-registration";
+import { DurableAgentRuntime, DurableRuntimeConfig } from "@yielded/agent/durable-agent-runtime";
 import {
   DurableRuntimeFailpoint,
   type DurableRuntimeFailpointHandler,
-} from "effect-agent/durable-failpoint";
-import { type SubmissionId } from "effect-agent/identifiers";
+} from "@yielded/agent/durable-failpoint";
+import { type SubmissionId } from "@yielded/agent/identifiers";
 import {
   type MessageDeliveryError,
   type MessageDeliveryStore,
-} from "effect-agent/message-delivery";
-import { DeploymentId, ProducerId } from "effect-agent/records";
+} from "@yielded/agent/message-delivery";
+import { DeploymentId, ProducerId } from "@yielded/agent/records";
 import {
   CurrentToolFailureObserver,
   RunContextPreparationPassthrough,
@@ -38,17 +37,18 @@ import {
   type RunContextPreparation,
   type RunCostEstimator,
   type RunToolFailureObserver,
-} from "effect-agent/run-options";
-import { type ScheduleStore } from "effect-agent/schedule";
+} from "@yielded/agent/run-options";
+import { type ScheduleStore } from "@yielded/agent/schedule";
 import {
   DEFAULT_OWNERSHIP_LEASE_DURATION,
   ReleaseOwnershipRequest,
   SubmissionLedger,
   type OwnershipToken,
-} from "effect-agent/submission-ledger";
-import { type ThreadStore } from "effect-agent/thread-store";
-import { ToolReconciler } from "effect-agent/tool-reconciler";
-import { type WakeScheduler } from "effect-agent/wake-scheduler";
+} from "@yielded/agent/submission-ledger";
+import { type ThreadStore } from "@yielded/agent/thread-store";
+import { ToolReconciler } from "@yielded/agent/tool-reconciler";
+import { type WakeScheduler } from "@yielded/agent/wake-scheduler";
+import { Context, type Crypto, Duration, Effect, Layer, Ref, Schema } from "effect";
 import type * as SqlClientService from "effect/sql/SqlClient";
 
 import { ExclusiveSqliteHost } from "./internal/exclusive-host.ts";

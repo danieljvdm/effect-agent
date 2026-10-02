@@ -1,38 +1,41 @@
 <h1 align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/assets/lockup-agent-paper.svg" />
-    <img src=".github/assets/lockup-agent-ink.svg" alt="Effect Agent" height="48" />
+    <img src=".github/assets/lockup-agent-ink.svg" alt="Yielded Agent" height="48" />
   </picture>
 </h1>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/effect-agent"><img alt="npm" src="https://img.shields.io/npm/v/effect-agent/beta?label=npm&labelColor=121310&color=b9a4ff" /></a>
-  <a href="https://github.com/danieljvdm/effect-agent/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/danieljvdm/effect-agent/ci.yml?branch=main&label=ci&labelColor=121310" /></a>
+  <a href="https://www.npmjs.com/package/@yielded/agent"><img alt="npm" src="https://img.shields.io/npm/v/@yielded/agent/beta?label=npm&labelColor=121310&color=b9a4ff" /></a>
+  <a href="https://github.com/yielded-dev/agent/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/yielded-dev/agent/ci.yml?branch=main&label=ci&labelColor=121310" /></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-f3f1e8?labelColor=121310" /></a>
 </p>
 
 <p align="center">
-  <a href="https://effect-agent.com/"><b>Documentation</b></a>
+  <a href="https://yielded.dev/agent/"><b>Documentation</b></a>
   ·
-  <a href="https://effect-agent.com/guide/getting-started/">Getting started</a>
+  <a href="https://yielded.dev/agent/guide/getting-started/">Getting started</a>
   ·
   <a href="https://yielded.dev">yielded.dev</a>
 </p>
 
 Build TypeScript agents with [Effect](https://github.com/Effect-TS/effect) and Effect AI.
-Define inputs, outputs, and tools with schemas. Effect Agent runs the loop, executes tools,
+Define inputs, outputs, and tools with schemas. Yielded Agent runs the loop, executes tools,
 and validates the result — with typed errors, streaming, and bounded execution.
+
+Yielded Agent was previously published as **Effect Agent**.
+See the [package migration guide](https://yielded.dev/agent/guide/migration/) for updated names and imports.
 
 ## Install
 
 ```sh
-bun add effect-agent@beta
+bun add @yielded/agent@beta
 ```
 
 Use an [Effect AI provider](docs/src/content/docs/guide/getting-started.md) for model access.
 
-Prefer named namespace imports from package roots, such as `import { Agent } from "effect-agent"`.
-Direct module paths use kebab-case, such as `effect-agent/agent-runtime`; see the
+Prefer named namespace imports from package roots, such as `import { Agent } from "@yielded/agent"`.
+Direct module paths use kebab-case, such as `@yielded/agent/agent-runtime`; see the
 [import guide](docs/src/content/docs/reference/packages.md#public-imports) for direct imports and lazy loading.
 
 Public beta: APIs and stored data may change before 1.0. Persistent adapters support a
@@ -42,7 +45,7 @@ Public beta: APIs and stored data may change before 1.0. Persistent adapters sup
 
 ```ts
 import { Effect, Schema } from "effect";
-import { Agent, AgentRuntime } from "effect-agent";
+import { Agent, AgentRuntime } from "@yielded/agent";
 import { Toolkit } from "effect/ai";
 
 const planner = Agent.make("travel-planner", {
@@ -67,7 +70,7 @@ The output is schema-validated. Supply your model and runtime services to run it
 Save the code above and the setup below as `agent.ts`.
 
 ```ts
-import { InMemory } from "effect-agent";
+import { InMemory } from "@yielded/agent";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { BunRuntime } from "@effect/platform-bun";
 import { Config, Layer } from "effect";

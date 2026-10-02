@@ -1,11 +1,11 @@
 {
-  "name": "@effect-agent/storage-sql",
+  "name": "@yielded/agent-storage-sql",
   "version": "0.1.0-beta.165",
   "description": "Shared SQL persistence implementations for Effect Agent storage adapters.",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/danieljvdm/effect-agent.git",
+    "url": "git+https://github.com/yielded-dev/agent.git",
     "directory": "packages/storage-sql"
   },
   "files": [
@@ -40,7 +40,7 @@
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
-    "effect-agent": "workspace:*"
+    "@yielded/agent": "workspace:*"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",

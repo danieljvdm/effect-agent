@@ -1,5 +1,5 @@
 ---
-"@effect-agent/pr-review": patch
+"@yielded/agent-pr-review": patch
 ---
 
 Review large changes with a complete change index, paged diffs, caller search, and explicit unread coverage while retaining higher-priority findings when the report fills.

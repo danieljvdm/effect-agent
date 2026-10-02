@@ -1,4 +1,4 @@
-# @effect-agent/storage-memory
+# @yielded/agent-storage-memory
 
 ## 0.1.0-beta.165
 

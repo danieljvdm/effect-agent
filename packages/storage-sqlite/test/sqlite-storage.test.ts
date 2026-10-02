@@ -1,20 +1,49 @@
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { SqliteClient } from "@effect/sql-sqlite-node";
+import { expect, describe, it } from "@effect/vitest";
 import {
   SqliteStorageConfig,
   SqliteStorageConfigValue,
-} from "@effect-agent/storage-sqlite/sqlite-storage-config";
+} from "@yielded/agent-storage-sqlite/sqlite-storage-config";
 import {
   SqliteStorageFailpointError,
   type SqliteStorageFailpointLocation,
   SqliteStorageCompatibilityError,
   SqliteStorageCorruptionError,
   SqliteWriteContention,
-} from "@effect-agent/storage-sqlite/sqlite-storage-error";
-import { SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/sqlite-storage-failpoint";
-import { ledgerLayer } from "@effect-agent/storage-sqlite/sqlite-submission-ledger";
-import { threadStoreLayer, layer } from "@effect-agent/storage-sqlite/sqlite-thread-store";
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
-import { SqliteClient } from "@effect/sql-sqlite-node";
-import { expect, describe, it } from "@effect/vitest";
+} from "@yielded/agent-storage-sqlite/sqlite-storage-error";
+import { SqliteStorageFailpoint } from "@yielded/agent-storage-sqlite/sqlite-storage-failpoint";
+import { ledgerLayer } from "@yielded/agent-storage-sqlite/sqlite-submission-ledger";
+import { threadStoreLayer, layer } from "@yielded/agent-storage-sqlite/sqlite-thread-store";
+import { EMPTY_TAIL_DIGEST } from "@yielded/agent/digest";
+import {
+  CanonicalBatch,
+  CanonicalRecord,
+  CanonicalSequence,
+  ProducerEpoch,
+  RunCompleted,
+  UserInputRecorded,
+  type CanonicalRecordPayload,
+} from "@yielded/agent/records";
+import {
+  threadStoreConformanceCases,
+  threadCheckpointConformanceCases,
+} from "@yielded/agent/testing/thread-store-conformance";
+import {
+  ThreadCheckpoint,
+  ThreadTailRequest,
+  ThreadExportRequest,
+  ThreadMaterialization,
+  ThreadObservation,
+  ThreadRead,
+  ThreadStore,
+  ThreadStoreError,
+  FencedAppendRequest,
+  LoadCheckpointRequest,
+  SaveCheckpointRequest,
+  SaveRecoveryCheckpointRequest,
+  type AppendResult,
+} from "@yielded/agent/thread-store";
 import type { PlatformError } from "effect";
 import {
   DateTime,
@@ -30,35 +59,6 @@ import {
   Schema,
   Stream,
 } from "effect";
-import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
-import {
-  CanonicalBatch,
-  CanonicalRecord,
-  CanonicalSequence,
-  ProducerEpoch,
-  RunCompleted,
-  UserInputRecorded,
-  type CanonicalRecordPayload,
-} from "effect-agent/records";
-import {
-  threadStoreConformanceCases,
-  threadCheckpointConformanceCases,
-} from "effect-agent/testing/thread-store-conformance";
-import {
-  ThreadCheckpoint,
-  ThreadTailRequest,
-  ThreadExportRequest,
-  ThreadMaterialization,
-  ThreadObservation,
-  ThreadRead,
-  ThreadStore,
-  ThreadStoreError,
-  FencedAppendRequest,
-  LoadCheckpointRequest,
-  SaveCheckpointRequest,
-  SaveRecoveryCheckpointRequest,
-  type AppendResult,
-} from "effect-agent/thread-store";
 import * as SqlClientService from "effect/sql/SqlClient";
 import { TestClock } from "effect/testing";
 
@@ -990,4 +990,4 @@ describe("SqliteThreadStore", () => {
       ),
   );
 });
-import { SubmissionId } from "effect-agent/identifiers";
+import { SubmissionId } from "@yielded/agent/identifiers";

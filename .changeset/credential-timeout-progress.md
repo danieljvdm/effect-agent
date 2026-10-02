@@ -1,5 +1,5 @@
 ---
-"@effect-agent/platform-cloudflare": patch
+"@yielded/agent-platform-cloudflare": patch
 ---
 
 Preserve acknowledged credential writes, dispatch evidence, and browser cleanup status in credential timeout failures.

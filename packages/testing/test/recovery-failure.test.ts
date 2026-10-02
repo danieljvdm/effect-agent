@@ -1,21 +1,21 @@
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect";
-import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
-import { DurableRuntimeFailpoint } from "effect-agent/durable-failpoint";
-import { AgentId, ThreadId } from "effect-agent/identifiers";
-import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "effect-agent/records";
+import { MemorySubmissionLedgerLive } from "@yielded/agent-storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@yielded/agent-storage-memory/memory-thread-store";
+import { DurableAgentRuntime, DurableRuntimeConfig } from "@yielded/agent/durable-agent-runtime";
+import { DurableRuntimeFailpoint } from "@yielded/agent/durable-failpoint";
+import { AgentId, ThreadId } from "@yielded/agent/identifiers";
+import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "@yielded/agent/records";
 import {
   IdempotencyKey,
   LedgerError,
   Principal,
   SubmissionLedger,
-} from "effect-agent/submission-ledger";
-import { ThreadStore, ThreadStoreDiagnostic, ThreadStoreError } from "effect-agent/thread-store";
-import { ToolReconciler } from "effect-agent/tool-reconciler";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
+} from "@yielded/agent/submission-ledger";
+import { ThreadStore, ThreadStoreDiagnostic, ThreadStoreError } from "@yielded/agent/thread-store";
+import { ToolReconciler } from "@yielded/agent/tool-reconciler";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
+import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
 const failingThread = ThreadId.make("a-recovery-failure");

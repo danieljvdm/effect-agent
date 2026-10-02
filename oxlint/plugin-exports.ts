@@ -130,7 +130,8 @@ const noSelfBarrelImport = {
 
     if (directory === undefined) return {};
 
-    const ownPackage = directory === "effect-agent" ? "effect-agent" : `@effect-agent/${directory}`;
+    const ownPackage =
+      directory === "effect-agent" ? "@yielded/agent" : `@yielded/agent-${directory}`;
 
     const isIndirect = (source: string) =>
       source === ownPackage ||

@@ -1,5 +1,5 @@
 ---
-"effect-agent": minor
+"@yielded/agent": minor
 ---
 
 Derive delegation schemas and mappings from child definitions, inherit omitted policy defaults within shared reservation limits, and accept model Layers directly for subagent execution and durable registration.

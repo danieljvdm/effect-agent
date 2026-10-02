@@ -1,19 +1,19 @@
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
-import { Effect, Exit, Layer } from "effect";
 import {
   ScheduleFailpoint,
   ScheduleFailpointError,
   ScheduleStorageError,
   ScheduleStore,
-} from "effect-agent/schedule";
-import { SubmissionLedger } from "effect-agent/submission-ledger";
+} from "@yielded/agent/schedule";
+import { SubmissionLedger } from "@yielded/agent/submission-ledger";
 import {
   SubscriptionError,
   SubscriptionFailpoint,
   SubscriptionFailpointError,
   SubscriptionStore,
-} from "effect-agent/subscription";
+} from "@yielded/agent/subscription";
+import { Effect, Exit, Layer } from "effect";
 import * as SqlClientService from "effect/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -149,7 +149,7 @@ const services = (
 };
 
 describe("unpatched v2 native storage upgrade", () => {
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/78d05490ac4f3512b57ec37be37cab4a454a03a3
+  // Regression: https://github.com/yielded-dev/agent/commit/78d05490ac4f3512b57ec37be37cab4a454a03a3
   it("initializes beside an application's migration history and preserves admission receipts", () =>
     withScheduleStorage(`shared-sql-migrations-${counter++}`, (storage) =>
       Effect.gen(function* () {

@@ -1,5 +1,5 @@
 {
-  "name": "@effect-agent/example-browser-run-worker-proof",
+  "name": "@yielded/agent-example-browser-run-worker-proof",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -9,11 +9,11 @@
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
-    "@effect-agent/platform-cloudflare": "workspace:*",
     "@effect/ai-openai": "catalog:",
     "@effect/platform-node": "catalog:",
-    "effect": "catalog:",
-    "effect-agent": "workspace:*"
+    "@yielded/agent": "workspace:*",
+    "@yielded/agent-platform-cloudflare": "workspace:*",
+    "effect": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:",

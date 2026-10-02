@@ -2,10 +2,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { SettlementFailureDiagnostic } from "@yielded/agent/records";
+import { ThreadExport } from "@yielded/agent/thread-store";
+import { WorkerCompletion } from "@yielded/agent/worker";
 import { Effect, Schema } from "effect";
-import { SettlementFailureDiagnostic } from "effect-agent/records";
-import { ThreadExport } from "effect-agent/thread-store";
-import { WorkerCompletion } from "effect-agent/worker";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
