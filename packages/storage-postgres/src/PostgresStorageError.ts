@@ -1,4 +1,4 @@
-import { SqlStorageFailpointLocation } from "@effect-agent/storage-sql/sql-storage-failpoint";
+import { SqlStorageFailpointLocation } from "@yielded/agent-storage-sql/sql-storage-failpoint";
 import { Schema } from "effect";
 
 /** The database uses a private-development storage format this adapter cannot read. */

@@ -1,4 +1,5 @@
 import * as Alchemy from "alchemy";
+import { adopt } from "alchemy/AdoptPolicy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import { Config, Effect, Layer } from "effect";
 
@@ -26,24 +27,55 @@ const state = Layer.unwrap(
   ),
 );
 
+const docsAssets = {
+  base: "/agent/",
+  notFoundHandling: "404-page",
+} satisfies Omit<Cloudflare.Workers.AssetsProps, "directory">;
+
 const stack = Effect.gen(function* () {
-  const docs = yield* Cloudflare.Website.StaticSite("Docs", {
+  yield* Cloudflare.Website.StaticSite("Docs", {
     name: "effect-agent-docs",
     command: "vp run docs:build",
     outdir: "docs/dist",
     domain: "effect-agent.com",
+    routes: [{ pattern: "yielded.dev/agent*", zoneName: "yielded.dev" }],
     workersDev: false,
     dev: { command: "vp run docs:dev" },
     // Astro emits directory indexes and 404.html. Existing extensionless
     // links redirect to the same page with a trailing slash.
-    assets: { notFoundHandling: "404-page" },
+    assets: docsAssets,
     // The dist and cache directories are gitignored, so hashing docs/**
     // rebuilds exactly when a source page or the site config changes;
     // package.json is included because it owns the docs:build script.
     memo: { include: ["docs/**", "package.json"], lockfile: true },
   });
 
-  return { url: docs.url };
+  const legacyZone = yield* Cloudflare.Zone.Zone("LegacyDocsZone", {
+    name: "effect-agent.com",
+  }).pipe(adopt());
+
+  yield* Cloudflare.Ruleset.Ruleset("LegacyDocsRedirect", {
+    zone: legacyZone,
+    phase: "http_request_dynamic_redirect",
+    rules: [
+      {
+        action: "redirect",
+        expression: 'http.host in {"effect-agent.com" "www.effect-agent.com"}',
+        description: "Move agent documentation to yielded.dev/agent",
+        actionParameters: {
+          fromValue: {
+            statusCode: 301,
+            preserveQueryString: true,
+            targetUrl: {
+              expression: 'concat("https://yielded.dev/agent", http.request.uri.path)',
+            },
+          },
+        },
+      },
+    ],
+  });
+
+  return { url: "https://yielded.dev/agent/" };
 });
 
 export default Alchemy.Stack("effect-agent", { providers: Cloudflare.providers(), state }, stack);

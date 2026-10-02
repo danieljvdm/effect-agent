@@ -1,10 +1,10 @@
+import { OpenAiClient, OpenAiSchema } from "@effect/ai-openai";
 import {
   type ReviewCostControl,
   ReviewCostSnapshot,
   type ReviewRequest,
   ReviewUsage,
-} from "@effect-agent/pr-review/review";
-import { OpenAiClient, OpenAiSchema } from "@effect/ai-openai";
+} from "@yielded/agent-pr-review/review";
 import { Config, Effect, Exit, Option, Ref, Schema, Semaphore, Stream } from "effect";
 import { AiError } from "effect/ai";
 import { HttpBody, HttpClientError, HttpClientResponse } from "effect/http";

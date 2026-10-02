@@ -38,7 +38,7 @@ jobs:
             };
             const report = JSON.parse(read('report.json', 3000000));
             if (report.fixture !== 'runtime-v3' || report.profile !== 'pr' ||
-                !/^effect-agent@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(report.baselineTag) ||
+                !/^(?:effect-agent|@yielded\/agent)@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(report.baselineTag) ||
                 report.activeBatch !== null || report.failure !== null ||
                 report.settings?.batches !== 3 || report.settings?.warmupsPerBatch !== 2 || report.settings?.samplesPerBatch !== 3 ||
                 report.settings?.production !== true || report.settings?.execution !== 'unbundled published ESM' ||
@@ -63,7 +63,7 @@ jobs:
             // or moved tag makes the completed comparison stale.
             const releases = await github.paginate(github.rest.repos.listReleases, { ...context.repo, per_page: 100 });
             const latest = releases.filter(release => !release.draft && release.published_at &&
-              /^effect-agent@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(release.tag_name))
+              /^(?:effect-agent|@yielded\/agent)@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(release.tag_name))
               .sort((a, b) => b.published_at.localeCompare(a.published_at) || b.id - a.id)[0];
             if (!latest || latest.tag_name !== report.baselineTag) return;
             const { data: tag } = await github.rest.git.getRef({ ...context.repo, ref: `tags/${latest.tag_name}` });

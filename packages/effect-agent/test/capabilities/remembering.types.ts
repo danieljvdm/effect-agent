@@ -1,6 +1,4 @@
-import type { Effect } from "effect";
-import { Context, Schema } from "effect";
-import * as MemoryNamespace from "effect-agent/memory-namespace";
+import * as MemoryNamespace from "@yielded/agent/memory-namespace";
 import {
   type MemoryReader,
   type MemoryWriter,
@@ -8,8 +6,10 @@ import {
   type MemoryStorageError,
   type MemoryOperationConflict,
   type MemoryMutationFailure,
-} from "effect-agent/memory-store";
-import * as Protocol from "effect-agent/remembering-store";
+} from "@yielded/agent/memory-store";
+import * as Protocol from "@yielded/agent/remembering-store";
+import type { Effect } from "effect";
+import { Context, Schema } from "effect";
 import type { AiError, LanguageModel } from "effect/ai";
 
 import * as Remembering from "../../src/capabilities/Remembering.ts";

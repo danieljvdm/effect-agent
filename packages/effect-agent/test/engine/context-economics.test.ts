@@ -1,16 +1,16 @@
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { expect, layer } from "@effect/vitest";
+import * as Agent from "@yielded/agent/agent";
+import { ContextBudgetError } from "@yielded/agent/agent-error";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import { ModelCallContext } from "@yielded/agent/context-window";
+import { IdGenerator } from "@yielded/agent/id-generator";
+import { ThreadId, RunId, TurnId } from "@yielded/agent/identifiers";
+import { type RunEvent } from "@yielded/agent/run-event";
+import { type RunDurabilityHook } from "@yielded/agent/run-options";
+import { ToolResultBounds, TruncatedToolResult } from "@yielded/agent/tool-result";
 import { Cause, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { ContextBudgetError } from "effect-agent/agent-error";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import { ModelCallContext } from "effect-agent/context-window";
-import { IdGenerator } from "effect-agent/id-generator";
-import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
-import { type RunEvent } from "effect-agent/run-event";
-import { type RunDurabilityHook } from "effect-agent/run-options";
-import { ToolResultBounds, TruncatedToolResult } from "effect-agent/tool-result";
 import { LanguageModel, Model, type Prompt, type Response, Tool, Toolkit } from "effect/ai";
 import { toCodecOpenAI } from "effect/ai/OpenAiStructuredOutput";
 import { HttpClient, HttpClientResponse, HttpServerResponse } from "effect/http";
@@ -266,7 +266,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
       }),
   );
 
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/2259fc0
+  // Regression: https://github.com/yielded-dev/agent/commit/2259fc0
   // KOM-125: a transformed Class retains provider definitions that Schema.toEncoded removes.
   it.effect("admits original Tool schemas exactly as native OpenAI serializes them", () =>
     Effect.gen(function* () {

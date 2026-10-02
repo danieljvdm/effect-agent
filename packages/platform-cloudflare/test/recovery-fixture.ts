@@ -1,15 +1,15 @@
-import { DoStorageFailpoint } from "@effect-agent/storage-cloudflare/do-storage-failpoint";
-import { submissionLedgerLayer } from "@effect-agent/storage-cloudflare/do-submission-ledger";
+import { DoStorageFailpoint } from "@yielded/agent-storage-cloudflare/do-storage-failpoint";
+import { submissionLedgerLayer } from "@yielded/agent-storage-cloudflare/do-submission-ledger";
 import {
   storageConfigLayer,
   threadStoreLayer,
-} from "@effect-agent/storage-cloudflare/do-thread-store";
+} from "@yielded/agent-storage-cloudflare/do-thread-store";
+import { type ResolvedBinding } from "@yielded/agent/agent-registration";
+import { DurableAgentRuntime, DurableRuntimeConfig } from "@yielded/agent/durable-agent-runtime";
+import { type PersistedJson } from "@yielded/agent/records";
+import { SubmissionLedger, type SubmissionLookupByKey } from "@yielded/agent/submission-ledger";
+import { ThreadRead, ThreadStore } from "@yielded/agent/thread-store";
 import { Clock, Context, Duration, Effect, Layer, Option, Stream } from "effect";
-import { type ResolvedBinding } from "effect-agent/agent-registration";
-import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
-import { type PersistedJson } from "effect-agent/records";
-import { SubmissionLedger, type SubmissionLookupByKey } from "effect-agent/submission-ledger";
-import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 
 import {
   DurableAlarmError,

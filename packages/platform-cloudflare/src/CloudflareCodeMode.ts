@@ -1,5 +1,3 @@
-import { RpcTarget } from "cloudflare:workers";
-import { Clock, Duration, Effect, Exit, Fiber, Layer, Option, Queue, Schema } from "effect";
 import {
   CodeExecutionHost,
   CodeExecutionResourceUse,
@@ -18,8 +16,10 @@ import {
   CodeSourceError,
   type CodeExecutorExecute,
   type CodeExecutionRequest,
-} from "effect-agent/code-executor";
-import { SandboxImplementation } from "effect-agent/sandbox";
+} from "@yielded/agent/code-executor";
+import { SandboxImplementation } from "@yielded/agent/sandbox";
+import { RpcTarget } from "cloudflare:workers";
+import { Clock, Duration, Effect, Exit, Fiber, Layer, Option, Queue, Schema } from "effect";
 
 import { safeCauseDiagnostic, safeCauseMessage } from "./internal/boundary.ts";
 

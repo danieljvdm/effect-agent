@@ -1,12 +1,11 @@
+import { NodeCrypto } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
 import {
   MemorySubmissionLedgerLive,
   memorySubmissionLedgerLayer,
-} from "@effect-agent/storage-memory/memory-submission-ledger";
-import { NodeCrypto } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Schema } from "effect";
-import { AgentId, ThreadId } from "effect-agent/identifiers";
-import { DefinitionDigests, DeploymentId, Digest } from "effect-agent/records";
+} from "@yielded/agent-storage-memory/memory-submission-ledger";
+import { AgentId, ThreadId } from "@yielded/agent/identifiers";
+import { DefinitionDigests, DeploymentId, Digest } from "@yielded/agent/records";
 import {
   AdmissionRequest,
   AdmissionPolicyError,
@@ -15,8 +14,9 @@ import {
   SubmissionLedger,
   SubmissionAdmissionFence,
   SubmissionLookupByKey,
-} from "effect-agent/submission-ledger";
-import { submissionLedgerConformanceCases } from "effect-agent/testing/submission-ledger-conformance";
+} from "@yielded/agent/submission-ledger";
+import { submissionLedgerConformanceCases } from "@yielded/agent/testing/submission-ledger-conformance";
+import { Effect, Layer, Schema } from "effect";
 
 const testLayer = Layer.mergeAll(MemorySubmissionLedgerLive, NodeCrypto.layer);
 

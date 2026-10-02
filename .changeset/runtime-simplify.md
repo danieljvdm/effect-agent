@@ -1,8 +1,8 @@
 ---
-"effect-agent": patch
-"@effect-agent/storage-cloudflare": patch
-"@effect-agent/storage-sqlite": patch
-"@effect-agent/storage-sql": patch
+"@yielded/agent": patch
+"@yielded/agent-storage-cloudflare": patch
+"@yielded/agent-storage-sqlite": patch
+"@yielded/agent-storage-sql": patch
 ---
 
 Remove obsolete runtime aliases, frozen context tools, and unused storage failpoint controls. Use indexed canonical reads for selected Thread records instead of decoding a cached full history.

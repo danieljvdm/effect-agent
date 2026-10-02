@@ -2,25 +2,25 @@ import {
   ThreadObjectNamespace,
   ThreadObjectIdentity,
   type ThreadObjectRpc,
-} from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+} from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
 import {
   MemoryObject,
   CloudflareMemoryClient,
-} from "@effect-agent/platform-cloudflare/cloudflare-memory";
+} from "@yielded/agent-platform-cloudflare/cloudflare-memory";
 import {
   makeScheduleOwnerObjectClass,
   ScheduleOwnerIdentity,
-} from "@effect-agent/platform-cloudflare/cloudflare-scheduling";
-import { makeSubscriptionPartitionObjectClass } from "@effect-agent/platform-cloudflare/cloudflare-subscriptions";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
-import { PortRequest } from "@effect-agent/storage-cloudflare/port-protocol";
+} from "@yielded/agent-platform-cloudflare/cloudflare-scheduling";
+import { makeSubscriptionPartitionObjectClass } from "@yielded/agent-platform-cloudflare/cloudflare-subscriptions";
+import * as ThreadObject from "@yielded/agent-platform-cloudflare/thread-object";
+import { PortRequest } from "@yielded/agent-storage-cloudflare/port-protocol";
+import { CurrentBindingSelection } from "@yielded/agent/agent-registration";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import { RecalledMemory } from "@yielded/agent/memory";
+import { MemoryLookup } from "@yielded/agent/memory-reference";
+import { MemoryWrite, MemoryDocument } from "@yielded/agent/memory-store";
+import { ScheduleAuthorizer, ScheduleFailpoint } from "@yielded/agent/schedule";
 import { Clock, Effect, Layer, Schema } from "effect";
-import { CurrentBindingSelection } from "effect-agent/agent-registration";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { RecalledMemory } from "effect-agent/memory";
-import { MemoryLookup } from "effect-agent/memory-reference";
-import { MemoryWrite, MemoryDocument } from "effect-agent/memory-store";
-import { ScheduleAuthorizer, ScheduleFailpoint } from "effect-agent/schedule";
 import { DurableObject, DurableObjectState, RpcTracing, WorkerEnvironment } from "effect-cf";
 
 import { ThreadMaintenance } from "../src/Alarm.ts";

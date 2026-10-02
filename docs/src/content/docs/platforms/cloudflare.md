@@ -5,21 +5,21 @@ description: Run durable agents on Cloudflare Workers and Durable Objects.
 
 <a id="cloudflare"></a>
 
-`@effect-agent/platform-cloudflare` stores each thread and its pending work in a
+`@yielded/agent-platform-cloudflare` stores each thread and its pending work in a
 SQLite-backed Durable Object. RPC calls and alarms drive execution and recovery.
 See [Cloudflare storage](/storage/cloudflare/) for database ownership and adapter composition.
 
 ## Install
 
 ```sh
-bun add @effect-agent/platform-cloudflare@beta effect
+bun add @yielded/agent-platform-cloudflare@beta effect
 ```
 
 Keep framework packages at one release and add your [model provider](/guide/getting-started/#installation-and-compatibility).
 
 ## AI Gateway
 
-The Node-safe `@effect-agent/platform-cloudflare/cloudflare-ai-gateway` subpath configures
+The Node-safe `@yielded/agent-platform-cloudflare/cloudflare-ai-gateway` subpath configures
 upstream Effect clients in Workers, Durable Objects, Node, or Bun. `Gateway.provide` supplies
 the client directly in a Layer pipeline; model selection, tools, response decoding, streaming,
 and typed provider errors stay with upstream Effect AI. Use the configured client for primary agents, subagents,
@@ -36,7 +36,7 @@ For provider-native routing with stored keys or Unified Billing, pass the upstre
 `layer` factory and your resolved gateway configuration:
 
 ```ts twoslash
-import * as Gateway from "@effect-agent/platform-cloudflare/cloudflare-ai-gateway";
+import * as Gateway from "@yielded/agent-platform-cloudflare/cloudflare-ai-gateway";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Layer, Redacted } from "effect";
 import { FetchHttpClient } from "effect/http";
@@ -100,9 +100,9 @@ Object namespace in the generated `Cloudflare.Env`.
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
-import { Agent } from "effect-agent";
-import { ThreadObject } from "@effect-agent/platform-cloudflare";
-import { DefinitionDigestInput } from "effect-agent/records";
+import { Agent } from "@yielded/agent";
+import { ThreadObject } from "@yielded/agent-platform-cloudflare";
+import { DefinitionDigestInput } from "@yielded/agent/records";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Layer, Schema } from "effect";
 import { Toolkit } from "effect/ai";
@@ -152,7 +152,7 @@ tool versions. The submitter passes `digestDefinitions(travelDefinitions)` throu
 `DurableSubmitOptions.definitions`. Bump the agent revision when instructions, schemas, or policy
 change. Version tool implementations and model configuration when they change. Register one
 current binding per stable `agentId` by default. Hosts with intentionally shared identities can
-provide `CurrentBindingSelection` from `effect-agent/agent-registration` when constructing the
+provide `CurrentBindingSelection` from `@yielded/agent/agent-registration` when constructing the
 runtime. Its `select(submission)` returns an exact registered Definition using canonical input
 and authoritative host state; `undefined` retains unique-identity resolution. Both execution
 and recovery use this selection. Set a stable `key` and change it when routing changes. Selection
@@ -199,8 +199,8 @@ for Workers using the older `migrations` array.
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
-import { type ThreadObjectRpc } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { CloudflareThreadClient } from "@yielded/agent-platform-cloudflare/cloudflare-thread-client";
+import { type ThreadObjectRpc } from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
 
 export const threadClientLayer = (env: { THREADS: DurableObjectNamespace<ThreadObjectRpc> }) =>
   CloudflareThreadClient.layerFromBinding({ namespace: env.THREADS });
@@ -270,7 +270,7 @@ Supply `ThreadObject.layerHostConfig(options, ownsThread)`, `DurableObjectContex
 its methods call the application's RPC with the selected Thread ID and native encoded payload.
 The receiver dispatches with `ThreadObject.handleRpc(threadId, operation, encoded)`. Direct local
 admission uses `ThreadObject.submit(threadId, decodedRequest)` and the same validation and prearm.
-The [shared-owner example](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-cloudflare/examples/shared-owner.ts) composes
+The [shared-owner example](https://github.com/yielded-dev/agent/blob/main/packages/platform-cloudflare/examples/shared-owner.ts) composes
 an existing SQL client, application services and an optional projection without external requirements.
 
 Placement must be deterministic and stable across reconstruction. It grants no access: authenticate
@@ -323,7 +323,7 @@ remain eligible. Successful recovery clears the fault without resolving uncertai
 Hosts consume per-Submission fault transitions through `ThreadRecoveryEvents`:
 
 ```ts
-import { ThreadRecoveryEvents } from "@effect-agent/platform-cloudflare/alarm";
+import { ThreadRecoveryEvents } from "@yielded/agent-platform-cloudflare/alarm";
 import { Layer } from "effect";
 
 const recoveryEvents = Layer.succeed(ThreadRecoveryEvents, {
@@ -364,7 +364,10 @@ must remove their status polling and consume these transitions instead.
 Application outboxes enroll independent lanes in one durable due queue:
 
 ```ts
-import { ThreadHostMaintenance, ThreadMutationGate } from "@effect-agent/platform-cloudflare/alarm";
+import {
+  ThreadHostMaintenance,
+  ThreadMutationGate,
+} from "@yielded/agent-platform-cloudflare/alarm";
 import { Context, Effect } from "effect";
 
 const maintenance = Context.make(ThreadHostMaintenance, {
@@ -385,7 +388,7 @@ const retainReply = Effect.gen(function* () {
 });
 ```
 
-Each lane has a stable ID, unique within the physical Object. Reserve `effect-agent:` IDs for
+Each lane has a stable ID, unique within the physical Object. Reserve `@yielded/agent:` IDs for
 framework lanes. `run` returns `Effect<Option<number>, DurableAlarmError, Scope>`: the next deadline
 in epoch milliseconds, or `None` when idle. Calculate it as part of the wave that commits the
 receipts and retries. The scheduler never calls a separate host deadline reader. Compose hosts
@@ -483,7 +486,7 @@ Use `lifecyclePublication` to publish native admissions, progress, controls, wai
 settlement to an eventually consistent application view:
 
 ```ts
-import { LifecyclePublicationHandler } from "effect-agent/lifecycle-publication";
+import { LifecyclePublicationHandler } from "@yielded/agent/lifecycle-publication";
 
 const RuntimeLive = ThreadObject.layer(registrations, {
   lifecyclePublication: Layer.effect(LifecyclePublicationHandler)(makeLifecycleHandler),
@@ -541,13 +544,13 @@ unknown-resolution intents must be published before dependent native execution. 
 UI relays and outboxes belong in `ThreadHostMaintenance`, since publication is an execution gate:
 
 ```ts
-import { ThreadPublication } from "@effect-agent/platform-cloudflare/alarm";
+import { ThreadPublication } from "@yielded/agent-platform-cloudflare/alarm";
 import {
   DurableObjectContext,
   ThreadObjectIdentity,
-} from "@effect-agent/platform-cloudflare/cloudflare-bindings";
-import { ThreadStore } from "effect-agent/thread-store";
-import { SubmissionLedger } from "effect-agent/submission-ledger";
+} from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
+import { ThreadStore } from "@yielded/agent/thread-store";
+import { SubmissionLedger } from "@yielded/agent/submission-ledger";
 
 // `makePublication` is an application Effect yielding ThreadPublicationService.
 // It yields the raw LOCAL ThreadStore and SubmissionLedger, native DurableObjectContext,
@@ -590,7 +593,7 @@ retry, and interruption remains interruption. Custom host facts must be committe
 ### Maintain a disposable Thread index
 
 Supply `projection` to `ThreadObject.layer` with a Layer providing
-`ThreadProjectionMaintenance` from `effect-agent/thread-projection-maintenance`.
+`ThreadProjectionMaintenance` from `@yielded/agent/thread-projection-maintenance`.
 The Layer receives the raw local `ThreadStore` and the same owner `SqlClient`; additional
 services it provides are exposed by the resulting runtime Layer so Tools can share that index.
 
@@ -614,7 +617,7 @@ Memory is optional and belongs in a separate SQLite Durable Object per host-sele
 `MemoryNamespace`, not in a Thread Object. Multiple Threads and application ingestion jobs can
 use the same owner. Canonical Thread history, extraction, and scheduling remain separate.
 
-The [compiling setup](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-cloudflare/examples/memory.ts) defines a namespace,
+The [compiling setup](https://github.com/yielded-dev/agent/blob/main/packages/platform-cloudflare/examples/memory.ts) defines a namespace,
 owner authorization Layer, `ProjectMemory` class, and conditional update caller. Register the class:
 
 ```jsonc
@@ -628,7 +631,7 @@ owner authorization Layer, `ProjectMemory` class, and conditional update caller.
 }
 ```
 
-Add `@effect-agent/storage-cloudflare` alongside the packages above.
+Add `@yielded/agent-storage-cloudflare` alongside the packages above.
 The owner assembles `doMemoryStoreLayerWithFailpoints` with `SqliteClient.layer({ storage: ctx.storage })`.
 Its storage-backed transaction commits the revision and operation receipt together. Local users can
 instead provide `doMemoryStoreLayer(ctx.storage)` directly. Neither path imports Node storage.
@@ -637,15 +640,15 @@ Bind the namespace and principal in authenticated host code. Never accept them f
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
-import { MemoryNamespace } from "effect-agent";
-import { MemoryAccess } from "effect-agent/memory-revalidation";
-import { MemoryLookup, MemoryRecallLimits } from "effect-agent/memory-reference";
-import { MemoryScope } from "effect-agent/memory-store";
+import { MemoryNamespace } from "@yielded/agent";
+import { MemoryAccess } from "@yielded/agent/memory-revalidation";
+import { MemoryLookup, MemoryRecallLimits } from "@yielded/agent/memory-reference";
+import { MemoryScope } from "@yielded/agent/memory-store";
 import {
   CloudflareMemoryClient,
   type MemoryObjectRpc,
-} from "@effect-agent/platform-cloudflare/cloudflare-memory";
-import { Principal } from "effect-agent/submission-ledger";
+} from "@yielded/agent-platform-cloudflare/cloudflare-memory";
+import { Principal } from "@yielded/agent/submission-ledger";
 import { Effect, Schema } from "effect";
 
 const Projects = MemoryNamespace.define({
@@ -686,7 +689,7 @@ make an RPC. Applications that provide that service once through their Effect La
 with the same validation and budgets.
 
 When the host already knows the document key, use `client.get(key)` with a `MemoryKey` in the
-bound namespace. The [compiling example](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-cloudflare/examples/memory.ts)
+bound namespace. The [compiling example](https://github.com/yielded-dev/agent/blob/main/packages/platform-cloudflare/examples/memory.ts)
 reads `project-profile` directly. It sends one `Get` owner request and returns a schema-validated
 `MemoryDocument` with its current `source.revision`, or `null` only when the key is absent.
 A withdrawn key returns `WithdrawnMemoryDocument`, containing its terminal revision and no content.
@@ -730,7 +733,7 @@ estimator; without it, recall conservatively estimates one token per UTF-8 byte.
 covers revalidation and local composition; the engine still enforces its full per-call context budget.
 
 Use `client.revalidate(candidates, limits)` when you need validated passages without rendering.
-To combine multiple readers under one shared budget, use `Memory.recall` from `effect-agent` with their revalidation effects as sources. It retains explicit source
+To combine multiple readers under one shared budget, use `Memory.recall` from `@yielded/agent` with their revalidation effects as sources. It retains explicit source
 IDs and essential/optional policy for that multi-reader case.
 
 For an external semantic index, call `client.revalidateSemantic(search, profile, limits)` with its
@@ -777,7 +780,7 @@ writer call does not change them. Do not create a second independently locked DO
 `ThreadObject.layer` exposes its existing generic Effect `SqlClient` through `ThreadObject.Services`.
 Build optional owner-local repositories after that Layer and reuse this client. For local Memory,
 provide `memoryStoreLayer` with explicit `SqlMemoryLimits`, using `defaultDoMemoryStorageLimits`
-from `@effect-agent/storage-cloudflare/do-memory-store` or stricter validated limits. The generic SQL
+from `@yielded/agent-storage-cloudflare/do-memory-store` or stricter validated limits. The generic SQL
 Memory defaults are not Durable Object limits. Thread Objects install no Memory tables unless
 the host composes the Memory store.
 
@@ -786,7 +789,7 @@ usage counters under the Thread Object's transaction gate. Rebuilt Layers share 
 eviction and failed transactions discard them. Cache misses read SQLite. Direct maintenance
 writes must follow the [storage invalidation contract](/storage/cloudflare/#use-an-existing-object).
 
-The SQL Memory Layer also supplies `SqlMemoryBatchWriter` from `effect-agent/sql-memory-store`.
+The SQL Memory Layer also supplies `SqlMemoryBatchWriter` from `@yielded/agent/sql-memory-store`.
 Use `changeMany(commands)` to commit up to 128 commands atomically, with results in input order.
 Commands see earlier revisions in the batch; identical operation IDs recover their original
 results, and any conflict or exceeded limit rolls back the whole batch. Storage limits apply
@@ -808,7 +811,7 @@ with the same ID fail; withdrawal is terminal. Owner eviction preserves SQLite r
 Named Effect spans cover calls and local validation without adding source text, private namespace
 values, or metadata to span attributes. Keep RPC bindings private and audit host authorization.
 
-The [opt-in deployed benchmark](https://github.com/danieljvdm/effect-agent/tree/main/tooling/cloudflare-memory) measures 1, 4, 8, and
+The [opt-in deployed benchmark](https://github.com/yielded-dev/agent/tree/main/tooling/cloudflare-memory) measures 1, 4, 8, and
 16 sources plus duplicate-heavy candidates, with separate validation-RPC and full-recall durations.
 Local SQLite and workerd runs do not establish deployed latency.
 
@@ -881,7 +884,7 @@ with history, and an uncompacted prompt still grows with the conversation. Confi
 for the workload from the start. Admission and record-size limits do not reserve isolate memory.
 Whole-thread export still returns a complete collection; use paged reads for large histories.
 
-The [local heap benchmark](https://github.com/danieljvdm/effect-agent/tree/main/tooling/cloudflare-memory#local-heap-measurements)
+The [local heap benchmark](https://github.com/yielded-dev/agent/tree/main/tooling/cloudflare-memory#local-heap-measurements)
 measures exact Worker bundles and several concurrent Thread Objects using a synthetic model and
 tools. It requires no model key or deployment. Its local JavaScript heap snapshots help compare
 changes; profile production-like histories and tool payloads before choosing deployment capacity.

@@ -1,3 +1,68 @@
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import { DurableWorkerBinding, type ResolvedBinding } from "@yielded/agent/agent-registration";
+import {
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  type DurableSubmitFailure,
+  type DurableSubmitOptions,
+  type Receipt,
+} from "@yielded/agent/durable-agent-runtime";
+import {
+  DurableRuntimeFailpointError,
+  DurableRuntimeFailpointLocation,
+} from "@yielded/agent/durable-failpoint";
+import { DurableStep, DurableStepError } from "@yielded/agent/durable-step";
+import { IdGenerator } from "@yielded/agent/id-generator";
+import {
+  ThreadId,
+  RunId,
+  ToolCallId,
+  TurnId,
+  type AgentId,
+  type SubmissionId,
+} from "@yielded/agent/identifiers";
+import {
+  DefinitionDigests,
+  DeploymentId,
+  Digest,
+  ProducerId,
+  type BatchId,
+} from "@yielded/agent/records";
+import { childThreadIdFor } from "@yielded/agent/run-journal";
+import { RunToolAuthorization } from "@yielded/agent/run-options";
+import * as Subagent from "@yielded/agent/subagent";
+import { SubagentPolicy } from "@yielded/agent/subagent";
+import { SubagentReservationsMemoryLive } from "@yielded/agent/subagent-reservations";
+import {
+  ApprovalDecisionCommand,
+  IdempotencyKey,
+  Principal,
+  ResolutionSafeToRetry,
+  SubmissionLedger,
+  SubmissionLookupById,
+  UnknownResolutionCommand,
+  DEFAULT_OWNERSHIP_LEASE_DURATION,
+  type SubmissionSnapshot,
+} from "@yielded/agent/submission-ledger";
+import {
+  type CertificationCaseResult,
+  type CertificationReport,
+  CertificationSweepResult,
+  CertificationTierThreeReport,
+  CertifiedAdapterIdentity,
+  certifyPorts,
+  type CertificationScenario,
+} from "@yielded/agent/testing/certification";
+import { DurableRuntimeFailpointTestControl } from "@yielded/agent/testing/durable-failpoint-test-control";
+import { verifyThreadInvariants } from "@yielded/agent/thread-invariants";
+import {
+  ThreadExportRequest,
+  ThreadStore,
+  LoadCheckpointRequest,
+} from "@yielded/agent/thread-store";
+import { ToolReconciler } from "@yielded/agent/tool-reconciler";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
 import type { Crypto } from "effect";
 import {
   Cause,
@@ -12,67 +77,6 @@ import {
   Schema,
   Stream,
 } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { DurableWorkerBinding, type ResolvedBinding } from "effect-agent/agent-registration";
-import {
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  type DurableSubmitFailure,
-  type DurableSubmitOptions,
-  type Receipt,
-} from "effect-agent/durable-agent-runtime";
-import {
-  DurableRuntimeFailpointError,
-  DurableRuntimeFailpointLocation,
-} from "effect-agent/durable-failpoint";
-import { DurableStep, DurableStepError } from "effect-agent/durable-step";
-import { IdGenerator } from "effect-agent/id-generator";
-import {
-  ThreadId,
-  RunId,
-  ToolCallId,
-  TurnId,
-  type AgentId,
-  type SubmissionId,
-} from "effect-agent/identifiers";
-import {
-  DefinitionDigests,
-  DeploymentId,
-  Digest,
-  ProducerId,
-  type BatchId,
-} from "effect-agent/records";
-import { childThreadIdFor } from "effect-agent/run-journal";
-import { RunToolAuthorization } from "effect-agent/run-options";
-import * as Subagent from "effect-agent/subagent";
-import { SubagentPolicy } from "effect-agent/subagent";
-import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
-import {
-  ApprovalDecisionCommand,
-  IdempotencyKey,
-  Principal,
-  ResolutionSafeToRetry,
-  SubmissionLedger,
-  SubmissionLookupById,
-  UnknownResolutionCommand,
-  DEFAULT_OWNERSHIP_LEASE_DURATION,
-  type SubmissionSnapshot,
-} from "effect-agent/submission-ledger";
-import {
-  type CertificationCaseResult,
-  type CertificationReport,
-  CertificationSweepResult,
-  CertificationTierThreeReport,
-  CertifiedAdapterIdentity,
-  certifyPorts,
-  type CertificationScenario,
-} from "effect-agent/testing/certification";
-import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
-import { verifyThreadInvariants } from "effect-agent/thread-invariants";
-import { ThreadExportRequest, ThreadStore, LoadCheckpointRequest } from "effect-agent/thread-store";
-import { ToolReconciler } from "effect-agent/tool-reconciler";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 import { TestClock } from "effect/testing";
 

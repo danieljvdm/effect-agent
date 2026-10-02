@@ -1,8 +1,74 @@
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
 import { OpenAiTool } from "@effect/ai-openai";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
+import { MemorySubmissionLedgerLive } from "@yielded/agent-storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@yielded/agent-storage-memory/memory-thread-store";
+import { RetryCommand } from "@yielded/agent/admin";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy, CompactionPolicy } from "@yielded/agent/agent-policy";
+import {
+  compileRegistrations,
+  DurableWorkerBinding,
+  type ResolvedBinding,
+} from "@yielded/agent/agent-registration";
+import {
+  COMPACTION_SUMMARY_PREFIX,
+  CONTEXT_ROLLOVER_PREFIX,
+  estimatePromptTokens,
+} from "@yielded/agent/compaction";
+import { ContextCompactor } from "@yielded/agent/context-compactor";
+import { ContextWindow } from "@yielded/agent/context-window";
+import {
+  type Receipt,
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  type DurableSubmitOptions,
+} from "@yielded/agent/durable-agent-runtime";
+import {
+  DurableRuntimeFailpointError,
+  type DurableRuntimeFailpointLocation,
+} from "@yielded/agent/durable-failpoint";
+import { ToolExecutionClass } from "@yielded/agent/durable-step";
+import type { SubmissionId } from "@yielded/agent/identifiers";
+import { ThreadId, ToolCallId } from "@yielded/agent/identifiers";
+import * as Output from "@yielded/agent/output";
+import {
+  CanonicalRecordEnvelope,
+  DefinitionDigests,
+  DeploymentId,
+  Digest,
+  ProducerId,
+  RecordEnvelope,
+  RunCompleted,
+} from "@yielded/agent/records";
+import {
+  projectRunJournal,
+  promptFromCanonicalRecords,
+  runIdForSubmission,
+} from "@yielded/agent/run-journal";
+import { RunContextPreparation, RunToolAuthorization } from "@yielded/agent/run-options";
+import {
+  AbortCommand,
+  IdempotencyKey,
+  Principal,
+  RecoverySnapshotRequest,
+  ResolutionCompletedWithResult,
+  ResolutionSafeToRetry,
+  UnknownResolutionCommand,
+  SubmissionLedger,
+  SubmissionScheduling,
+  SubmissionLookupById,
+} from "@yielded/agent/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "@yielded/agent/testing/durable-failpoint-test-control";
+import { ThreadRead, ThreadStore, ThreadTailRequest } from "@yielded/agent/thread-store";
+import { ToolBroker } from "@yielded/agent/tool-broker";
+import {
+  ReconciliationCompleted,
+  ReconciliationNeverStarted,
+  ReconciliationSafeToRetry,
+  ToolReconciler,
+} from "@yielded/agent/tool-reconciler";
+import { WakeScheduler, makeWakeSubscriptionHub } from "@yielded/agent/wake-scheduler";
 import {
   Cause,
   Context,
@@ -18,72 +84,6 @@ import {
   Schema,
   Stream,
 } from "effect";
-import { RetryCommand } from "effect-agent/admin";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy, CompactionPolicy } from "effect-agent/agent-policy";
-import {
-  compileRegistrations,
-  DurableWorkerBinding,
-  type ResolvedBinding,
-} from "effect-agent/agent-registration";
-import {
-  COMPACTION_SUMMARY_PREFIX,
-  CONTEXT_ROLLOVER_PREFIX,
-  estimatePromptTokens,
-} from "effect-agent/compaction";
-import { ContextCompactor } from "effect-agent/context-compactor";
-import { ContextWindow } from "effect-agent/context-window";
-import {
-  type Receipt,
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  type DurableSubmitOptions,
-} from "effect-agent/durable-agent-runtime";
-import {
-  DurableRuntimeFailpointError,
-  type DurableRuntimeFailpointLocation,
-} from "effect-agent/durable-failpoint";
-import { ToolExecutionClass } from "effect-agent/durable-step";
-import type { SubmissionId } from "effect-agent/identifiers";
-import { ThreadId, ToolCallId } from "effect-agent/identifiers";
-import * as Output from "effect-agent/output";
-import {
-  CanonicalRecordEnvelope,
-  DefinitionDigests,
-  DeploymentId,
-  Digest,
-  ProducerId,
-  RecordEnvelope,
-  RunCompleted,
-} from "effect-agent/records";
-import {
-  projectRunJournal,
-  promptFromCanonicalRecords,
-  runIdForSubmission,
-} from "effect-agent/run-journal";
-import { RunContextPreparation, RunToolAuthorization } from "effect-agent/run-options";
-import {
-  AbortCommand,
-  IdempotencyKey,
-  Principal,
-  RecoverySnapshotRequest,
-  ResolutionCompletedWithResult,
-  ResolutionSafeToRetry,
-  UnknownResolutionCommand,
-  SubmissionLedger,
-  SubmissionScheduling,
-  SubmissionLookupById,
-} from "effect-agent/submission-ledger";
-import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
-import { ThreadRead, ThreadStore, ThreadTailRequest } from "effect-agent/thread-store";
-import { ToolBroker } from "effect-agent/tool-broker";
-import {
-  ReconciliationCompleted,
-  ReconciliationNeverStarted,
-  ReconciliationSafeToRetry,
-  ToolReconciler,
-} from "effect-agent/tool-reconciler";
-import { WakeScheduler, makeWakeSubscriptionHub } from "effect-agent/wake-scheduler";
 import { AiError, LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/ai";
 import { TestClock } from "effect/testing";
 
@@ -871,7 +871,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
     }),
   );
 
-  // Regression: https://github.com/danieljvdm/effect-agent/issues/651
+  // Regression: https://github.com/yielded-dev/agent/issues/651
   it.effect("preserves prompt prefixes through tool-result recovery without replaying tools", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
@@ -2563,7 +2563,7 @@ layer(testLayer)("deployment continuity", (it) => {
 });
 
 // Native turn-boundary yielding retained the active FIFO head:
-// https://github.com/danieljvdm/effect-agent/commit/2259fc05eec3bfac2a92a8d055953f3482e54735
+// https://github.com/yielded-dev/agent/commit/2259fc05eec3bfac2a92a8d055953f3482e54735
 layer(testLayer)("independent input scheduling", (it) => {
   {
     const origin = "human" as const;
@@ -2620,7 +2620,7 @@ layer(testLayer)("independent input scheduling", (it) => {
                           : "old-work";
 
                       // Interleaved Runs must not replace this Run's latest accepted input:
-                      // https://github.com/danieljvdm/effect-agent/commit/8fc53ad9eb6b110ca6faaaebbb6dbba08e3c292f
+                      // https://github.com/yielded-dev/agent/commit/8fc53ad9eb6b110ca6faaaebbb6dbba08e3c292f
                       expect(
                         JSON.stringify(
                           request.prompt.content

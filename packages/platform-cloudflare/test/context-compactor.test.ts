@@ -1,13 +1,13 @@
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
+import { CloudflareThreadClient } from "@yielded/agent-platform-cloudflare/cloudflare-thread-client";
+import * as Agent from "@yielded/agent/agent";
+import { DurableWorkerBinding } from "@yielded/agent/agent-registration";
+import { ContextCompactor } from "@yielded/agent/context-compactor";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import { RunContextPreparation, RunToolAuthorization } from "@yielded/agent/run-options";
+import { submissionSettlementRecordId } from "@yielded/agent/submission-ledger";
+import { ThreadCheckpoint, ThreadExportRequest, ThreadStore } from "@yielded/agent/thread-store";
 import { runInDurableObject } from "cloudflare:test";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { DurableWorkerBinding } from "effect-agent/agent-registration";
-import { ContextCompactor } from "effect-agent/context-compactor";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { RunContextPreparation, RunToolAuthorization } from "effect-agent/run-options";
-import { submissionSettlementRecordId } from "effect-agent/submission-ledger";
-import { ThreadCheckpoint, ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { DurableObject } from "effect-cf";
 import { LanguageModel, Model, Toolkit } from "effect/ai";
 import { describe, expect, it } from "vite-plus/test";
@@ -84,7 +84,7 @@ const abortIncarnation = (thread: string): Promise<void> =>
   );
 
 describe("Cloudflare replaceable compaction", () => {
-  // https://github.com/danieljvdm/effect-agent/issues/692
+  // https://github.com/yielded-dev/agent/issues/692
   // Memory IDs do not expose native routed IDs rejecting the fresh-Run context cache.
   it("reuses compacted context with native routed IDs and falls back from older certificates", () => {
     const thread = lane("checkpoint:run:nested:tool-settled");

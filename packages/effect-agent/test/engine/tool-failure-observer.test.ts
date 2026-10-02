@@ -1,4 +1,22 @@
 import { expect, layer } from "@effect/vitest";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import { ToolExecutionClass } from "@yielded/agent/durable-step";
+import { IdGenerator } from "@yielded/agent/id-generator";
+import { ThreadId, RunId, TurnId } from "@yielded/agent/identifiers";
+import { type RunEvent } from "@yielded/agent/run-event";
+import {
+  toolFailureObserverLayer,
+  type RunOptions,
+  type RunToolFailureObserver,
+  type ToolFailureObservation,
+} from "@yielded/agent/run-options";
+import {
+  ToolBroker,
+  type ToolBrokerPass,
+  type ToolBrokerService,
+} from "@yielded/agent/tool-broker";
 import {
   Cause,
   Context,
@@ -15,20 +33,6 @@ import {
   Stream,
   Tracer,
 } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import { ToolExecutionClass } from "effect-agent/durable-step";
-import { IdGenerator } from "effect-agent/id-generator";
-import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
-import { type RunEvent } from "effect-agent/run-event";
-import {
-  toolFailureObserverLayer,
-  type RunOptions,
-  type RunToolFailureObserver,
-  type ToolFailureObservation,
-} from "effect-agent/run-options";
-import { ToolBroker, type ToolBrokerPass, type ToolBrokerService } from "effect-agent/tool-broker";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 import type { expectTypeOf as ExpectTypeOf } from "vite-plus/test";
 

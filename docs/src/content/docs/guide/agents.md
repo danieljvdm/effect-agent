@@ -47,7 +47,7 @@ Schema with `Output.text`. The Schema must encode as a string; its checks, trans
 service requirements still apply.
 
 ```ts twoslash
-import { Output } from "effect-agent";
+import { Output } from "@yielded/agent";
 import { Schema } from "effect";
 
 const Reply = Output.text(Schema.String.check(Schema.isMaxLength(20_000)));
@@ -110,7 +110,7 @@ stream, and `Layer.provide` for subagent handlers.
 
 ```ts twoslash
 import { Effect, Layer, Stream } from "effect";
-import { AgentRuntime, Subagent } from "effect-agent";
+import { AgentRuntime, Subagent } from "@yielded/agent";
 import { ModelLive, planner } from "./node-agent.ts";
 import { Research } from "./delegation.ts";
 // ---cut---
@@ -141,7 +141,7 @@ Effect. When constructing a service that needs to reuse a model, capture its cli
 
 ```ts twoslash
 import { Effect } from "effect";
-import { AgentRuntime } from "effect-agent";
+import { AgentRuntime } from "@yielded/agent";
 import { ModelLive, planner } from "./node-agent.ts";
 // ---cut---
 const captured = Effect.gen(function* () {
@@ -205,7 +205,7 @@ record does not prove that readonly work never ran. See
 Hosts with deferred bindings can compile current metadata without acquiring executable services:
 
 ```ts
-import { AgentRegistration } from "effect-agent";
+import { AgentRegistration } from "@yielded/agent";
 import { Effect } from "effect";
 
 const metadata = Effect.gen(function* () {
@@ -250,7 +250,7 @@ Set `completion` when a successful tool result should become the agent's output 
 model turn. The projector receives decoded tool parameters and result:
 
 ```ts twoslash
-import { Agent } from "effect-agent";
+import { Agent } from "@yielded/agent";
 import { Effect, Schema } from "effect";
 import { Tool, Toolkit } from "effect/ai";
 
@@ -375,7 +375,7 @@ migration promise.
 For a reusable validated policy value, import the Schema declaration directly:
 
 ```ts twoslash
-import { AgentPolicy } from "effect-agent/agent-policy";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
 
 AgentPolicy.make({
   maxTurns: 12,

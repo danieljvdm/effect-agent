@@ -1,4 +1,4 @@
-# @effect-agent/testing
+# @yielded/agent-testing
 
 ## 0.1.0-beta.165
 

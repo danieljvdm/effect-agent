@@ -1,11 +1,11 @@
 import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
+import type { McpConnector } from "@yielded/agent/mcp";
+import { connectMcp, McpConnectionRequest } from "@yielded/agent/mcp";
+import * as McpClient from "@yielded/agent/mcp-client";
+import type { McpToolCallFailed, McpToolResult } from "@yielded/agent/mcp-client";
+import { McpHttpTransport, McpStdioTransport } from "@yielded/agent/mcp-client";
 import { Effect, Layer, Option, Ref, Schema, Stream } from "effect";
-import type { McpConnector } from "effect-agent/mcp";
-import { connectMcp, McpConnectionRequest } from "effect-agent/mcp";
-import * as McpClient from "effect-agent/mcp-client";
-import type { McpToolCallFailed, McpToolResult } from "effect-agent/mcp-client";
-import { McpHttpTransport, McpStdioTransport } from "effect-agent/mcp-client";
 import { Toolkit } from "effect/ai";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";

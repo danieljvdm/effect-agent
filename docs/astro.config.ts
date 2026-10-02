@@ -7,11 +7,12 @@ import { snippetPlugins } from "./integrations/snippets.ts";
 import { socialImages } from "./integrations/social-images.ts";
 
 export default defineConfig({
-  site: "https://effect-agent.com",
+  site: "https://yielded.dev",
+  base: "/agent",
   trailingSlash: "always",
   integrations: [
     starlight({
-      title: "Effect Agent",
+      title: "Yielded Agent",
       description: "An agent harness toolkit for TypeScript, built on Effect and Effect AI.",
       favicon: "/mark.svg",
       lastUpdated: true,
@@ -22,14 +23,19 @@ export default defineConfig({
       head: [
         {
           tag: "link",
-          attrs: { rel: "icon", type: "image/png", sizes: "32x32", href: "/favicon-32x32.png" },
+          attrs: {
+            rel: "icon",
+            type: "image/png",
+            sizes: "32x32",
+            href: "/agent/favicon-32x32.png",
+          },
         },
         {
           tag: "link",
-          attrs: { rel: "apple-touch-icon", sizes: "180x180", href: "/apple-touch-icon.png" },
+          attrs: { rel: "apple-touch-icon", sizes: "180x180", href: "/agent/apple-touch-icon.png" },
         },
         { tag: "meta", attrs: { name: "theme-color", content: "#161714" } },
-        { tag: "meta", attrs: { property: "og:site_name", content: "Effect Agent" } },
+        { tag: "meta", attrs: { property: "og:site_name", content: "Yielded Agent" } },
         { tag: "meta", attrs: { property: "og:locale", content: "en_US" } },
       ],
       sidebar: [
@@ -41,7 +47,8 @@ export default defineConfig({
               items: [
                 { label: "Overview", link: "/guide/" },
                 { label: "Getting started", link: "/guide/getting-started/" },
-                { label: "What is Effect Agent?", link: "/guide/introduction/" },
+                { label: "Migrate from Effect Agent", link: "/guide/migration/" },
+                { label: "What is Yielded Agent?", link: "/guide/introduction/" },
               ],
             },
             {

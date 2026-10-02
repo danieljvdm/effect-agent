@@ -1,11 +1,11 @@
-import { makeSqlActivityStore } from "@effect-agent/storage-sql/sql-activity-store";
-import { Effect, Layer } from "effect";
+import { makeSqlActivityStore } from "@yielded/agent-storage-sql/sql-activity-store";
 import {
   ActivityMutationFailpoint,
   type ActivityMutationFailure,
   ActivityProcessorStore,
   type ActivityStoreError,
-} from "effect-agent/activity-store";
+} from "@yielded/agent/activity-store";
+import { Effect, Layer } from "effect";
 import * as SqlClientService from "effect/sql/SqlClient";
 
 export type SqliteActivityInitializationError = ActivityStoreError | ActivityMutationFailure;

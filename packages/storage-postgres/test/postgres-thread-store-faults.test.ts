@@ -1,11 +1,37 @@
+import { describe, expect, it } from "@effect/vitest";
 import {
   PostgresStorageCompatibilityError,
   PostgresStorageCorruptionError,
   PostgresStorageFailpointError,
   type PostgresStorageFailpointLocation,
   PostgresWriteContention,
-} from "@effect-agent/storage-postgres/postgres-storage-error";
-import { describe, expect, it } from "@effect/vitest";
+} from "@yielded/agent-storage-postgres/postgres-storage-error";
+import { EMPTY_TAIL_DIGEST } from "@yielded/agent/digest";
+import { SubmissionId } from "@yielded/agent/identifiers";
+import {
+  CanonicalBatch,
+  CanonicalRecord,
+  CanonicalSequence,
+  ProducerEpoch,
+  RunCompleted,
+  ToolCallPrepared,
+  ToolCallSettled,
+  UserInputRecorded,
+  type CanonicalRecordPayload,
+} from "@yielded/agent/records";
+import {
+  type SelectedThreadRead,
+  FencedAppendRequest,
+  LoadCheckpointRequest,
+  SaveCheckpointRequest,
+  ThreadCheckpoint,
+  ThreadExportRequest,
+  ThreadMaterialization,
+  ThreadRead,
+  ThreadStore,
+  ThreadStoreError,
+  type AppendResult,
+} from "@yielded/agent/thread-store";
 import {
   Cause,
   DateTime,
@@ -19,32 +45,6 @@ import {
   Schema,
   Stream,
 } from "effect";
-import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
-import { SubmissionId } from "effect-agent/identifiers";
-import {
-  CanonicalBatch,
-  CanonicalRecord,
-  CanonicalSequence,
-  ProducerEpoch,
-  RunCompleted,
-  ToolCallPrepared,
-  ToolCallSettled,
-  UserInputRecorded,
-  type CanonicalRecordPayload,
-} from "effect-agent/records";
-import {
-  type SelectedThreadRead,
-  FencedAppendRequest,
-  LoadCheckpointRequest,
-  SaveCheckpointRequest,
-  ThreadCheckpoint,
-  ThreadExportRequest,
-  ThreadMaterialization,
-  ThreadRead,
-  ThreadStore,
-  ThreadStoreError,
-  type AppendResult,
-} from "effect-agent/thread-store";
 import * as SqlClientService from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
 

@@ -1,13 +1,13 @@
-import { browserRestCrawlLayer } from "@effect-agent/platform-cloudflare/browser-rest-crawl";
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Exit, Fiber, Redacted, Stream } from "effect";
+import { browserRestCrawlLayer } from "@yielded/agent-platform-cloudflare/browser-rest-crawl";
 import {
   PageCrawl,
   PageCrawlLimits,
   PageCrawlRequest,
   type PageCrawlError,
   type PageCrawlRecord,
-} from "effect-agent/page-crawl";
+} from "@yielded/agent/page-crawl";
+import { Deferred, Effect, Exit, Fiber, Redacted, Stream } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
 const JOB_ID = "crawl-job-1";

@@ -1,8 +1,35 @@
+import { Agent, AgentRuntime } from "@yielded/agent";
 import {
   ScriptedModel,
   type ScriptedStreamPart,
   type ScriptedTurnInput,
-} from "@effect-agent/testing/scripted-model";
+} from "@yielded/agent-testing/scripted-model";
+import { RunId, ThreadId } from "@yielded/agent/identifiers";
+import * as Mcp from "@yielded/agent/mcp";
+import * as McpClient from "@yielded/agent/mcp-client";
+import * as Memory from "@yielded/agent/memory";
+import * as MemoryNamespace from "@yielded/agent/memory-namespace";
+import {
+  MemoryAttribution,
+  MemoryContent,
+  MemoryLookup,
+  MemoryPassage,
+  MemoryRecallLimits,
+} from "@yielded/agent/memory-reference";
+import {
+  applyMemoryWrite,
+  MemoryKey,
+  MemoryReader,
+  MemoryScope,
+  MemoryWriter,
+  type MemoryDocument,
+} from "@yielded/agent/memory-store";
+import * as Remembering from "@yielded/agent/remembering";
+import * as Protocol from "@yielded/agent/remembering-store";
+import { toRunThreadOptions } from "@yielded/agent/run-hooks";
+import * as Subagent from "@yielded/agent/subagent";
+import * as Reservations from "@yielded/agent/subagent-reservations";
+import * as Thread from "@yielded/agent/thread";
 import {
   Clock,
   Deferred,
@@ -16,33 +43,6 @@ import {
   Stream,
   Tracer,
 } from "effect";
-import { Agent, AgentRuntime } from "effect-agent";
-import { RunId, ThreadId } from "effect-agent/identifiers";
-import * as Mcp from "effect-agent/mcp";
-import * as McpClient from "effect-agent/mcp-client";
-import * as Memory from "effect-agent/memory";
-import * as MemoryNamespace from "effect-agent/memory-namespace";
-import {
-  MemoryAttribution,
-  MemoryContent,
-  MemoryLookup,
-  MemoryPassage,
-  MemoryRecallLimits,
-} from "effect-agent/memory-reference";
-import {
-  applyMemoryWrite,
-  MemoryKey,
-  MemoryReader,
-  MemoryScope,
-  MemoryWriter,
-  type MemoryDocument,
-} from "effect-agent/memory-store";
-import * as Remembering from "effect-agent/remembering";
-import * as Protocol from "effect-agent/remembering-store";
-import { toRunThreadOptions } from "effect-agent/run-hooks";
-import * as Subagent from "effect-agent/subagent";
-import * as Reservations from "effect-agent/subagent-reservations";
-import * as Thread from "effect-agent/thread";
 import { AiError, Model, Prompt, Tool, Toolkit } from "effect/ai";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 

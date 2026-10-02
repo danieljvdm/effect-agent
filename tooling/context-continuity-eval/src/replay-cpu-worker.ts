@@ -1,14 +1,13 @@
 import {
   DurableObjectContext,
   ThreadObjectIdentity,
-} from "@effect-agent/platform-cloudflare/cloudflare-bindings";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
-import { Cause, Context, Crypto, DateTime, Effect, Layer, Option, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { ContextCompactor } from "effect-agent/context-compactor";
-import { digestCanonicalBatch, digestDefinitions, digestJson } from "effect-agent/digest";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { RunId, TurnId } from "effect-agent/identifiers";
+} from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
+import * as ThreadObject from "@yielded/agent-platform-cloudflare/thread-object";
+import * as Agent from "@yielded/agent/agent";
+import { ContextCompactor } from "@yielded/agent/context-compactor";
+import { digestCanonicalBatch, digestDefinitions, digestJson } from "@yielded/agent/digest";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import { RunId, TurnId } from "@yielded/agent/identifiers";
 import {
   BatchId,
   CanonicalBatch,
@@ -24,9 +23,9 @@ import {
   RunCompleted,
   ThreadCreated,
   UserInputRecorded,
-} from "effect-agent/records";
-import { RunContextPreparation } from "effect-agent/run-options";
-import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
+} from "@yielded/agent/records";
+import { RunContextPreparation } from "@yielded/agent/run-options";
+import { IdempotencyKey, Principal } from "@yielded/agent/submission-ledger";
 import {
   FencedAppendRequest,
   LoadCheckpointRequest,
@@ -34,7 +33,8 @@ import {
   ThreadMaterialization,
   ThreadStore,
   ThreadTailRequest,
-} from "effect-agent/thread-store";
+} from "@yielded/agent/thread-store";
+import { Cause, Context, Crypto, DateTime, Effect, Layer, Option, Schema, Stream } from "effect";
 import { DurableObject, WorkerEnvironment } from "effect-cf";
 import {
   AiError,

@@ -1,13 +1,36 @@
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
 import {
   NodeDurableAgentRuntime,
   type NodeDurableAgentRuntimeInitializationError,
   type NodeDurableAgentRuntimeOptions,
   type NodeDurableAgentRuntimeServices,
-} from "@effect-agent/platform-node/node-durable-agent-runtime";
-import { NodeDurableHost } from "@effect-agent/platform-node/node-durable-host";
-import * as NodeHost from "@effect-agent/platform-node/node-durable-host";
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
+} from "@yielded/agent-platform-node/node-durable-agent-runtime";
+import { NodeDurableHost } from "@yielded/agent-platform-node/node-durable-host";
+import * as NodeHost from "@yielded/agent-platform-node/node-durable-host";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import { digestDefinitions } from "@yielded/agent/digest";
+import {
+  DurableAgentRuntime,
+  type DurableSubmitOptions,
+} from "@yielded/agent/durable-agent-runtime";
+import {
+  DurableRuntimeFailpoint,
+  DurableRuntimeFailpointError,
+} from "@yielded/agent/durable-failpoint";
+import { ToolExecutionClass } from "@yielded/agent/durable-step";
+import { ThreadId } from "@yielded/agent/identifiers";
+import { DefinitionDigests, DefinitionDigestInput, Digest } from "@yielded/agent/records";
+import { RunContextPreparation, RunToolAuthorization } from "@yielded/agent/run-options";
+import {
+  IdempotencyKey,
+  Principal,
+  SubmissionLedger,
+  SubmissionLookupById,
+} from "@yielded/agent/submission-ledger";
+import { ThreadRead, ThreadStore } from "@yielded/agent/thread-store";
+import { ToolReconciler } from "@yielded/agent/tool-reconciler";
 import type { PlatformError } from "effect";
 import {
   Cause,
@@ -22,26 +45,6 @@ import {
   Schema,
   Stream,
 } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { digestDefinitions } from "effect-agent/digest";
-import { DurableAgentRuntime, type DurableSubmitOptions } from "effect-agent/durable-agent-runtime";
-import {
-  DurableRuntimeFailpoint,
-  DurableRuntimeFailpointError,
-} from "effect-agent/durable-failpoint";
-import { ToolExecutionClass } from "effect-agent/durable-step";
-import { ThreadId } from "effect-agent/identifiers";
-import { DefinitionDigests, DefinitionDigestInput, Digest } from "effect-agent/records";
-import { RunContextPreparation, RunToolAuthorization } from "effect-agent/run-options";
-import {
-  IdempotencyKey,
-  Principal,
-  SubmissionLedger,
-  SubmissionLookupById,
-} from "effect-agent/submission-ledger";
-import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
-import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/ai";
 import { TestClock } from "effect/testing";
 

@@ -52,7 +52,7 @@ export interface ThreadHistoryRun {
 /**
  * History shared by Runs with the same Thread ID. The default layer retains native messages
  * incrementally in memory for its application Scope, including completed updates before a failure.
- * PersistentHistory.layer from effect-agent/persistent-history instead commits successful
+ * PersistentHistory.layer from @yielded/agent/persistent-history instead commits successful
  * Runs to an explicit ThreadStore. Durable hosts retain history through their journal hooks.
  * No implementation may retry model or Tool execution or claim interrupted-work recovery.
  */

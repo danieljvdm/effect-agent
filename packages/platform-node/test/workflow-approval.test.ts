@@ -1,12 +1,12 @@
-import { WorkflowAgentHost } from "@effect-agent/workflow/workflow-agent-host";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
+import { WorkflowAgentHost } from "@yielded/agent-workflow/workflow-agent-host";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import { digestDefinitions } from "@yielded/agent/digest";
+import { ToolCallId } from "@yielded/agent/identifiers";
+import { ApprovalDecisionCommand } from "@yielded/agent/submission-ledger";
 import { Deferred, Effect, Layer, Ref, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { digestDefinitions } from "effect-agent/digest";
-import { ToolCallId } from "effect-agent/identifiers";
-import { ApprovalDecisionCommand } from "effect-agent/submission-ledger";
 import { Tool, Toolkit, type Response } from "effect/ai";
 
 import {

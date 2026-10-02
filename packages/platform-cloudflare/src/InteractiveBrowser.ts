@@ -1,18 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 
 import {
-  Cause,
-  Context,
-  Clock,
-  Duration,
-  Effect,
-  Layer,
-  Redacted,
-  Schema,
-  Semaphore,
-  Scope,
-} from "effect";
-import {
   BrowserActionResult,
   BrowserExpectedTargetState,
   BrowserSelectFileRequest,
@@ -37,9 +25,21 @@ import {
   type InteractiveBrowserError,
   type InteractiveBrowserFailureEvidence,
   type InteractiveBrowserNetworkPolicy,
-} from "effect-agent/interactive-browser";
-import { PageScreenshotResult } from "effect-agent/page-screenshot";
-import { SandboxImplementation } from "effect-agent/sandbox";
+} from "@yielded/agent/interactive-browser";
+import { PageScreenshotResult } from "@yielded/agent/page-screenshot";
+import { SandboxImplementation } from "@yielded/agent/sandbox";
+import {
+  Cause,
+  Context,
+  Clock,
+  Duration,
+  Effect,
+  Layer,
+  Redacted,
+  Schema,
+  Semaphore,
+  Scope,
+} from "effect";
 import {
   type Browser,
   type BrowserContext,

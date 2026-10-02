@@ -1,4 +1,4 @@
-import type { BrowserSelectFileRequest } from "effect-agent/interactive-browser";
+import type { BrowserSelectFileRequest } from "@yielded/agent/interactive-browser";
 import { Base64 } from "effect/encoding";
 import type { Page } from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 

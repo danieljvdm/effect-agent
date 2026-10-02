@@ -1,11 +1,11 @@
 ---
 title: Architecture
-description: Understand Effect Agent's execution model, resource boundaries, budgets, and durable recovery.
+description: Understand Yielded Agent's execution model, resource boundaries, budgets, and durable recovery.
 ---
 
 <a id="architecture"></a>
 
-Understand how Effect Agent runs work, bounds its resources, and recovers recorded progress.
+Understand how Yielded Agent runs work, bounds its resources, and recovers recorded progress.
 These pages explain the contracts behind the [implementation guides](/guide/).
 
 ## Agent execution

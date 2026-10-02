@@ -1,9 +1,9 @@
-import { codeExecutorConformanceCases } from "@effect-agent/testing/code-executor-conformance";
+import { layer } from "@effect/vitest";
+import { codeExecutorConformanceCases } from "@yielded/agent-testing/code-executor-conformance";
 import {
   inProcessCodeExecutorImplementation,
   inProcessCodeExecutorLayer,
-} from "@effect-agent/testing/code-executor-substitute";
-import { layer } from "@effect/vitest";
+} from "@yielded/agent-testing/code-executor-substitute";
 
 // The wall-clock conformance case needs the live Clock, so the suite opts out
 // of the injected test services the same way the sandbox-local suite does.

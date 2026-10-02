@@ -1,18 +1,16 @@
-import { DoStorageFailpoint } from "@effect-agent/storage-cloudflare/do-storage-failpoint";
-import { submissionLedgerLayer } from "@effect-agent/storage-cloudflare/do-submission-ledger";
+import { DoStorageFailpoint } from "@yielded/agent-storage-cloudflare/do-storage-failpoint";
+import { submissionLedgerLayer } from "@yielded/agent-storage-cloudflare/do-submission-ledger";
 import {
   invalidate,
   storageConfigLayer,
   threadStoreLayer,
-} from "@effect-agent/storage-cloudflare/do-thread-store";
-import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Cause, Clock, Deferred, Effect, Fiber, Layer, Logger, Option, Stream } from "effect";
-import { DurableAgentRuntime, type RecoveryFailure } from "effect-agent/durable-agent-runtime";
+} from "@yielded/agent-storage-cloudflare/do-thread-store";
+import { DurableAgentRuntime, type RecoveryFailure } from "@yielded/agent/durable-agent-runtime";
 import {
   type OperationAuthorizerService,
   operationAuthorizerLayer,
   possessionOperationAuthorizer,
-} from "effect-agent/operation-authorizer";
+} from "@yielded/agent/operation-authorizer";
 import {
   AbortCommand,
   AbortIntentRequest,
@@ -21,9 +19,11 @@ import {
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
-} from "effect-agent/submission-ledger";
-import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
+} from "@yielded/agent/submission-ledger";
+import { ThreadRead, ThreadStore } from "@yielded/agent/thread-store";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
+import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { Cause, Clock, Deferred, Effect, Fiber, Layer, Logger, Option, Stream } from "effect";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vite-plus/test";
@@ -223,7 +223,7 @@ const corruptHistory = (owner: string, thread: string, sequence = 1) =>
     return Effect.runPromise(invalidate(state.storage).pipe(Effect.as(row.record_json)));
   });
 
-// Regression: https://github.com/danieljvdm/effect-agent/commit/35b5e858
+// Regression: https://github.com/yielded-dev/agent/commit/35b5e858
 it("retries an accepted abort after transient recovery failure while its binding is parked", () =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -283,7 +283,7 @@ it("retries an accepted abort after transient recovery failure while its binding
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   ));
 
-// Regression: https://github.com/danieljvdm/effect-agent/commit/e6407479ae233527685928bead040dbfe5153a22
+// Regression: https://github.com/yielded-dev/agent/commit/e6407479ae233527685928bead040dbfe5153a22
 it(
   "starts a later independent Thread with two slots and retains same-Thread FIFO work",
   () =>
@@ -418,7 +418,7 @@ it(
   20_000,
 );
 
-// Regression: https://github.com/danieljvdm/effect-agent/commit/e6407479ae233527685928bead040dbfe5153a22
+// Regression: https://github.com/yielded-dev/agent/commit/e6407479ae233527685928bead040dbfe5153a22
 it(
   "releases both native claims on interruption and resumes their original receipts",
   () =>
@@ -521,7 +521,7 @@ it(
 );
 
 describe("recovery faults independent of execution history", () => {
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/ab5030d
+  // Regression: https://github.com/yielded-dev/agent/commit/ab5030d
   // Real SQLite plus controlled interruption distinguishes a committed transition from
   // a wake hint and proves delivery without rereading corrupt execution history.
   it("delivers submission fault transitions across interruption and keeps retries silent", () =>

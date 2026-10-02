@@ -1,16 +1,16 @@
-import { Effect, Layer } from "effect";
-import { type DurableSubmitAgent } from "effect-agent/durable-agent-runtime";
-import { type AgentId } from "effect-agent/identifiers";
-import { PreparedInputAdmission } from "effect-agent/prepared-input-admission";
-import { PersistedJson } from "effect-agent/records";
+import { type DurableSubmitAgent } from "@yielded/agent/durable-agent-runtime";
+import { type AgentId } from "@yielded/agent/identifiers";
+import { PreparedInputAdmission } from "@yielded/agent/prepared-input-admission";
+import { PersistedJson } from "@yielded/agent/records";
 import {
   type ScheduledEnvelope,
   ScheduledInputAdmission,
   ScheduledInputRetryable,
   ScheduledInputRefused,
   ScheduleStorageError,
-} from "effect-agent/schedule";
-import { type PreparedInput } from "effect-agent/subscription";
+} from "@yielded/agent/schedule";
+import { type PreparedInput } from "@yielded/agent/subscription";
+import { Effect, Layer } from "effect";
 
 import { CloudflareThreadClient, type ThreadClientError } from "../CloudflareThreadClient.ts";
 

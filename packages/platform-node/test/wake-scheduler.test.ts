@@ -1,6 +1,8 @@
-import { ledgerLayer } from "@effect-agent/storage-sqlite/sqlite-submission-ledger";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
+import { ledgerLayer } from "@yielded/agent-storage-sqlite/sqlite-submission-ledger";
+import { SubmissionLedger, SubmissionSnapshot } from "@yielded/agent/submission-ledger";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
 import {
   Clock,
   Deferred,
@@ -13,8 +15,6 @@ import {
   Schema,
   Stream,
 } from "effect";
-import { SubmissionLedger, SubmissionSnapshot } from "effect-agent/submission-ledger";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { TestClock } from "effect/testing";
 
 import { NodeWakeSchedulerConfig, nodeWakeSchedulerLayer } from "../src/NodeWakeScheduler.ts";

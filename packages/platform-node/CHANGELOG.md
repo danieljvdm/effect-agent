@@ -1,4 +1,4 @@
-# @effect-agent/platform-node
+# @yielded/agent-platform-node
 
 ## 0.1.0-beta.165
 

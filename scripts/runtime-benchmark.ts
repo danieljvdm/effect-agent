@@ -195,7 +195,13 @@ export const stageCheckout = Effect.fn("benchmark.stageCheckout")(function* (
 
   // Never link the workspace scope: all framework imports must reach the staged dist graph.
   for (const entry of yield* fs.readDirectory(path.join(resolved, "node_modules"))) {
-    if (entry.startsWith(".") || entry === "@effect-agent" || entry === "effect-agent") continue;
+    if (
+      entry.startsWith(".") ||
+      entry === "@effect-agent" ||
+      entry === "@yielded" ||
+      entry === "effect-agent"
+    )
+      continue;
     yield* fs.symlink(
       path.join(resolved, "node_modules", entry),
       path.join(stage, "node_modules", entry),
@@ -726,7 +732,9 @@ export const command = Command.make(
     ),
     baselineTag: Flag.String("base-tag").pipe(
       Flag.withSchema(
-        Schema.String.check(Schema.isPattern(/^effect-agent@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/)),
+        Schema.String.check(
+          Schema.isPattern(/^(?:effect-agent|@yielded\/agent)@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/),
+        ),
       ),
       Flag.withDescription(
         "Published effect-agent release tag naming the base checkout in CI reports.",

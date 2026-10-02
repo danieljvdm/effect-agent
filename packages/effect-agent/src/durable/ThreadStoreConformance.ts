@@ -665,7 +665,7 @@ const tailInspection = conformanceCase(
           afterAppend.tailDigest === first.tailDigest,
         "Tail inspection must match the latest AppendResult",
       );
-      // Regression: https://github.com/danieljvdm/effect-agent/commit/6a4f4f870
+      // Regression: https://github.com/yielded-dev/agent/commit/6a4f4f870
       const identity = yield* store.readIdentity(ThreadIdentityRequest.make({ threadId }));
 
       yield* ensure(
@@ -1120,7 +1120,7 @@ const nativeWorkerAccounting = conformanceCase(
           Option.isSome(yield* getRecord({ threadId, recordId: decodeRecordId("requested") })),
         "Proven completion retires the input while retaining its canonical reservation",
       );
-      // Regression: https://github.com/danieljvdm/effect-agent/commit/6a4f4f870
+      // Regression: https://github.com/yielded-dev/agent/commit/6a4f4f870
       // Payloads do not select identity: the exact lineage locator precedes the
       // exact origin locator in the log, while replies retain first/origin/lineage order.
       tail = yield* append(
@@ -1243,7 +1243,7 @@ const nativeWorkerAccounting = conformanceCase(
         accounting.tailSequence === tail.lastSequence && accounting.tailDigest === tail.tailDigest,
         "The accounting snapshot carries the full canonical CAS tail",
       );
-      // Regression: https://github.com/danieljvdm/effect-agent/blob/c721a292205e06185f0136c3ed05dcf53e29ca66/packages/effect-agent/src/durable/SqlThreadNativeReads.ts#L195-L214
+      // Regression: https://github.com/yielded-dev/agent/blob/c721a292205e06185f0136c3ed05dcf53e29ca66/packages/effect-agent/src/durable/SqlThreadNativeReads.ts#L195-L214
       yield* append(
         threadId,
         batch("stop-worker", [

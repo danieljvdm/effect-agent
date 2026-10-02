@@ -1,8 +1,8 @@
-import * as PostgresStorage from "@effect-agent/storage-postgres/postgres-storage";
 import { NodeCrypto } from "@effect/platform-node";
 import { PgClient } from "@effect/sql-pg";
+import * as PostgresStorage from "@yielded/agent-storage-postgres/postgres-storage";
+import type { MessageDeliveryStoreLimits } from "@yielded/agent/message-delivery";
 import { Effect, Layer, Redacted } from "effect";
-import type { MessageDeliveryStoreLimits } from "effect-agent/message-delivery";
 
 import { WRITER_LOCK_KEY } from "../src/internal/postgres-storage.ts";
 

@@ -1,8 +1,6 @@
-import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Cause, Clock, Deferred, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import type { Receipt } from "effect-agent/receipt";
-import { ProducerEpoch, type PersistedJson } from "effect-agent/records";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import type { Receipt } from "@yielded/agent/receipt";
+import { ProducerEpoch, type PersistedJson } from "@yielded/agent/records";
 import {
   AbortCommand,
   AbortIntentRequest,
@@ -12,15 +10,17 @@ import {
   type AbortIntent,
   type AdmissionRequest,
   type SettlementFinalization,
-} from "effect-agent/submission-ledger";
+} from "@yielded/agent/submission-ledger";
 import {
   FencedAppendRequest,
   ThreadMaterialization,
   ThreadRead,
   ThreadStore,
   ThreadTailRequest,
-} from "effect-agent/thread-store";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
+} from "@yielded/agent/thread-store";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
+import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { Cause, Clock, Deferred, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vite-plus/test";
@@ -172,7 +172,7 @@ const append = (thread: string, request: FencedAppendRequest) =>
   );
 
 describe("live Thread projection and alarm backfill", () => {
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/0e83011e
+  // Regression: https://github.com/yielded-dev/agent/commit/0e83011e
   it("enrolls native admission, replayed finalization and stop without another append", () =>
     withThread(async (thread) => {
       let admission: AdmissionRequest | undefined;
@@ -228,7 +228,7 @@ describe("live Thread projection and alarm backfill", () => {
       expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
     }));
 
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/b0a978cbf654962a42d8a794c2e826cc23a4c625
+  // Regression: https://github.com/yielded-dev/agent/commit/b0a978cbf654962a42d8a794c2e826cc23a4c625
   it("includes interruptible finalizers in the host lane's original allowance", () =>
     withThread(async (thread, _now, advance) => {
       await submit(thread, plannerDefinition);
@@ -595,7 +595,7 @@ describe("live Thread projection and alarm backfill", () => {
     }
   });
 
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/0fe79ac5
+  // Regression: https://github.com/yielded-dev/agent/commit/0fe79ac5
   it.each(["maintenance:checkpoint:after"] as const)(
     "recovers native progress and pending projection after eviction at %s",
     (location) =>

@@ -70,8 +70,8 @@ of other submissions, approvals, and attached children. Unknown submissions fail
 The read grants no ownership, and `canonicalRecordId` must come from canonical history.
 
 ```ts
-import type { SubmissionId } from "effect-agent/identifiers";
-import { AbortIntentRequest, SubmissionLedger } from "effect-agent/submission-ledger";
+import type { SubmissionId } from "@yielded/agent/identifiers";
+import { AbortIntentRequest, SubmissionLedger } from "@yielded/agent/submission-ledger";
 import { Effect } from "effect";
 
 const readAbort = Effect.fn(function* (submissionId: SubmissionId) {
@@ -87,7 +87,7 @@ still becomes canonical under the append gate before the runtime interrupts exec
 
 ```ts
 import { Effect } from "effect";
-import { certifyDurableAdapters } from "@effect-agent/testing/certification";
+import { certifyDurableAdapters } from "@yielded/agent-testing/certification";
 
 const certificate = Effect.gen(function* () {
   return yield* certifyDurableAdapters({
@@ -125,7 +125,7 @@ All lever cases must belong to the `real-loss` suite. An empty lever reports `no
 
 Any failed executed check makes both fields `false`. Recorded citations are external evidence;
 the runner does not execute or verify those suites. Non-durable adapters can pass conformance
-without earning durable certification. Reports use the `effect-agent/certification@2` format.
+without earning durable certification. Reports use the `@yielded/agent/certification@2` format.
 
 <a id="what-tier-2-asserts-exactly"></a>
 
@@ -159,11 +159,11 @@ checker as the administrative `verify` operation.
 
 ## Provide tier 3 evidence
 
-- `@effect-agent/storage-memory` reports `not-applicable` because it declares non-durable state.
-- `@effect-agent/storage-sqlite` records the platform Node process-kill suites.
-- `@effect-agent/storage-postgres` reports `not-exercised` because no committed process-kill
+- `@yielded/agent-storage-memory` reports `not-applicable` because it declares non-durable state.
+- `@yielded/agent-storage-sqlite` records the platform Node process-kill suites.
+- `@yielded/agent-storage-postgres` reports `not-exercised` because no committed process-kill
   suite drives it yet.
-- `@effect-agent/storage-cloudflare` records Durable Object eviction, cross-object subagent, and
+- `@yielded/agent-storage-cloudflare` records Durable Object eviction, cross-object subagent, and
   Miniflare restart suites.
 - A third-party adapter may pass `crashLever` to kill or evict its runtime and reopen storage for
   selected rows. Successful rows report `exercised`. Without that lever or committed evidence, the
@@ -172,9 +172,9 @@ checker as the administrative `verify` operation.
 <a id="shipped-adapter-tests"></a>
 
 Import `CertificationReport` and `certifyPorts` from
-`effect-agent/testing/certification`. The shared conformance cases live in
-`effect-agent/testing/thread-store-conformance` and
-`effect-agent/testing/submission-ledger-conformance`. Production schemas, ports,
+`@yielded/agent/testing/certification`. The shared conformance cases live in
+`@yielded/agent/testing/thread-store-conformance` and
+`@yielded/agent/testing/submission-ledger-conformance`. Production schemas, ports,
 replay, verification, and runtime APIs have their own public thread modules.
 
 <a id="subscription-stores"></a>
@@ -182,7 +182,7 @@ replay, verification, and runtime APIs have their own public thread modules.
 ## Certify subscription stores
 
 An adapter that implements `SubscriptionStore` must also run
-`subscriptionStoreConformanceCases` from `effect-agent/testing/subscription-store-conformance`. Give each case a fresh
+`subscriptionStoreConformanceCases` from `@yielded/agent/testing/subscription-store-conformance`. Give each case a fresh
 partition. The cases cover intake cutoffs, deduplication, once selection, capacity, cancellation,
 prepared recovery, catch-up, scan cursors, and replay after limits tighten.
 

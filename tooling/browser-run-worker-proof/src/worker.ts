@@ -1,16 +1,14 @@
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { Agent, AgentRuntime, BrowserUse, InMemory } from "@yielded/agent";
 import {
   BrowserQuickActionBrowserBinding,
   browserQuickActionCaptureLayer,
-} from "@effect-agent/platform-cloudflare/cloudflare-browser";
+} from "@yielded/agent-platform-cloudflare/cloudflare-browser";
 import {
   BrowserRunInteractiveHost,
   BrowserRunPageObservation,
   CloudflareInteractiveBrowser,
-} from "@effect-agent/platform-cloudflare/interactive-browser";
-import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
-import { DurableObject } from "cloudflare:workers";
-import { Cause, Effect, Exit, Layer, Option, Redacted, Result, Schedule, Schema } from "effect";
-import { Agent, AgentRuntime, BrowserUse, InMemory } from "effect-agent";
+} from "@yielded/agent-platform-cloudflare/interactive-browser";
 import {
   BrowserClickRequest,
   BrowserExpectedTargetState,
@@ -18,14 +16,16 @@ import {
   BrowserNavigateRequest,
   BrowserReadTextRequest,
   InteractiveBrowserPolicy,
-} from "effect-agent/interactive-browser";
+} from "@yielded/agent/interactive-browser";
 import {
   CapturePageScrape,
   PageCapture,
   PageCaptureLimits,
   PageCaptureRequest,
   PageHtmlTarget,
-} from "effect-agent/page-capture";
+} from "@yielded/agent/page-capture";
+import { DurableObject } from "cloudflare:workers";
+import { Cause, Effect, Exit, Layer, Option, Redacted, Result, Schedule, Schema } from "effect";
 import { Tool, Toolkit } from "effect/ai";
 import { FetchHttpClient } from "effect/http";
 

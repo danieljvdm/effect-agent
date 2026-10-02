@@ -1,9 +1,9 @@
-import { AutoModel } from "@effect-agent/ai-decision";
 import { expect, it } from "@effect/vitest";
+import { Agent, AgentRuntime, Identifiers, InMemory, Subagent } from "@yielded/agent";
+import { AutoModel } from "@yielded/agent-ai-decision";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
 import type { Scope } from "effect";
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect";
-import { Agent, AgentRuntime, Identifiers, InMemory, Subagent } from "effect-agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
 import {
   DecisionModel,
   AiError,

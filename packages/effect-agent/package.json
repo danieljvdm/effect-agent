@@ -1,11 +1,11 @@
 {
-  "name": "effect-agent",
+  "name": "@yielded/agent",
   "version": "0.1.0-beta.165",
   "description": "Effect-native agents, execution, subagents, and sandbox contracts in one tree-shakeable package.",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/danieljvdm/effect-agent.git",
+    "url": "git+https://github.com/yielded-dev/agent.git",
     "directory": "packages/effect-agent"
   },
   "files": [

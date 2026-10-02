@@ -1,11 +1,11 @@
 {
-  "name": "@effect-agent/storage-memory",
+  "name": "@yielded/agent-storage-memory",
   "version": "0.1.0-beta.165",
   "description": "In-memory Thread store and submission ledger reference adapters for Effect Agent tests and conformance suites.",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/danieljvdm/effect-agent.git",
+    "url": "git+https://github.com/yielded-dev/agent.git",
     "directory": "packages/storage-memory"
   },
   "files": [
@@ -32,7 +32,7 @@
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
-    "effect-agent": "workspace:*"
+    "@yielded/agent": "workspace:*"
   },
   "devDependencies": {
     "@effect/platform-node": "catalog:",

@@ -1,8 +1,8 @@
+import { IdGenerator } from "@yielded/agent/id-generator";
+import { ThreadId, RunId, TurnId } from "@yielded/agent/identifiers";
+import { RunContextPreparationPassthrough } from "@yielded/agent/run-options";
+import { ThreadHistory } from "@yielded/agent/thread-history";
 import { Context, Deferred, Effect, Layer, Option, Ref, Schema } from "effect";
-import { IdGenerator } from "effect-agent/id-generator";
-import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
-import { RunContextPreparationPassthrough } from "effect-agent/run-options";
-import { ThreadHistory } from "effect-agent/thread-history";
 
 import {
   ActivityCatalog,

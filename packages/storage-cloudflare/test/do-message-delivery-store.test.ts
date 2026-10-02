@@ -1,22 +1,22 @@
+import { BrowserCrypto } from "@effect/platform-browser";
+import { SqliteClient } from "@effect/sql-sqlite-do";
 import {
   makeSqlLifecyclePublication,
   type SqlLifecyclePublicationInput,
-} from "@effect-agent/storage-sql/sql-lifecycle-publication";
-import { makeSqlMessageDeliveryStore } from "@effect-agent/storage-sql/sql-message-delivery-store";
+} from "@yielded/agent-storage-sql/sql-lifecycle-publication";
+import { makeSqlMessageDeliveryStore } from "@yielded/agent-storage-sql/sql-message-delivery-store";
 import {
   SqlStorageProgress,
   type SqlStorageProgressKind,
-} from "@effect-agent/storage-sql/sql-storage-progress";
-import { BrowserCrypto } from "@effect/platform-browser";
-import { SqliteClient } from "@effect/sql-sqlite-do";
-import { DateTime, Effect, Layer, Option, Result, Schema, Tracer } from "effect";
-import { lifecyclePublicationLayer } from "effect-agent/lifecycle-publication";
-import { MessageDeliveryRecord } from "effect-agent/message-delivery";
-import { SqlStorageOwner } from "effect-agent/sql-memory-store";
+} from "@yielded/agent-storage-sql/sql-storage-progress";
+import { lifecyclePublicationLayer } from "@yielded/agent/lifecycle-publication";
+import { MessageDeliveryRecord } from "@yielded/agent/message-delivery";
+import { SqlStorageOwner } from "@yielded/agent/sql-memory-store";
 import {
   makeMessageDeliveryFixture,
   messageDeliveryStoreConformanceCases,
-} from "effect-agent/testing/message-delivery-store-conformance";
+} from "@yielded/agent/testing/message-delivery-store-conformance";
+import { DateTime, Effect, Layer, Option, Result, Schema, Tracer } from "effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { expect, it } from "vite-plus/test";
 

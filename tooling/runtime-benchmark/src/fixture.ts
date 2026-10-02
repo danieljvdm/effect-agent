@@ -1,31 +1,15 @@
-import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/node-durable-agent-runtime";
+import { Agent, AgentRuntime } from "@yielded/agent";
+import { NodeDurableAgentRuntime } from "@yielded/agent-platform-node/node-durable-agent-runtime";
 import {
   ScriptedModel,
   type ScriptedTurnInput,
   type ScriptedStreamPart,
-} from "@effect-agent/testing/scripted-model";
-import {
-  Cause,
-  Clock,
-  Context,
-  Crypto,
-  DateTime,
-  type Duration,
-  Effect,
-  Exit,
-  FileSystem,
-  Layer,
-  Option,
-  References,
-  Schema,
-  Stream,
-} from "effect";
-import { Agent, AgentRuntime } from "effect-agent";
-import { ContextCompactor } from "effect-agent/context-compactor";
-import { digestJson } from "effect-agent/digest";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
-import { AgentId, RunId, ThreadId } from "effect-agent/identifiers";
+} from "@yielded/agent-testing/scripted-model";
+import { ContextCompactor } from "@yielded/agent/context-compactor";
+import { digestJson } from "@yielded/agent/digest";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import { DurableRuntimeFailpointError } from "@yielded/agent/durable-failpoint";
+import { AgentId, RunId, ThreadId } from "@yielded/agent/identifiers";
 import {
   BatchId,
   CanonicalBatch,
@@ -44,9 +28,9 @@ import {
   SubmissionSettledRecord,
   ThreadCreated,
   UserInputRecorded,
-} from "effect-agent/records";
-import { runIdForSubmission } from "effect-agent/run-journal";
-import { RunContextPreparation } from "effect-agent/run-options";
+} from "@yielded/agent/records";
+import { runIdForSubmission } from "@yielded/agent/run-journal";
+import { RunContextPreparation } from "@yielded/agent/run-options";
 import {
   AdmissionRequest,
   ClaimRequest,
@@ -59,7 +43,7 @@ import {
   SubmissionLedger,
   submissionSettlementId,
   submissionSettlementRecordId,
-} from "effect-agent/submission-ledger";
+} from "@yielded/agent/submission-ledger";
 import {
   FencedAppendRequest,
   LoadCheckpointRequest,
@@ -67,7 +51,23 @@ import {
   ThreadMaterialization,
   ThreadStore,
   ThreadTailRequest,
-} from "effect-agent/thread-store";
+} from "@yielded/agent/thread-store";
+import {
+  Cause,
+  Clock,
+  Context,
+  Crypto,
+  DateTime,
+  type Duration,
+  Effect,
+  Exit,
+  FileSystem,
+  Layer,
+  Option,
+  References,
+  Schema,
+  Stream,
+} from "effect";
 import type { LanguageModel } from "effect/ai";
 import { AiError, Model, Prompt, Tool, Toolkit } from "effect/ai";
 

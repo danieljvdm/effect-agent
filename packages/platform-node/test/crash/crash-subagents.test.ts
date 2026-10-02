@@ -1,24 +1,24 @@
-import { NodeDurableHost } from "@effect-agent/platform-node/node-durable-host";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
-import { Effect, Option } from "effect";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { type DurableRuntimeFailpointLocation } from "effect-agent/durable-failpoint";
-import { type SubmissionId } from "effect-agent/identifiers";
+import { NodeDurableHost } from "@yielded/agent-platform-node/node-durable-host";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import { type DurableRuntimeFailpointLocation } from "@yielded/agent/durable-failpoint";
+import { type SubmissionId } from "@yielded/agent/identifiers";
 import {
   childThreadIdFor,
   childIdempotencyKeyFor,
   runIdForSubmission,
   toolCallSettledRecordId,
-} from "effect-agent/run-journal";
+} from "@yielded/agent/run-journal";
 import {
   AbortCommand,
   RecoverySnapshotRequest,
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
-} from "effect-agent/submission-ledger";
-import { ThreadStore, ThreadTailRequest } from "effect-agent/thread-store";
+} from "@yielded/agent/submission-ledger";
+import { ThreadStore, ThreadTailRequest } from "@yielded/agent/thread-store";
+import { Effect, Option } from "effect";
 
 import {
   CHILD_MODEL_OP,

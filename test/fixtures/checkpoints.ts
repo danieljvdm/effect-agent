@@ -1,13 +1,12 @@
-import { DateTime, Effect, Option, Schema, Stream } from "effect";
-import { digestJson, EMPTY_TAIL_DIGEST } from "effect-agent/digest";
-import { ThreadId } from "effect-agent/identifiers";
-import { CanonicalBatch, CanonicalSequence, ProducerEpoch } from "effect-agent/records";
-import { AdmissionRequest, SubmissionLedger } from "effect-agent/submission-ledger";
+import { digestJson, EMPTY_TAIL_DIGEST } from "@yielded/agent/digest";
+import { ThreadId } from "@yielded/agent/identifiers";
+import { CanonicalBatch, CanonicalSequence, ProducerEpoch } from "@yielded/agent/records";
+import { AdmissionRequest, SubmissionLedger } from "@yielded/agent/submission-ledger";
 import {
   ThreadProjection,
   replayThread,
   replayThreadFromCheckpoint,
-} from "effect-agent/thread-projection";
+} from "@yielded/agent/thread-projection";
 import {
   ThreadCheckpoint,
   ThreadExportRequest,
@@ -17,7 +16,8 @@ import {
   FencedAppendRequest,
   LoadCheckpointRequest,
   SaveCheckpointRequest,
-} from "effect-agent/thread-store";
+} from "@yielded/agent/thread-store";
+import { DateTime, Effect, Option, Schema, Stream } from "effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { expect } from "vite-plus/test";
 

@@ -1,5 +1,5 @@
 ---
-"@effect-agent/platform-cloudflare": patch
+"@yielded/agent-platform-cloudflare": patch
 ---
 
 Run Dynamic Worker Code Mode host calls on a Scope-owned pass fiber so they inherit the `execute` Context and die with the pass.

@@ -1,7 +1,10 @@
-import { Clock, Context, Effect, Schema } from "effect";
-import * as MemoryNamespace from "effect-agent/memory-namespace";
-import { MemoryLookup, MemoryRecallError, MemoryRecallLimits } from "effect-agent/memory-reference";
-import { MemoryAccess, revalidateMemoryLookup } from "effect-agent/memory-revalidation";
+import * as MemoryNamespace from "@yielded/agent/memory-namespace";
+import {
+  MemoryLookup,
+  MemoryRecallError,
+  MemoryRecallLimits,
+} from "@yielded/agent/memory-reference";
+import { MemoryAccess, revalidateMemoryLookup } from "@yielded/agent/memory-revalidation";
 import {
   MemoryKey,
   MemoryReader,
@@ -13,19 +16,20 @@ import {
   MemoryWithdrawn,
   MemoryWrite,
   MemoryWriter,
-} from "effect-agent/memory-store";
+} from "@yielded/agent/memory-store";
 import {
   MemoryIndexSearch,
   MemoryIndexError,
   SemanticMemoryProfile,
-} from "effect-agent/semantic-memory-index";
+} from "@yielded/agent/semantic-memory-index";
 import {
   SemanticMemoryError,
   SemanticCandidateLimits,
   SemanticCandidateResult,
   revalidateSemanticMemoryCandidates,
-} from "effect-agent/semantic-memory-revalidation";
-import { Principal } from "effect-agent/submission-ledger";
+} from "@yielded/agent/semantic-memory-revalidation";
+import { Principal } from "@yielded/agent/submission-ledger";
+import { Clock, Context, Effect, Schema } from "effect";
 
 export class MemoryRpcError extends Schema.TaggedError<MemoryRpcError>()("MemoryRpcError", {
   reason: Schema.Literals(["denied", "protocol", "budget", "timeout", "unavailable"]),

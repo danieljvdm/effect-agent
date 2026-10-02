@@ -1,3 +1,4 @@
+import { describe, expect, it } from "@effect/vitest";
 import {
   type BrowserRunViewport,
   BrowserRunInteractiveBinding,
@@ -14,9 +15,7 @@ import {
   type BrowserRunInteractivePage,
   type BrowserRunInteractiveRequest,
   type BrowserRunInteractiveRequestListener,
-} from "@effect-agent/platform-cloudflare/interactive-browser";
-import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Fiber, Layer, Redacted, Schema } from "effect";
+} from "@yielded/agent-platform-cloudflare/interactive-browser";
 import {
   type InteractiveBrowserError,
   BrowserClickRequest,
@@ -28,7 +27,8 @@ import {
   InteractiveBrowserPolicy,
   type BrowserHandle,
   type InteractiveBrowserNetworkPolicy,
-} from "effect-agent/interactive-browser";
+} from "@yielded/agent/interactive-browser";
+import { Duration, Effect, Fiber, Layer, Redacted, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
 type CloseTarget =
@@ -625,7 +625,7 @@ describe("Browser Run interactive browser adapter", () => {
     }),
   );
 
-  // https://github.com/danieljvdm/effect-agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
+  // https://github.com/yielded-dev/agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
   it.effect.each([true])(
     "resumes the same checkpoint without replay and preserves the input fence (%s)",
     (pendingInput) => {
@@ -696,7 +696,7 @@ describe("Browser Run interactive browser adapter", () => {
     },
   );
 
-  // https://github.com/danieljvdm/effect-agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
+  // https://github.com/yielded-dev/agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
   it.effect(
     "does not create or terminate a provider session when the exact checkpoint target is absent",
     () => {
@@ -727,7 +727,7 @@ describe("Browser Run interactive browser adapter", () => {
       });
     },
   );
-  // https://github.com/danieljvdm/effect-agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
+  // https://github.com/yielded-dev/agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
   it.effect(
     "fences unfinished SDK input after interruption while allowing reads, then drains without replay",
     () => {
@@ -768,7 +768,7 @@ describe("Browser Run interactive browser adapter", () => {
       );
     },
   );
-  // https://github.com/danieljvdm/effect-agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
+  // https://github.com/yielded-dev/agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
   it.effect("keeps transport-timeout input fenced even after the local promise rejects", () => {
     const fixture = makeFixture({
       click: async () => {

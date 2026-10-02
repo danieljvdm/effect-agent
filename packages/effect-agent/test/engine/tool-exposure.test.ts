@@ -1,13 +1,12 @@
 import { expect, layer } from "@effect/vitest";
-import { Cause, Effect, Exit, Layer, Option, Schema, SchemaGetter, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import { ToolExecutionClass } from "effect-agent/durable-step";
-import { IdGenerator } from "effect-agent/id-generator";
-import { RunId, ThreadId, TurnId } from "effect-agent/identifiers";
-import { SubagentGrant } from "effect-agent/subagent-contract";
-import { ThreadHistory } from "effect-agent/thread-history";
-import * as ToolDiscovery from "effect-agent/tool-discovery";
+import * as Agent from "@yielded/agent/agent";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import { ToolExecutionClass } from "@yielded/agent/durable-step";
+import { IdGenerator } from "@yielded/agent/id-generator";
+import { RunId, ThreadId, TurnId } from "@yielded/agent/identifiers";
+import { SubagentGrant } from "@yielded/agent/subagent-contract";
+import { ThreadHistory } from "@yielded/agent/thread-history";
+import * as ToolDiscovery from "@yielded/agent/tool-discovery";
 import {
   DiscoveryTool,
   PinnedTool,
@@ -15,7 +14,8 @@ import {
   Snapshot,
   CurrentToolCatalog,
   RunToolVisibility,
-} from "effect-agent/tool-exposure";
+} from "@yielded/agent/tool-exposure";
+import { Cause, Effect, Exit, Layer, Option, Schema, SchemaGetter, Stream } from "effect";
 import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/ai";
 
 let threadSequence = 0;
@@ -118,7 +118,7 @@ const failure = <E>(exit: Exit.Exit<unknown, E>) =>
   Exit.isFailure(exit) ? Option.getOrUndefined(Cause.findErrorOption(exit.cause)) : undefined;
 
 layer(Layer.mergeAll(identifiers, ThreadHistory.layer))("native Tool exposure", (it) => {
-  // Regression: https://github.com/danieljvdm/effect-agent/issues/496
+  // Regression: https://github.com/yielded-dev/agent/issues/496
   {
     it.effect(
       "continues after discovery result-byte overflow with only documented selections",

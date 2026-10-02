@@ -1,13 +1,13 @@
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import type { SubmissionId } from "@yielded/agent/identifiers";
+import { MessageDeliveryStore } from "@yielded/agent/message-delivery";
+import { MessageAdmission, type MessageStatus } from "@yielded/agent/messaging";
+import * as Subagent from "@yielded/agent/subagent";
+import { SubagentHost } from "@yielded/agent/subagent-host";
+import { WorkerCompletion, WorkerUpdate } from "@yielded/agent/worker";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect, Schema } from "effect";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import type { SubmissionId } from "effect-agent/identifiers";
-import { MessageDeliveryStore } from "effect-agent/message-delivery";
-import { MessageAdmission, type MessageStatus } from "effect-agent/messaging";
-import * as Subagent from "effect-agent/subagent";
-import { SubagentHost } from "effect-agent/subagent-host";
-import { WorkerCompletion, WorkerUpdate } from "effect-agent/worker";
 import { DurableObject } from "effect-cf";
 import { expect, it } from "vite-plus/test";
 
@@ -410,7 +410,7 @@ it("delivers an accepted worker update before completion after eviction with onl
   }
 }, 20_000);
 
-// Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
+// Regression: https://github.com/yielded-dev/agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
 // Multiple native evictions and scout Runs need the same budget as the adjacent lifecycle tests.
 it("retains captured worker policies and concurrency across native eviction and a resumed Run", async () => {
   const source = `background-cf-independent-captured-${crypto.randomUUID()}`;
@@ -588,7 +588,7 @@ it("retains captured worker policies and concurrency across native eviction and 
   }
 }, 20_000);
 
-// Regression: https://github.com/danieljvdm/effect-agent/commit/4600d240f44b1ef1fe9b0fc58f39e293a6434f85
+// Regression: https://github.com/yielded-dev/agent/commit/4600d240f44b1ef1fe9b0fc58f39e293a6434f85
 it("drains private worker progress through rebuilt runtime maintenance into an idle parent", async () => {
   const source = `background-cf-custom-${crypto.randomUUID()}`;
 
@@ -829,7 +829,7 @@ it("delivers one frozen standard report after child eviction and source eviction
   }
 }, 20_000);
 
-// Regression: https://github.com/danieljvdm/effect-agent/pull/358
+// Regression: https://github.com/yielded-dev/agent/pull/358
 it("retains one worker input when its caller loses admission ownership to the source alarm", async ({
   onTestFinished,
   signal,
@@ -953,7 +953,7 @@ it("retains one worker input when its caller loses admission ownership to the so
     });
 
     // The original caller loses the new delivery claim to the real source alarm.
-    // Regression: https://github.com/danieljvdm/effect-agent/commit/cb1d297d3464850b5e4645a0d3b3a5062a1ba71b
+    // Regression: https://github.com/yielded-dev/agent/commit/cb1d297d3464850b5e4645a0d3b3a5062a1ba71b
     signal.throwIfAborted();
     controlArmed = true;
     arming = runInDurableObject(stubFor(source), () => armWorkerInputContention(source));
@@ -1101,7 +1101,7 @@ it("retains one worker input when its caller loses admission ownership to the so
   if (primaryFailure !== undefined) throw primaryFailure;
 }, 30_000);
 
-// Regression: https://github.com/danieljvdm/effect-agent/pull/358
+// Regression: https://github.com/yielded-dev/agent/pull/358
 it("retries unavailable worker funding admission with the same durable input identity", async () => {
   const source = `background-cf-independent-outage-${crypto.randomUUID()}`;
 

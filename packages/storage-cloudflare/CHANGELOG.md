@@ -1,4 +1,4 @@
-# @effect-agent/storage-cloudflare
+# @yielded/agent-storage-cloudflare
 
 ## 0.1.0-beta.165
 

@@ -1,7 +1,66 @@
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
+import { MemorySubmissionLedgerLive } from "@yielded/agent-storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@yielded/agent-storage-memory/memory-thread-store";
+import * as Agent from "@yielded/agent/agent";
+import { AgentToolAuthorizationCheckError } from "@yielded/agent/agent-error";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import { compileRegistrations } from "@yielded/agent/agent-registration";
+import {
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  type DurableSubmitOptions,
+} from "@yielded/agent/durable-agent-runtime";
+import {
+  DurableRuntimeFailpointError,
+  type DurableRuntimeFailpointLocation,
+} from "@yielded/agent/durable-failpoint";
+import { DurableStep, DurableStepError, ToolExecutionClass } from "@yielded/agent/durable-step";
+import * as FailureDiagnostic from "@yielded/agent/failure-diagnostic";
+import type { SubmissionId } from "@yielded/agent/identifiers";
+import { ThreadId, ToolCallId } from "@yielded/agent/identifiers";
+import {
+  type CanonicalRecordEnvelope,
+  DefinitionDigestInput,
+  DefinitionDigests,
+  DeploymentId,
+  Digest,
+  ProducerId,
+} from "@yielded/agent/records";
+import {
+  promptFromCanonicalRecords,
+  runIdForSubmission,
+  toolCallPreparedRecordId,
+} from "@yielded/agent/run-journal";
+import {
+  RunContextPreparation,
+  RunContextPreparationPassthrough,
+  RunToolAuthorization,
+  toolFailureObserverLayer,
+  type ToolFailureObservation,
+  type RunToolAuthorizationDecision,
+  type RunToolAuthorizationRequest,
+} from "@yielded/agent/run-options";
+import {
+  AbortCommand,
+  IdempotencyKey,
+  Principal,
+  ResolutionCompletedWithResult,
+  ResolutionNeverHappened,
+  SubmissionLedger,
+  SubmissionLookupById,
+  UnknownResolutionCommand,
+} from "@yielded/agent/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "@yielded/agent/testing/durable-failpoint-test-control";
+import { ThreadRead, ThreadStore } from "@yielded/agent/thread-store";
+import { DiscoveryTool, RunToolVisibility } from "@yielded/agent/tool-exposure";
+import {
+  ReconciliationUncertain,
+  ToolReconciler,
+  type PreparedToolCallEvidence,
+  type ReconciliationDecision,
+} from "@yielded/agent/tool-reconciler";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
 import {
   Cause,
   Context,
@@ -16,65 +75,6 @@ import {
   SchemaGetter,
   Stream,
 } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentToolAuthorizationCheckError } from "effect-agent/agent-error";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { compileRegistrations } from "effect-agent/agent-registration";
-import {
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  type DurableSubmitOptions,
-} from "effect-agent/durable-agent-runtime";
-import {
-  DurableRuntimeFailpointError,
-  type DurableRuntimeFailpointLocation,
-} from "effect-agent/durable-failpoint";
-import { DurableStep, DurableStepError, ToolExecutionClass } from "effect-agent/durable-step";
-import * as FailureDiagnostic from "effect-agent/failure-diagnostic";
-import type { SubmissionId } from "effect-agent/identifiers";
-import { ThreadId, ToolCallId } from "effect-agent/identifiers";
-import {
-  type CanonicalRecordEnvelope,
-  DefinitionDigestInput,
-  DefinitionDigests,
-  DeploymentId,
-  Digest,
-  ProducerId,
-} from "effect-agent/records";
-import {
-  promptFromCanonicalRecords,
-  runIdForSubmission,
-  toolCallPreparedRecordId,
-} from "effect-agent/run-journal";
-import {
-  RunContextPreparation,
-  RunContextPreparationPassthrough,
-  RunToolAuthorization,
-  toolFailureObserverLayer,
-  type ToolFailureObservation,
-  type RunToolAuthorizationDecision,
-  type RunToolAuthorizationRequest,
-} from "effect-agent/run-options";
-import {
-  AbortCommand,
-  IdempotencyKey,
-  Principal,
-  ResolutionCompletedWithResult,
-  ResolutionNeverHappened,
-  SubmissionLedger,
-  SubmissionLookupById,
-  UnknownResolutionCommand,
-} from "effect-agent/submission-ledger";
-import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
-import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
-import { DiscoveryTool, RunToolVisibility } from "effect-agent/tool-exposure";
-import {
-  ReconciliationUncertain,
-  ToolReconciler,
-  type PreparedToolCallEvidence,
-  type ReconciliationDecision,
-} from "effect-agent/tool-reconciler";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { Prompt, LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
@@ -803,7 +803,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         }),
     );
   }
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/08571eacf
+  // Regression: https://github.com/yielded-dev/agent/commit/08571eacf
   // A completed discovery batch can be the last durable boundary before deployment.
   // Resume must keep surviving selections, exclude retired/unselected tools, preserve
   // original receipts, and never repeat discovery. Pending-batch recovery is covered above.
@@ -1510,7 +1510,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         );
 
         const agent = Agent.withModel(bookDefinition, scripted.model);
-        // Regression: https://github.com/danieljvdm/effect-agent/commit/d9249632b9f7ab70f6aca23ac0630f99c3c4d31d
+        // Regression: https://github.com/yielded-dev/agent/commit/d9249632b9f7ab70f6aca23ac0630f99c3c4d31d
         // Admitted Thread identity is authoritative; a bounded diagnostic copy must not prevent settlement.
         const threadId = `thread-check-failed-${"x".repeat(1_024)}`;
 

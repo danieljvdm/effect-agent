@@ -15,7 +15,7 @@ Choose where that state lives, then connect the stores to your agent runtime.
 | [PostgreSQL](/storage/postgres/)   | A database shared by multiple processes, using your Effect SQL client |
 | [Cloudflare](/storage/cloudflare/) | SQLite owned by a Durable Object                                      |
 
-Keep `effect-agent` and its adapters on the same release. See
+Keep `@yielded/agent` and its adapters on the same release. See
 [installation and compatibility](/guide/getting-started/#installation-and-compatibility)
 for the matching Effect and model provider packages.
 
@@ -44,7 +44,7 @@ Storage alone does not start workers or recover unfinished Runs.
 
 ## Build another adapter
 
-`@effect-agent/storage-sql` contains shared SQL implementations for thread history,
+`@yielded/agent-storage-sql` contains shared SQL implementations for thread history,
 submissions, schedules, subscriptions, message delivery, and activity progress.
 SQLite and PostgreSQL use this core; Cloudflare reuses the helpers that fit Durable Objects.
 

@@ -1,4 +1,4 @@
-# @effect-agent/pr-review
+# @yielded/agent-pr-review
 
 ## 0.1.0-beta.165
 

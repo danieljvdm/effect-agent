@@ -1,5 +1,5 @@
 ---
-"@effect-agent/platform-cloudflare": patch
+"@yielded/agent-platform-cloudflare": patch
 ---
 
 Add an explicit interactive browser network policy and reject `PublicWeb` with a typed unsupported error before Cloudflare launches a browser.

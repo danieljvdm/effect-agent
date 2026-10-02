@@ -1,5 +1,5 @@
-import { AutoModel } from "@effect-agent/ai-decision";
 import { expect, expectTypeOf, it } from "@effect/vitest";
+import { AutoModel } from "@yielded/agent-ai-decision";
 import { Context, Deferred, Effect, Layer, Schema, Stream } from "effect";
 import type { AiError } from "effect/ai";
 import { DecisionModel, LanguageModel, Model } from "effect/ai";

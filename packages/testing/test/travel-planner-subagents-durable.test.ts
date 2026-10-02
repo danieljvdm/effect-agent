@@ -1,7 +1,9 @@
+import { NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
 import {
   NodeDurableAgentRuntime,
   type NodeDurableAgentRuntimeOptions,
-} from "@effect-agent/platform-node/node-durable-agent-runtime";
+} from "@yielded/agent-platform-node/node-durable-agent-runtime";
 import {
   makeDurableResearchHarness,
   researchMission,
@@ -9,19 +11,15 @@ import {
   s2TravelPlannerDeploymentId,
   s2TravelPlannerProducerId,
   s2TravelPlannerSubmitOptions,
-} from "@effect-agent/testing/travel-planner";
-import { NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import type { PlatformError } from "effect";
-import { Cause, Duration, Effect, Exit, FileSystem, Option, Schema, Stream } from "effect";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
+} from "@yielded/agent-testing/travel-planner";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
 import {
   DurableRuntimeFailpointError,
   type DurableRuntimeFailpointHandler,
   type DurableRuntimeFailpointLocation,
-} from "effect-agent/durable-failpoint";
-import { ThreadId, ToolCallId, type SubmissionId } from "effect-agent/identifiers";
-import { type CanonicalRecordEnvelope } from "effect-agent/records";
+} from "@yielded/agent/durable-failpoint";
+import { ThreadId, ToolCallId, type SubmissionId } from "@yielded/agent/identifiers";
+import { type CanonicalRecordEnvelope } from "@yielded/agent/records";
 import {
   AdmissionRequest,
   IdempotencyKey,
@@ -30,8 +28,10 @@ import {
   RecoverySnapshotRequest,
   SubmissionLedger,
   SubmissionLookupById,
-} from "effect-agent/submission-ledger";
-import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
+} from "@yielded/agent/submission-ledger";
+import { ThreadRead, ThreadStore } from "@yielded/agent/thread-store";
+import type { PlatformError } from "effect";
+import { Cause, Duration, Effect, Exit, FileSystem, Option, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
 const decodeThreadId = Schema.decodeSync(ThreadId);

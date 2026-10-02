@@ -1,8 +1,8 @@
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
+import { SubmissionLedger } from "@yielded/agent/submission-ledger";
 import { Effect, FileSystem, Layer, type Crypto } from "effect";
-import { SubmissionLedger } from "effect-agent/submission-ledger";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import {

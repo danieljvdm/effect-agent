@@ -1,5 +1,4 @@
-import { Clock, Effect, Layer, Ref, Schema } from "effect";
-import { MemoryKey } from "effect-agent/memory-store";
+import { MemoryKey } from "@yielded/agent/memory-store";
 import {
   MemoryIndexCandidate,
   MemoryIndexError,
@@ -10,7 +9,8 @@ import {
   SemanticMemoryChunk,
   SemanticMemoryIndex,
   SemanticMemoryProfile,
-} from "effect-agent/semantic-memory-index";
+} from "@yielded/agent/semantic-memory-index";
+import { Clock, Effect, Layer, Ref, Schema } from "effect";
 import { Hex } from "effect/encoding";
 
 const PositiveCapacity = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_536 }));

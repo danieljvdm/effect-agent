@@ -3,9 +3,9 @@ import {
   GitHubApiFailure,
   makeReviewRepository,
   type RepositorySnapshot,
-} from "@effect-agent/pr-review-action/review-repository";
-import { type ReviewRequest } from "@effect-agent/pr-review/review";
-import { type ReviewRepository } from "@effect-agent/pr-review/review-repository";
+} from "@yielded/agent-pr-review-action/review-repository";
+import { type ReviewRequest } from "@yielded/agent-pr-review/review";
+import { type ReviewRepository } from "@yielded/agent-pr-review/review-repository";
 import { Effect, Path, Result, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 

@@ -1,6 +1,5 @@
-import { Array, Cause, Context, Crypto, DateTime, Effect, Option, Schema } from "effect";
-import { digestJson } from "effect-agent/digest";
-import type { ThreadId } from "effect-agent/identifiers";
+import { digestJson } from "@yielded/agent/digest";
+import type { ThreadId } from "@yielded/agent/identifiers";
 import {
   LifecyclePublication,
   LifecyclePublicationBatch,
@@ -8,8 +7,9 @@ import {
   LifecyclePublicationError,
   lifecyclePublicationBatchMaxFacts,
   type LifecyclePublicationStorage,
-} from "effect-agent/lifecycle-publication";
-import { SqlStorageOwner } from "effect-agent/sql-memory-store";
+} from "@yielded/agent/lifecycle-publication";
+import { SqlStorageOwner } from "@yielded/agent/sql-memory-store";
+import { Array, Cause, Context, Crypto, DateTime, Effect, Option, Schema } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
 
 import { makeSqlQuery, SqlInteger } from "./SqlStorage.ts";

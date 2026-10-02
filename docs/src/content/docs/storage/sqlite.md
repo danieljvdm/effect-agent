@@ -10,8 +10,8 @@ Provide `PersistentHistory.layer` with a SQLite store to retain completed runs a
 ```ts twoslash
 import { planner } from "./node-agent.ts";
 // ---cut---
-import { SqliteThreadStore } from "@effect-agent/storage-sqlite";
-import { AgentRuntime, PersistentHistory } from "effect-agent";
+import { SqliteThreadStore } from "@yielded/agent-storage-sqlite";
+import { AgentRuntime, PersistentHistory } from "@yielded/agent";
 import { Effect, Layer } from "effect";
 
 const History = PersistentHistory.layer.pipe(
@@ -26,10 +26,10 @@ const conversation = Effect.gen(function* () {
 }).pipe(Effect.provide(History));
 ```
 
-Add the adapter to your existing Effect Agent application:
+Add the adapter to your existing Yielded Agent application:
 
 ```sh
-bun add @effect-agent/storage-sqlite@beta effect
+bun add @yielded/agent-storage-sqlite@beta effect
 ```
 
 Here, `planner` is an [agent definition](/guide/agents/). Supply its model and tool
@@ -54,7 +54,7 @@ for the commit policy, concurrency, and history inspection.
 
 ## Recover unfinished work
 
-Use [`@effect-agent/platform-node`](/platforms/node/) when accepted work must
+Use [`@yielded/agent-platform-node`](/platforms/node/) when accepted work must
 survive a restart. It assembles SQLite storage, agent registrations, admission,
 recovery, and a worker pool. Run one live host per SQLite file.
 

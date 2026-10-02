@@ -1,19 +1,23 @@
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
+import { MemorySubmissionLedgerLive } from "@yielded/agent-storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@yielded/agent-storage-memory/memory-thread-store";
+import * as Agent from "@yielded/agent/agent";
+import { CompactionPolicy } from "@yielded/agent/agent-policy";
+import { DurableAgentRuntime, DurableRuntimeConfig } from "@yielded/agent/durable-agent-runtime";
+import { DurableRuntimeFailpoint } from "@yielded/agent/durable-failpoint";
+import { ThreadId, ToolCallId } from "@yielded/agent/identifiers";
+import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "@yielded/agent/records";
+import { RunToolAuthorization } from "@yielded/agent/run-options";
+import {
+  ApprovalDecisionCommand,
+  IdempotencyKey,
+  Principal,
+} from "@yielded/agent/submission-ledger";
+import { ThreadRead, ThreadStore } from "@yielded/agent/thread-store";
+import { ToolReconciler } from "@yielded/agent/tool-reconciler";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
 import { Effect, Layer, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { CompactionPolicy } from "effect-agent/agent-policy";
-import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
-import { DurableRuntimeFailpoint } from "effect-agent/durable-failpoint";
-import { ThreadId, ToolCallId } from "effect-agent/identifiers";
-import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "effect-agent/records";
-import { RunToolAuthorization } from "effect-agent/run-options";
-import { ApprovalDecisionCommand, IdempotencyKey, Principal } from "effect-agent/submission-ledger";
-import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
-import { ToolReconciler } from "effect-agent/tool-reconciler";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { AiError, LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 
 const usage = {
@@ -37,7 +41,7 @@ const digest = Schema.decodeSync(Digest)("a".repeat(64));
 const definitions = DefinitionDigests.make({ agent: digest, model: digest, tools: digest });
 
 // Reported usage was discarded before protocol validation in the original runtime:
-// https://github.com/danieljvdm/effect-agent/commit/9257d75caff1d2bb145effc3d461e39f72f8bbc5
+// https://github.com/yielded-dev/agent/commit/9257d75caff1d2bb145effc3d461e39f72f8bbc5
 for (const failure of ["open-part", "missing-usage"] as const) {
   const reportsUsage = failure !== "missing-usage";
   const retainsUsage = reportsUsage;
@@ -179,7 +183,7 @@ for (const failure of ["open-part", "missing-usage"] as const) {
 // KOM-127 requires restart-preserved totals with missing usage explicitly partial:
 // https://linear.app/reve-ai/issue/KOM-127
 // Native overflow retry and response-only staging originated in:
-// https://github.com/danieljvdm/effect-agent/commit/afe755a331172ffca9ceee7dd82bb452c6ccbb8a
+// https://github.com/yielded-dev/agent/commit/afe755a331172ffca9ceee7dd82bb452c6ccbb8a
 it.live(
   "retains an unreported overflow across retry, approval suspension, and two runtime replacements",
   () =>

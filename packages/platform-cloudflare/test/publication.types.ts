@@ -1,7 +1,7 @@
 import { expectTypeOf } from "@effect/vitest";
+import type { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import type { LifecyclePublicationHandler } from "@yielded/agent/lifecycle-publication";
 import { Context, type Layer, Schema } from "effect";
-import type { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import type { LifecyclePublicationHandler } from "effect-agent/lifecycle-publication";
 
 import type { ThreadMutationGate } from "../src/Alarm.ts";
 import * as ThreadObject from "../src/ThreadObject.ts";

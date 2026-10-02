@@ -1,17 +1,17 @@
 ---
-"@effect-agent/ai-decision": patch
-"@effect-agent/platform-cloudflare": patch
-"@effect-agent/platform-node": patch
-"@effect-agent/pr-review": patch
-"@effect-agent/sandbox-local": patch
-"@effect-agent/storage-cloudflare": patch
-"@effect-agent/storage-memory": patch
-"@effect-agent/storage-postgres": patch
-"@effect-agent/storage-sql": patch
-"@effect-agent/storage-sqlite": patch
-"@effect-agent/testing": patch
-"@effect-agent/workflow": patch
-"effect-agent": patch
+"@yielded/agent-ai-decision": patch
+"@yielded/agent-platform-cloudflare": patch
+"@yielded/agent-platform-node": patch
+"@yielded/agent-pr-review": patch
+"@yielded/agent-sandbox-local": patch
+"@yielded/agent-storage-cloudflare": patch
+"@yielded/agent-storage-memory": patch
+"@yielded/agent-storage-postgres": patch
+"@yielded/agent-storage-sql": patch
+"@yielded/agent-storage-sqlite": patch
+"@yielded/agent-testing": patch
+"@yielded/agent-workflow": patch
+"@yielded/agent": patch
 ---
 
 Require Effect 4.0.0 and use its current module paths and encoding APIs. Require `effect-cf@^0.53.0` for the Cloudflare adapter.

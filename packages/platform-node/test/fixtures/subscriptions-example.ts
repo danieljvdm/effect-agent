@@ -1,10 +1,9 @@
-import { type NodeDurableAgentRuntimeOptions } from "@effect-agent/platform-node/node-durable-agent-runtime";
-import { NodeDurableHost } from "@effect-agent/platform-node/node-durable-host";
-import { NodeSubscriptions } from "@effect-agent/platform-node/node-subscriptions";
-import { subscriptionStoreLayer } from "@effect-agent/storage-sqlite/sqlite-subscription-store";
 import { NodeHttpClient } from "@effect/platform-node";
-import { Effect, Layer, Schema, type Redacted } from "effect";
-import { EventSources, type EventSource } from "effect-agent/event-source";
+import { type NodeDurableAgentRuntimeOptions } from "@yielded/agent-platform-node/node-durable-agent-runtime";
+import { NodeDurableHost } from "@yielded/agent-platform-node/node-durable-host";
+import { NodeSubscriptions } from "@yielded/agent-platform-node/node-subscriptions";
+import { subscriptionStoreLayer } from "@yielded/agent-storage-sqlite/sqlite-subscription-store";
+import { EventSources, type EventSource } from "@yielded/agent/event-source";
 import {
   acceptVerifiedGitHubWorkflowRunWebhook,
   githubWorkflowRunsHttpLayer,
@@ -16,14 +15,15 @@ import {
   makeGitHubWorkflowRunSource,
   type VerifiedGitHubWorkflowRunWebhookRequest,
   webCryptoGitHubWebhookSignatureVerifierLayer,
-} from "effect-agent/git-hub-workflow-source";
-import { type SourcePartition, SubscriptionAuthorizer } from "effect-agent/subscription";
+} from "@yielded/agent/git-hub-workflow-source";
+import { type SourcePartition, SubscriptionAuthorizer } from "@yielded/agent/subscription";
 import {
   SubscriptionInputBindings,
   makeSubscriptionInputBinding,
   type SubscriptionInputBinding,
-} from "effect-agent/subscription-input";
-import { SubscriptionIntake, Subscriptions } from "effect-agent/subscriptions";
+} from "@yielded/agent/subscription-input";
+import { SubscriptionIntake, Subscriptions } from "@yielded/agent/subscriptions";
+import { Effect, Layer, Schema, type Redacted } from "effect";
 
 const subscriptionRuntimeFromSourcesLayer = <E, R>(options: {
   readonly runtime: NodeDurableAgentRuntimeOptions;

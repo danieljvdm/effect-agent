@@ -86,5 +86,27 @@ export const stageComparisonModules = Effect.fn("comparison.stageModules")(funct
     yield* fs.writeFileString(manifestPath, JSON.stringify({ ...manifest, exports }));
   }
 
+  for (const directory of yield* fs.readDirectory(path.join(stage, "packages"))) {
+    const destination = path.join(stage, "packages", directory);
+    const pkg = yield* decode(yield* fs.readFileString(path.join(destination, "package.json")));
+
+    const alias =
+      pkg.name === "effect-agent"
+        ? "@yielded/agent"
+        : pkg.name.startsWith("@effect-agent/")
+          ? pkg.name.replace("@effect-agent/", "@yielded/agent-")
+          : undefined;
+
+    if (alias === undefined) continue;
+
+    const link = path.join(stage, "node_modules", alias);
+
+    yield* fs.makeDirectory(path.dirname(link), { recursive: true });
+    yield* fs.symlink(destination, link);
+    for (const key of Object.keys(pkg.exports ?? {})) {
+      added.push(key === "." ? alias : alias + key.slice(1));
+    }
+  }
+
   return added;
 });

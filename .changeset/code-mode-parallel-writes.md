@@ -1,6 +1,6 @@
 ---
-"@effect-agent/platform-cloudflare": patch
-"@effect-agent/testing": patch
+"@yielded/agent-platform-cloudflare": patch
+"@yielded/agent-testing": patch
 ---
 
 Allow authorized writes and bounded concurrent tool calls in Code Mode, with individual outcome reports after partial failure or interruption. Classify generated programs as uncertain to prevent automatic replay after ownership loss.

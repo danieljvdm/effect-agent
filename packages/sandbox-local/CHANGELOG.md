@@ -1,4 +1,4 @@
-# @effect-agent/sandbox-local
+# @yielded/agent-sandbox-local
 
 ## 0.1.0-beta.165
 

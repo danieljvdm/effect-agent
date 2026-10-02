@@ -1,3 +1,23 @@
+import { AgentOutputError } from "@yielded/agent/agent-error";
+import { type BindingUnavailable } from "@yielded/agent/agent-registration";
+import { digestJson } from "@yielded/agent/digest";
+import {
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  Receipt,
+  type DurableAwaitFailure,
+  type DurableSubmitAgent,
+  type DurableSubmitFailure,
+  type DurableSubmitOptions,
+} from "@yielded/agent/durable-agent-runtime";
+import { ThreadId } from "@yielded/agent/identifiers";
+import { DeploymentId } from "@yielded/agent/records";
+import {
+  IdempotencyKey,
+  Principal,
+  SubmissionLedger,
+  SubmissionLookupById,
+} from "@yielded/agent/submission-ledger";
 import {
   Cause,
   Context,
@@ -13,26 +33,6 @@ import {
   Semaphore,
   Stream,
 } from "effect";
-import { AgentOutputError } from "effect-agent/agent-error";
-import { type BindingUnavailable } from "effect-agent/agent-registration";
-import { digestJson } from "effect-agent/digest";
-import {
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  Receipt,
-  type DurableAwaitFailure,
-  type DurableSubmitAgent,
-  type DurableSubmitFailure,
-  type DurableSubmitOptions,
-} from "effect-agent/durable-agent-runtime";
-import { ThreadId } from "effect-agent/identifiers";
-import { DeploymentId } from "effect-agent/records";
-import {
-  IdempotencyKey,
-  Principal,
-  SubmissionLedger,
-  SubmissionLookupById,
-} from "effect-agent/submission-ledger";
 import { DurableDeferred, Workflow, WorkflowEngine } from "effect/workflow";
 
 import { workflowCompletion } from "./internal/completion.ts";

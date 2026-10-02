@@ -11,7 +11,7 @@ or `startUnknown` for external values typed as `unknown`. See
 [Agent definitions](/guide/agents/#typed-and-external-inputs) and the authoritative
 [runtime model](/concepts/runtime-model/).
 
-Use `InMemory.layer` from `effect-agent` for in-memory conversations, including attached
+Use `InMemory.layer` from `@yielded/agent` for in-memory conversations, including attached
 subagents. Provide it once around the application and reuse a Thread ID for follow-up Runs.
 It retains complete history updates and shares subagent reservation state for that Scope.
 IDs are generated automatically, and context preparation is optional. Use
@@ -147,7 +147,7 @@ Lower the progress allowance with `bufferLimits` on `run`, `stream`, or `start`.
 cannot raise the engine's ceiling:
 
 ```ts twoslash
-import { type RunBufferLimits } from "effect-agent/run-options";
+import { type RunBufferLimits } from "@yielded/agent/run-options";
 
 export const progressBufferLimits: RunBufferLimits = {
   maxToolProgressBytes: 1024 * 1024,
@@ -179,7 +179,7 @@ observation, while the durable runtime retains its accepted-work obligation. Use
 idempotency key and frozen input to reconcile uncertain admission. A transcript delta is context,
 not an instruction to admit another Run. Corrections use ordinary queued input and steering.
 
-The [travel planner](https://github.com/danieljvdm/effect-agent/tree/main/examples/travel-planner) demonstrates GPT-Live client
+The [travel planner](https://github.com/yielded-dev/agent/tree/main/examples/travel-planner) demonstrates GPT-Live client
 delegation. Its adapter constructs schema-validated planner requests from attributed transcripts,
 uses the existing planner admission path, and reconciles receipts against canonical settlement.
 It tracks corrections by work identity rather than treating every caption as a new task. Spoken
@@ -238,8 +238,8 @@ Use `layerWithServices` to supply your own service layers. It requires
 Here is the default authorization policy; replace it with your application's implementation:
 
 ```ts twoslash
-import { RunToolAuthorization } from "effect-agent/run-options";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
+import { RunToolAuthorization } from "@yielded/agent/run-options";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
 import { Layer } from "effect";
 
 export const RuntimeLive = DurableAgentRuntime.layerWithServices.pipe(
@@ -342,7 +342,7 @@ per-run hooks.
 ## Observe recovered tool failures
 
 A tool may fail and the model may still complete the run. Install `toolFailureObserverLayer` from
-`effect-agent` to report such failures.
+`@yielded/agent` to report such failures.
 
 This observer covers failures contained as results, including programmatic broker outcomes. It does
 not duplicate model-declared failures that propagate through the run's Effect error channel, or
@@ -352,7 +352,7 @@ Use [`ToolCallFailed.failureHandling` and tool telemetry](/guide/tools/#failure-
 to distinguish returned failures from propagated ones, and handle the run's Effect exit separately.
 
 ```ts
-import { toolFailureObserverLayer } from "effect-agent/run-options";
+import { toolFailureObserverLayer } from "@yielded/agent/run-options";
 import { Effect, ErrorReporter } from "effect";
 
 const failureReporting = toolFailureObserverLayer({

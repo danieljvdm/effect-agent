@@ -1,26 +1,26 @@
 import * as fs from "node:fs";
 
-import { Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { DurableWorkerBinding, type ResolvedBinding } from "effect-agent/agent-registration";
-import { Receipt, type DurableSubmitOptions } from "effect-agent/durable-agent-runtime";
-import { DurableStep, DurableStepError, ToolExecutionClass } from "effect-agent/durable-step";
-import { IdGenerator } from "effect-agent/id-generator";
-import { ThreadId, RunId, ToolCallId, TurnId } from "effect-agent/identifiers";
-import { DefinitionDigests, Digest } from "effect-agent/records";
-import { RunContextPreparation } from "effect-agent/run-options";
-import * as Subagent from "effect-agent/subagent";
-import { SubagentPolicy } from "effect-agent/subagent";
-import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
-import { IdempotencyKey, Principal, Settlement } from "effect-agent/submission-ledger";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import { DurableWorkerBinding, type ResolvedBinding } from "@yielded/agent/agent-registration";
+import { Receipt, type DurableSubmitOptions } from "@yielded/agent/durable-agent-runtime";
+import { DurableStep, DurableStepError, ToolExecutionClass } from "@yielded/agent/durable-step";
+import { IdGenerator } from "@yielded/agent/id-generator";
+import { ThreadId, RunId, ToolCallId, TurnId } from "@yielded/agent/identifiers";
+import { DefinitionDigests, Digest } from "@yielded/agent/records";
+import { RunContextPreparation } from "@yielded/agent/run-options";
+import * as Subagent from "@yielded/agent/subagent";
+import { SubagentPolicy } from "@yielded/agent/subagent";
+import { SubagentReservationsMemoryLive } from "@yielded/agent/subagent-reservations";
+import { IdempotencyKey, Principal, Settlement } from "@yielded/agent/submission-ledger";
 import {
   ReconciliationCompleted,
   ReconciliationNeverStarted,
   ReconciliationSafeToRetry,
   ReconciliationUncertain,
   ToolReconciler,
-} from "effect-agent/tool-reconciler";
+} from "@yielded/agent/tool-reconciler";
+import { Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 
 /**

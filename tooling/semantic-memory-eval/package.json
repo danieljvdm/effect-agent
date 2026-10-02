@@ -1,5 +1,5 @@
 {
-  "name": "@effect-agent/example-semantic-memory-eval",
+  "name": "@yielded/agent-example-semantic-memory-eval",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,13 +10,13 @@
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@effect-agent/storage-memory": "workspace:*",
-    "@effect-agent/storage-sqlite": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
     "@huggingface/transformers": "4.2.0",
-    "effect": "catalog:",
-    "effect-agent": "workspace:*"
+    "@yielded/agent": "workspace:*",
+    "@yielded/agent-storage-memory": "workspace:*",
+    "@yielded/agent-storage-sqlite": "workspace:*",
+    "effect": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

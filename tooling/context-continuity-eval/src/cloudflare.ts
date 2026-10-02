@@ -1,3 +1,8 @@
+import { contextWindowId } from "@yielded/agent/compaction";
+import { digestDefinition } from "@yielded/agent/digest";
+import { Receipt } from "@yielded/agent/durable-agent-runtime";
+import { CanonicalRecordEnvelope } from "@yielded/agent/records";
+import { runIdForSubmission } from "@yielded/agent/run-journal";
 import {
   Clock,
   Config,
@@ -9,11 +14,6 @@ import {
   Redacted,
   Schema,
 } from "effect";
-import { contextWindowId } from "effect-agent/compaction";
-import { digestDefinition } from "effect-agent/digest";
-import { Receipt } from "effect-agent/durable-agent-runtime";
-import { CanonicalRecordEnvelope } from "effect-agent/records";
-import { runIdForSubmission } from "effect-agent/run-journal";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import { CloudflareIdentity, CloudflareSnapshot } from "./cloudflare-contracts.ts";

@@ -1,10 +1,10 @@
+import { assert, it } from "@effect/vitest";
 import {
   BrowserSessionError,
   BrowserSessionReference,
   BrowserSessions,
   type BrowserSession,
-} from "@effect-agent/platform-cloudflare/browser-session";
-import { assert, it } from "@effect/vitest";
+} from "@yielded/agent-platform-cloudflare/browser-session";
 import { Config, Effect, Option, Redacted, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import puppeteer from "puppeteer-core";

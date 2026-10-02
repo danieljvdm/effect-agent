@@ -2,7 +2,7 @@ import {
   MAX_REVIEW_DISCUSSION_CHARS,
   ReviewDiscussion,
   ReviewFollowUp,
-} from "@effect-agent/pr-review/review";
+} from "@yielded/agent-pr-review/review";
 import { createTwoFilesPatch } from "diff";
 import type { Redacted } from "effect";
 import { Clock, Context, DateTime, Effect, Option, Result, Schema } from "effect";

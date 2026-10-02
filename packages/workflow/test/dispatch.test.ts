@@ -1,6 +1,8 @@
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
-import { WorkflowAgentHost } from "@effect-agent/workflow/workflow-agent-host";
+import { NodeCrypto } from "@effect/platform-node";
+import { expect, it } from "@effect/vitest";
+import { MemorySubmissionLedgerLive } from "@yielded/agent-storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@yielded/agent-storage-memory/memory-thread-store";
+import { WorkflowAgentHost } from "@yielded/agent-workflow/workflow-agent-host";
 import {
   WorkflowDispatchError,
   WorkflowDispatchIntent,
@@ -8,9 +10,31 @@ import {
   WorkflowRepairTrigger,
   WorkflowSettlementReference,
   WorkflowSubmission,
-} from "@effect-agent/workflow/workflow-dispatch";
-import { NodeCrypto } from "@effect/platform-node";
-import { expect, it } from "@effect/vitest";
+} from "@yielded/agent-workflow/workflow-dispatch";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import { digestDefinitions, digestJson } from "@yielded/agent/digest";
+import {
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  Receipt,
+} from "@yielded/agent/durable-agent-runtime";
+import { DurableRuntimeFailpoint } from "@yielded/agent/durable-failpoint";
+import { ReceiptId, SettlementId, ThreadId } from "@yielded/agent/identifiers";
+import { DefinitionDigestInput, DeploymentId, ProducerId } from "@yielded/agent/records";
+import { RunToolAuthorization } from "@yielded/agent/run-options";
+import {
+  AdmissionRequest,
+  IdempotencyKey,
+  LedgerError,
+  Principal,
+  QueueSequence,
+  RecoverySnapshotRequest,
+  SubmissionLedger,
+} from "@yielded/agent/submission-ledger";
+import { ThreadRead, ThreadStore } from "@yielded/agent/thread-store";
+import { ToolReconciler } from "@yielded/agent/tool-reconciler";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
 import {
   Context,
   Deferred,
@@ -24,30 +48,6 @@ import {
   Schema,
   Stream,
 } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { digestDefinitions, digestJson } from "effect-agent/digest";
-import {
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  Receipt,
-} from "effect-agent/durable-agent-runtime";
-import { DurableRuntimeFailpoint } from "effect-agent/durable-failpoint";
-import { ReceiptId, SettlementId, ThreadId } from "effect-agent/identifiers";
-import { DefinitionDigestInput, DeploymentId, ProducerId } from "effect-agent/records";
-import { RunToolAuthorization } from "effect-agent/run-options";
-import {
-  AdmissionRequest,
-  IdempotencyKey,
-  LedgerError,
-  Principal,
-  QueueSequence,
-  RecoverySnapshotRequest,
-  SubmissionLedger,
-} from "effect-agent/submission-ledger";
-import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
-import { ToolReconciler } from "effect-agent/tool-reconciler";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 import { TestClock } from "effect/testing";
 import { Workflow, WorkflowEngine } from "effect/workflow";

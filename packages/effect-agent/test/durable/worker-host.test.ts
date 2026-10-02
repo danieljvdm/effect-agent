@@ -1,8 +1,7 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
-import { Clock, DateTime, Deferred, Duration, Effect, Fiber, Option, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
 import {
   DelegationId,
   ReceiptId,
@@ -10,23 +9,24 @@ import {
   SubmissionId,
   ThreadId,
   ToolCallId,
-} from "effect-agent/identifiers";
-import { IdempotencyKey, QueueSequence, Receipt } from "effect-agent/receipt";
-import * as Subagent from "effect-agent/subagent";
+} from "@yielded/agent/identifiers";
+import { IdempotencyKey, QueueSequence, Receipt } from "@yielded/agent/receipt";
+import * as Subagent from "@yielded/agent/subagent";
 import {
   SubagentDelegationCaps,
   SubagentGrant,
   SubagentParentLink,
   SubagentReservationAmounts,
-} from "effect-agent/subagent-contract";
+} from "@yielded/agent/subagent-contract";
 import {
   SubagentHost,
   WorkerReportPreparationFailure,
   type StartWorkerRequest,
   type WorkerReporting,
-} from "effect-agent/subagent-host";
-import { ToolResultBounds } from "effect-agent/tool-result";
-import { WorkerCompletion, WorkerError, WorkerUpdate } from "effect-agent/worker";
+} from "@yielded/agent/subagent-host";
+import { ToolResultBounds } from "@yielded/agent/tool-result";
+import { WorkerCompletion, WorkerError, WorkerUpdate } from "@yielded/agent/worker";
+import { Clock, DateTime, Deferred, Duration, Effect, Fiber, Option, Schema, Stream } from "effect";
 import { Toolkit } from "effect/ai";
 import { TestClock } from "effect/testing";
 
@@ -752,7 +752,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
 });
 
 layer(NodeCrypto.layer)((it) => {
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/4ff21e2a4
+  // Regression: https://github.com/yielded-dev/agent/commit/4ff21e2a4
   it.effect(
     "reuses one start admission through preparation and rejects a later revoked start",
     () =>
@@ -793,7 +793,7 @@ layer(NodeCrypto.layer)((it) => {
       }),
   );
 
-  // Regression: https://github.com/danieljvdm/effect-agent/pull/621
+  // Regression: https://github.com/yielded-dev/agent/pull/621
   for (const advance of ["tail", "epoch"] as const)
     it.effect(`origin establishment retries a ${advance} advance after its identity snapshot`, () =>
       Effect.gen(function* () {
@@ -827,7 +827,7 @@ layer(NodeCrypto.layer)((it) => {
       }),
     );
 
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/6a4f4f870
+  // Regression: https://github.com/yielded-dev/agent/commit/6a4f4f870
   it.effect(
     "origin establishment replays the same identity and refuses incompatible canonical ancestry",
     () =>
@@ -896,7 +896,7 @@ layer(NodeCrypto.layer)((it) => {
       }),
   );
 
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/4ff21e2a4c3735be34955e7d5caf64f623d33f81
+  // Regression: https://github.com/yielded-dev/agent/commit/4ff21e2a4c3735be34955e7d5caf64f623d33f81
   // Reuse the public-start retained-command fixture from #568 for follow-up correction provenance.
   it.effect(`public follow-up replays its pending correction across Runs without preparation`, () =>
     Effect.gen(function* () {
@@ -1015,7 +1015,7 @@ layer(NodeCrypto.layer)((it) => {
     }),
   );
 
-  // Equal-input regression: https://github.com/danieljvdm/effect-agent/commit/3ab9045fc293d09a22801c7d881c4d89e562461a
+  // Equal-input regression: https://github.com/yielded-dev/agent/commit/3ab9045fc293d09a22801c7d881c4d89e562461a
   for (const [preparation, denied] of [
     ["changed", undefined],
     ["failed", undefined],
@@ -1104,7 +1104,7 @@ layer(NodeCrypto.layer)((it) => {
         }),
     );
 
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
+  // Regression: https://github.com/yielded-dev/agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
   it.effect(
     "serializes source-aware active slots across raced starts, steering and idle reactivation",
     () =>
@@ -1185,7 +1185,7 @@ layer(NodeCrypto.layer)((it) => {
       }),
   );
 
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
+  // Regression: https://github.com/yielded-dev/agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
   it.effect(
     "revalidates captured authority across a reserved admission retry and freezes later worker policy",
     () =>

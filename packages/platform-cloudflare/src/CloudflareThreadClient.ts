@@ -1,23 +1,22 @@
 import { BrowserCrypto } from "@effect/platform-browser";
-import { Context, Crypto, Duration, Effect, Layer, Schema } from "effect";
-import { AgentInputError } from "effect-agent/agent-error";
-import { DigestError } from "effect-agent/digest";
+import { AgentInputError } from "@yielded/agent/agent-error";
+import { DigestError } from "@yielded/agent/digest";
 import {
   Receipt,
   type DurableSubmitAgent,
   type DurableSubmitOptions,
-} from "effect-agent/durable-agent-runtime";
-import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
-import { AgentId, type ThreadId } from "effect-agent/identifiers";
-import { InputMessage } from "effect-agent/messaging";
-import { OperationDenied } from "effect-agent/operation-authorizer";
+} from "@yielded/agent/durable-agent-runtime";
+import { DurableRuntimeFailpointError } from "@yielded/agent/durable-failpoint";
+import { AgentId, type ThreadId } from "@yielded/agent/identifiers";
+import { InputMessage } from "@yielded/agent/messaging";
+import { OperationDenied } from "@yielded/agent/operation-authorizer";
 import {
   CanonicalRecordEnvelope,
   CanonicalSequence,
   DefinitionDigests,
   PersistedJson,
   WorkerAdmission,
-} from "effect-agent/records";
+} from "@yielded/agent/records";
 import {
   AdmissionFence,
   AdmissionGroup,
@@ -37,14 +36,15 @@ import {
   UnknownResolutionCommand,
   UnknownResolutionConflict,
   UnknownResolutionIntent,
-} from "effect-agent/submission-ledger";
-import { SubmissionStatus } from "effect-agent/submission-status";
+} from "@yielded/agent/submission-ledger";
+import { SubmissionStatus } from "@yielded/agent/submission-status";
 import {
   AppendConflict,
   ThreadNotMaterialized,
   ThreadStoreError,
   FenceRejected,
-} from "effect-agent/thread-store";
+} from "@yielded/agent/thread-store";
+import { Context, Crypto, Duration, Effect, Layer, Schema } from "effect";
 import { RpcTracing } from "effect-cf";
 
 import { DurableAlarmError } from "./Alarm.ts";

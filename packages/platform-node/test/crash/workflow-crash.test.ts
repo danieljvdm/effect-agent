@@ -1,14 +1,14 @@
-import { AgentWorkflow } from "@effect-agent/workflow";
-import { WorkflowAgentHost } from "@effect-agent/workflow/workflow-agent-host";
 import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, Fiber, FileSystem, Layer, Option, Schema, Stream } from "effect";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { ToolCallId } from "effect-agent/identifiers";
+import { AgentWorkflow } from "@yielded/agent-workflow";
+import { WorkflowAgentHost } from "@yielded/agent-workflow/workflow-agent-host";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import { ToolCallId } from "@yielded/agent/identifiers";
 import {
   ResolutionCompletedWithResult,
   UnknownResolutionCommand,
-} from "effect-agent/submission-ledger";
+} from "@yielded/agent/submission-ledger";
+import { Effect, Fiber, FileSystem, Layer, Option, Schema, Stream } from "effect";
 import { ChildProcess } from "effect/process";
 
 import {

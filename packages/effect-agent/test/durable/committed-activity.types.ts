@@ -1,23 +1,23 @@
-import { Context, Effect, Schema, type Crypto, type Scope } from "effect";
 import {
   ActivityProcessorKey,
   type ActivityProcessorStore,
   type ActivityStoreFailure,
   type PreparedActivity,
-} from "effect-agent/activity-store";
+} from "@yielded/agent/activity-store";
 import {
   ActivityPassLimits,
   processCommittedActivity,
   type ActivityProcessingError,
-} from "effect-agent/committed-activity";
-import { type DigestError } from "effect-agent/digest";
-import { ThreadId } from "effect-agent/identifiers";
-import { type PersistedJson } from "effect-agent/records";
+} from "@yielded/agent/committed-activity";
+import { type DigestError } from "@yielded/agent/digest";
+import { ThreadId } from "@yielded/agent/identifiers";
+import { type PersistedJson } from "@yielded/agent/records";
 import {
   type ThreadNotMaterialized,
   type ThreadStore,
   type ThreadStoreError,
-} from "effect-agent/thread-store";
+} from "@yielded/agent/thread-store";
+import { Context, Effect, Schema, type Crypto, type Scope } from "effect";
 
 type Equal<L, R> =
   (<T>() => T extends L ? 1 : 2) extends <T>() => T extends R ? 1 : 2

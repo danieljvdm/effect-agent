@@ -1,9 +1,9 @@
 import {
   ThreadPortTransport,
   portTransportFailure,
-} from "@effect-agent/storage-cloudflare/port-routing";
+} from "@yielded/agent-storage-cloudflare/port-routing";
+import type { ThreadId } from "@yielded/agent/identifiers";
 import { Effect, Layer } from "effect";
-import type { ThreadId } from "effect-agent/identifiers";
 import { RpcTracing } from "effect-cf";
 
 import { callThreadObject, ThreadObjectNamespace } from "../CloudflareBindings.ts";

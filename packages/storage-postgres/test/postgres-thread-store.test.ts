@@ -1,10 +1,10 @@
 import { describe, it } from "@effect/vitest";
-import { Effect, String } from "effect";
 import {
   threadStoreConformanceCases,
   threadCheckpointConformanceCases,
-} from "effect-agent/testing/thread-store-conformance";
-import type { ThreadStore } from "effect-agent/thread-store";
+} from "@yielded/agent/testing/thread-store-conformance";
+import type { ThreadStore } from "@yielded/agent/thread-store";
+import { Effect, String } from "effect";
 
 import { storage as makeStorage, withTemporaryDatabase } from "./harness.ts";
 

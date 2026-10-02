@@ -16,7 +16,7 @@ shared by those guides.
 For the default input and result contract, the declaration is optional:
 
 ```ts twoslash
-import { Subagent } from "effect-agent";
+import { Subagent } from "@yielded/agent";
 import { HotelResearcher } from "./background-updates.ts";
 
 // Before: an explicit declaration, with the default name and mappings.
@@ -57,7 +57,7 @@ notes from the parent result, expose a `partial` flag, and set explicit child li
 Map child failures when constructing its handler Layer:
 
 ```ts twoslash
-import { Subagent } from "effect-agent";
+import { Subagent } from "@yielded/agent";
 import { Layer } from "effect";
 import { Research, ResearchFailed } from "./delegation-custom.ts";
 import { ModelLive } from "./node-agent.ts";
@@ -210,7 +210,7 @@ another child. Handoff remains unsupported.
 
 Background workers normally reserve against their source's subtree. A host may separately
 fund a root's reusable worker by supplying `WorkerBudgetAuthorizer` from
-`effect-agent/worker-host` and allowing the exact source, destination, and allowance.
+`@yielded/agent/worker-host` and allowing the exact source, destination, and allowance.
 The default denies this permission. Request it from author-owned code:
 
 ```ts
@@ -243,7 +243,7 @@ Set `WorkerHostConfig.maxActiveWorkersPerSource` to bound concurrent background 
 from the root's Tool execution concurrency; omission retains the prior concurrency ceiling.
 
 When each source has an authorized concurrency preference, provide `WorkerConcurrencyResolver`
-from `effect-agent/worker-host` through an Effect Layer. It receives the immutable source,
+from `@yielded/agent/worker-host` through an Effect Layer. It receives the immutable source,
 worker, principal, and explicitly selected canonical owner submission. Return `Option.some({
 maxActiveWorkersPerSource })` to narrow the fixed host ceiling, or `Option.none()` to retain it.
 The runtime resolves this limit inside the source reservation CAS loop, including retries after
@@ -257,7 +257,7 @@ Run allowance.
 
 ### Resolve policies from captured input
 
-Supply `WorkerPolicyResolver` from `effect-agent/worker-host` when immutable application
+Supply `WorkerPolicyResolver` from `@yielded/agent/worker-host` when immutable application
 input captures an execution policy separately from a finite, versioned Agent Definition. Provide
 its implementation through an Effect Layer and retain the Layer's construction dependencies.
 The default returns `Option.none()`, preserving registered policy inheritance and overrides.
@@ -313,8 +313,8 @@ fresh preparation, even from another source Run. Current caller authorization st
 changed declared parameters conflict. Native model tools derive their keys automatically.
 
 ```ts twoslash
-import { Subagent } from "effect-agent";
-import { IdempotencyKey } from "effect-agent/receipt";
+import { Subagent } from "@yielded/agent";
+import { IdempotencyKey } from "@yielded/agent/receipt";
 import { Effect, Schema } from "effect";
 
 import { Research } from "./delegation.ts";
@@ -339,7 +339,7 @@ timeout stops only that waiter, leaving the worker running.
 ## Background delivery and recovery
 
 `Subagent.start` returns `{ worker, delivery }`; `Subagent.followUp` returns the delivery directly.
-Both use `MessageStatus` from `effect-agent/messaging`, with one stable `message: MessageRef`.
+Both use `MessageStatus` from `@yielded/agent/messaging`, with one stable `message: MessageRef`.
 These Effects retain one intended input. Programmatic calls require an explicit, stable
 `IdempotencyKey`; native tools derive it from their actual invocation.
 

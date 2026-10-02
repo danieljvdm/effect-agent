@@ -1,21 +1,20 @@
-import { memorySubscriptionStoreLayer } from "@effect-agent/storage-memory/memory-subscription-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { DateTime, Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
-import { digestJson } from "effect-agent/digest";
-import { Receipt } from "effect-agent/durable-agent-runtime";
-import { EventSources, makeEventSource } from "effect-agent/event-source";
-import { AgentId, ThreadId, ReceiptId, SubmissionId } from "effect-agent/identifiers";
-import { PreparedInputAdmission } from "effect-agent/prepared-input-admission";
-import { DefinitionDigests, Digest } from "effect-agent/records";
-import { ScheduledInputRefused, ScheduledInputRetryable } from "effect-agent/schedule";
+import { memorySubscriptionStoreLayer } from "@yielded/agent-storage-memory/memory-subscription-store";
+import { digestJson } from "@yielded/agent/digest";
+import { Receipt } from "@yielded/agent/durable-agent-runtime";
+import { EventSources, makeEventSource } from "@yielded/agent/event-source";
+import { AgentId, ThreadId, ReceiptId, SubmissionId } from "@yielded/agent/identifiers";
+import { PreparedInputAdmission } from "@yielded/agent/prepared-input-admission";
+import { DefinitionDigests, Digest } from "@yielded/agent/records";
+import { ScheduledInputRefused, ScheduledInputRetryable } from "@yielded/agent/schedule";
 import {
   Settlement,
   submissionSettlementId,
   Principal,
   QueueSequence,
-} from "effect-agent/submission-ledger";
-import { SettledSubmission } from "effect-agent/submission-status";
+} from "@yielded/agent/submission-ledger";
+import { SettledSubmission } from "@yielded/agent/submission-status";
 import {
   SubscriptionAuthorizer,
   SubscriptionError,
@@ -26,18 +25,19 @@ import {
   defaultSubscriptionLimits,
   type PreparedInput,
   type SubscriptionLimits,
-} from "effect-agent/subscription";
+} from "@yielded/agent/subscription";
 import {
   makeSubscriptionInputBinding,
   SubscriptionInputBindings,
   type SubscriptionInputBinding,
-} from "effect-agent/subscription-input";
+} from "@yielded/agent/subscription-input";
 import {
   SubscriptionDriver,
   SubscriptionIntake,
   Subscriptions,
   type SubscribeOptions,
-} from "effect-agent/subscriptions";
+} from "@yielded/agent/subscriptions";
+import { DateTime, Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
 const partition = { tenantId: "tenant", address: "repository:42" };

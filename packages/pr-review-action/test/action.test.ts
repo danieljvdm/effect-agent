@@ -468,7 +468,7 @@ describe("PR commit review checks", () => {
       }),
   );
 
-  // Regression in https://github.com/danieljvdm/effect-agent/commit/b66bdf89726c48f108c10172500c992e4ddf7686:
+  // Regression in https://github.com/yielded-dev/agent/commit/b66bdf89726c48f108c10172500c992e4ddf7686:
   // preserving every skipped check forced a fresh full audit after a blocker was dismissed.
   it.effect("reconciles a completed head after dismissal without another review", () =>
     Effect.gen(function* () {
@@ -509,7 +509,7 @@ describe("PR commit review checks", () => {
         ),
       );
       yield* test.run(manual);
-      // Regression in https://github.com/danieljvdm/effect-agent/commit/e2c70b01952088acaf73fbf4a5de86bf22d548ad:
+      // Regression in https://github.com/yielded-dev/agent/commit/e2c70b01952088acaf73fbf4a5de86bf22d548ad:
       // preserving the existing check left the earlier success visible.
       expect(test.writes.at(-1)?.body).toMatchObject({
         conclusion: "failure",
@@ -523,7 +523,7 @@ describe("PR commit review checks", () => {
     }),
   );
 
-  // Regression in https://github.com/danieljvdm/effect-agent/commit/e2c70b01952088acaf73fbf4a5de86bf22d548ad:
+  // Regression in https://github.com/yielded-dev/agent/commit/e2c70b01952088acaf73fbf4a5de86bf22d548ad:
   // sorting an undated incomplete attempt first allowed a successful status refresh.
   it.effect("blocks a status refresh when an incomplete attempt has no timestamp", () =>
     Effect.gen(function* () {

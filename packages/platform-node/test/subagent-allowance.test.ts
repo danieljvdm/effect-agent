@@ -1,24 +1,28 @@
-import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/node-durable-agent-runtime";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { DurableWorkerBinding } from "effect-agent/agent-registration";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
+import { NodeDurableAgentRuntime } from "@yielded/agent-platform-node/node-durable-agent-runtime";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import { DurableWorkerBinding } from "@yielded/agent/agent-registration";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
 import {
   DurableRuntimeFailpointError,
   type DurableRuntimeFailpointLocation,
-} from "effect-agent/durable-failpoint";
-import { ToolExecutionClass } from "effect-agent/durable-step";
-import { ThreadId, ToolCallId } from "effect-agent/identifiers";
-import { DefinitionDigests, Digest } from "effect-agent/records";
-import { childThreadIdFor } from "effect-agent/run-journal";
-import * as Subagent from "effect-agent/subagent";
-import { SubagentPolicy } from "effect-agent/subagent";
-import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
-import { ApprovalDecisionCommand, IdempotencyKey, Principal } from "effect-agent/submission-ledger";
-import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
+} from "@yielded/agent/durable-failpoint";
+import { ToolExecutionClass } from "@yielded/agent/durable-step";
+import { ThreadId, ToolCallId } from "@yielded/agent/identifiers";
+import { DefinitionDigests, Digest } from "@yielded/agent/records";
+import { childThreadIdFor } from "@yielded/agent/run-journal";
+import * as Subagent from "@yielded/agent/subagent";
+import { SubagentPolicy } from "@yielded/agent/subagent";
+import { SubagentReservationsMemoryLive } from "@yielded/agent/subagent-reservations";
+import {
+  ApprovalDecisionCommand,
+  IdempotencyKey,
+  Principal,
+} from "@yielded/agent/submission-ledger";
+import { ThreadRead, ThreadStore } from "@yielded/agent/thread-store";
+import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 
 const digest = Schema.decodeSync(Digest)("a".repeat(64));

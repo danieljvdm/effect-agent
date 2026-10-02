@@ -1,6 +1,6 @@
-import { createMessageDeliveryPendingIndex } from "@effect-agent/storage-sql/sql-message-delivery-store";
-import { createNativeReadIndexes } from "@effect-agent/storage-sql/sql-thread-native-reads";
 import { SqliteMigrator } from "@effect/sql-sqlite-do";
+import { createMessageDeliveryPendingIndex } from "@yielded/agent-storage-sql/sql-message-delivery-store";
+import { createNativeReadIndexes } from "@yielded/agent-storage-sql/sql-thread-native-reads";
 import { Effect } from "effect";
 import * as SqlClient from "effect/sql/SqlClient";
 

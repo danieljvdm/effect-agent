@@ -1,8 +1,8 @@
+import { ThreadId } from "@yielded/agent/identifiers";
+import { Principal } from "@yielded/agent/submission-ledger";
+import { WorkerError } from "@yielded/agent/worker";
+import { WorkerHostAuthorizer } from "@yielded/agent/worker-host";
 import { Effect, Layer, Schema } from "effect";
-import { ThreadId } from "effect-agent/identifiers";
-import { Principal } from "effect-agent/submission-ledger";
-import { WorkerError } from "effect-agent/worker";
-import { WorkerHostAuthorizer } from "effect-agent/worker-host";
 
 // This local example permits one user to manage workers from one conversation.
 export const principal = Schema.decodeSync(Principal)("travel-user");

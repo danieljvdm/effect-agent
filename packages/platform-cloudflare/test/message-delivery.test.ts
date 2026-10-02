@@ -1,9 +1,9 @@
+import { digestJson } from "@yielded/agent/digest";
+import { type AgentId } from "@yielded/agent/identifiers";
+import { MessageDeliveryStore, prepareMessageDelivery } from "@yielded/agent/message-delivery";
+import { ApprovalDecisionCommand } from "@yielded/agent/submission-ledger";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Clock, Effect } from "effect";
-import { digestJson } from "effect-agent/digest";
-import { type AgentId } from "effect-agent/identifiers";
-import { MessageDeliveryStore, prepareMessageDelivery } from "effect-agent/message-delivery";
-import { ApprovalDecisionCommand } from "effect-agent/submission-ledger";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vite-plus/test";
@@ -296,7 +296,7 @@ describe("Thread Object message maintenance", () => {
       expect(await scheduledAlarm(source)).toBeNull();
     }));
 
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/f90854ee893134df8022043a97544946ca4f1e25
+  // Regression: https://github.com/yielded-dev/agent/commit/f90854ee893134df8022043a97544946ca4f1e25
   // Wake-driven overlap is required while the source still owns its native budget.
   it("delivers new wakes during source work and stays dormant after retirement", () =>
     withThreads(async (source, destination, now, advance) => {

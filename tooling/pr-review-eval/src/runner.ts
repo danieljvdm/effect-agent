@@ -1,5 +1,5 @@
-import { type ReviewOutcome, type ReviewRequest } from "@effect-agent/pr-review/review";
-import { ReviewRepository } from "@effect-agent/pr-review/review-repository";
+import { type ReviewOutcome, type ReviewRequest } from "@yielded/agent-pr-review/review";
+import { ReviewRepository } from "@yielded/agent-pr-review/review-repository";
 import { Clock, DateTime, Effect, Layer, Result, Schema, Stream } from "effect";
 
 import {

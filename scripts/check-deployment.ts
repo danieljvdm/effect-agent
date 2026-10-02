@@ -20,7 +20,7 @@ export const checkDeployment = Effect.gen(function* () {
 
   for (const args of [
     ["run", "docs:deploy", "--help"],
-    ["run", "-F", "@effect-agent/example-travel-planner", "deploy", "--help"],
+    ["run", "-F", "@yielded/agent-example-travel-planner", "deploy", "--help"],
     [
       "exec",
       "bun",

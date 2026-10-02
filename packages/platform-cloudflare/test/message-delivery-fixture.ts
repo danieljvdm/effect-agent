@@ -1,10 +1,10 @@
-import { Context, Effect, Layer } from "effect";
 import {
   MessageDeliveryDriver,
   MessageDeliveryFailpoint,
   MessageDeliveryStore,
-} from "effect-agent/message-delivery";
-import { PreparedInputAdmission } from "effect-agent/prepared-input-admission";
+} from "@yielded/agent/message-delivery";
+import { PreparedInputAdmission } from "@yielded/agent/prepared-input-admission";
+import { Context, Effect, Layer } from "effect";
 import { DurableObjectState } from "effect-cf";
 
 import { ThreadObjectIdentity } from "../src/CloudflareBindings.ts";

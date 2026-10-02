@@ -1,3 +1,19 @@
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy, CompactionPolicy } from "@yielded/agent/agent-policy";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import { makeUsageBudget, UsageBudgetLimits } from "@yielded/agent/budget";
+import { ContextCompactor, type ContextCompaction } from "@yielded/agent/context-compactor";
+import { NewContext } from "@yielded/agent/context-tools";
+import { toRunBudgetHook } from "@yielded/agent/run-hooks";
+import {
+  RunContextPreparationPassthrough,
+  type RunCostEstimator,
+  type RunUsageDelta,
+} from "@yielded/agent/run-options";
+import * as Subagent from "@yielded/agent/subagent";
+import { SubagentPolicy } from "@yielded/agent/subagent";
+import { SubagentReservationsMemoryLive } from "@yielded/agent/subagent-reservations";
+import { ThreadHistory } from "@yielded/agent/thread-history";
 import {
   Effect,
   Layer,
@@ -8,22 +24,6 @@ import {
   SchemaTransformation,
   Stream,
 } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy, CompactionPolicy } from "effect-agent/agent-policy";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import { makeUsageBudget, UsageBudgetLimits } from "effect-agent/budget";
-import { ContextCompactor, type ContextCompaction } from "effect-agent/context-compactor";
-import { NewContext } from "effect-agent/context-tools";
-import { toRunBudgetHook } from "effect-agent/run-hooks";
-import {
-  RunContextPreparationPassthrough,
-  type RunCostEstimator,
-  type RunUsageDelta,
-} from "effect-agent/run-options";
-import * as Subagent from "effect-agent/subagent";
-import { SubagentPolicy } from "effect-agent/subagent";
-import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
-import { ThreadHistory } from "effect-agent/thread-history";
 import { type LanguageModel, type Model, Tool, Toolkit } from "effect/ai";
 
 import { reviewToolkit, reviewToolkitLayer } from "./internal/repository.ts";

@@ -1,5 +1,5 @@
+import { Agent } from "@yielded/agent";
 import { Schema } from "effect";
-import { Agent } from "effect-agent";
 import { Toolkit } from "effect/ai";
 
 import { Research } from "./delegation.ts";

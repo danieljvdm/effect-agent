@@ -5,12 +5,12 @@ description: Keep conversations across runs in one application Scope.
 
 <a id="in-memory"></a>
 
-Use `InMemory.layer` from `effect-agent` to share conversation history across runs:
+Use `InMemory.layer` from `@yielded/agent` to share conversation history across runs:
 
 ```ts twoslash
 import { planner } from "./node-agent.ts";
 // ---cut---
-import { AgentRuntime, InMemory } from "effect-agent";
+import { AgentRuntime, InMemory } from "@yielded/agent";
 import { Effect } from "effect";
 
 const conversation = Effect.gen(function* () {
@@ -42,13 +42,13 @@ history inspection.
 
 ## Canonical stores for tests and custom assemblies
 
-`@effect-agent/storage-memory` supplies implementations of the canonical
+`@yielded/agent-storage-memory` supplies implementations of the canonical
 `ThreadStore` and `SubmissionLedger` ports. These are useful for adapter tests and
 custom runtime assemblies. They are separate from the conversation store supplied
 by `InMemory.layer`; the submission ledger reports itself as non-durable.
 
 `MemoryThreadStoreLive`, imported from
-`@effect-agent/storage-memory/memory-thread-store`, provides `ThreadStore` and
+`@yielded/agent-storage-memory/memory-thread-store`, provides `ThreadStore` and
 requires a platform Crypto Layer. Providing it to `PersistentHistory.layer` uses
 the [whole successful-run commit policy](/guide/threads/#retain-completed-runs),
 while still keeping all records in memory.

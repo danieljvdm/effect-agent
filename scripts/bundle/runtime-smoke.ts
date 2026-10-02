@@ -1,6 +1,4 @@
-import { ScriptedModel } from "@effect-agent/testing/scripted-model";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
-import { Console, Effect, Layer, Ref, Schema } from "effect";
 import {
   Agent,
   AgentError,
@@ -11,17 +9,19 @@ import {
   Thread,
   ThreadHistory,
   PersistentHistory,
-} from "effect-agent";
-import * as DirectAgent from "effect-agent/agent";
-import { AgentInputError } from "effect-agent/agent-error";
-import * as DirectRuntime from "effect-agent/agent-runtime";
-import { IdGenerator as DirectIdGenerator } from "effect-agent/id-generator";
-import { RunId, ThreadId, TurnId } from "effect-agent/identifiers";
-import * as DirectInMemory from "effect-agent/in-memory";
-import { layer as persistentHistoryLayer } from "effect-agent/persistent-history";
-import * as DirectSubagent from "effect-agent/subagent";
-import * as DirectThread from "effect-agent/thread";
-import { layer as historyLayer } from "effect-agent/thread-history";
+} from "@yielded/agent";
+import { ScriptedModel } from "@yielded/agent-testing/scripted-model";
+import * as DirectAgent from "@yielded/agent/agent";
+import { AgentInputError } from "@yielded/agent/agent-error";
+import * as DirectRuntime from "@yielded/agent/agent-runtime";
+import { IdGenerator as DirectIdGenerator } from "@yielded/agent/id-generator";
+import { RunId, ThreadId, TurnId } from "@yielded/agent/identifiers";
+import * as DirectInMemory from "@yielded/agent/in-memory";
+import { layer as persistentHistoryLayer } from "@yielded/agent/persistent-history";
+import * as DirectSubagent from "@yielded/agent/subagent";
+import * as DirectThread from "@yielded/agent/thread";
+import { layer as historyLayer } from "@yielded/agent/thread-history";
+import { Console, Effect, Layer, Ref, Schema } from "effect";
 import { Model, Toolkit } from "effect/ai";
 
 import { loadRuntime } from "./lazy-module.ts";

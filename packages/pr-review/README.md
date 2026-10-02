@@ -1,4 +1,4 @@
-# @effect-agent/pr-review
+# @yielded/agent-pr-review
 
 A provider-neutral agent that reviews an exact base-to-head change using a complete change
 index, paged diffs, and immutable source tools. One conversation follows related behavior across

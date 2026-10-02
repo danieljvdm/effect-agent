@@ -1,22 +1,22 @@
-import type { PortRequest } from "@effect-agent/storage-cloudflare/port-protocol";
-import { Duration, Effect, Layer, Option, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { DurableWorkerBinding } from "effect-agent/agent-registration";
-import type { ThreadId, SubmissionId } from "effect-agent/identifiers";
-import { MessagingError } from "effect-agent/messaging";
-import { PeerAuthorizer, PeerRoutes } from "effect-agent/messaging-host";
-import * as Subagent from "effect-agent/subagent";
-import { SubagentGrant } from "effect-agent/subagent-contract";
-import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
-import { WorkerError } from "effect-agent/worker";
+import type { PortRequest } from "@yielded/agent-storage-cloudflare/port-protocol";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import { DurableWorkerBinding } from "@yielded/agent/agent-registration";
+import type { ThreadId, SubmissionId } from "@yielded/agent/identifiers";
+import { MessagingError } from "@yielded/agent/messaging";
+import { PeerAuthorizer, PeerRoutes } from "@yielded/agent/messaging-host";
+import * as Subagent from "@yielded/agent/subagent";
+import { SubagentGrant } from "@yielded/agent/subagent-contract";
+import { SubagentReservationsMemoryLive } from "@yielded/agent/subagent-reservations";
+import { WorkerError } from "@yielded/agent/worker";
 import {
   WorkerBudgetAuthorizer,
   WorkerConcurrencyResolver,
   WorkerHostAuthorizer,
   WorkerHostConfig,
   WorkerPolicyResolver,
-} from "effect-agent/worker-host";
+} from "@yielded/agent/worker-host";
+import { Duration, Effect, Layer, Option, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 
 import { TEST_DIGESTS, TEST_PRINCIPAL, finalParts } from "./fixtures.ts";

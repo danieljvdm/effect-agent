@@ -1,11 +1,11 @@
 import { expect, it } from "@effect/vitest";
+import { CodeExecutionHost, CodeExecutionResult, CodeExecutor } from "@yielded/agent/code-executor";
+import * as CodeMode from "@yielded/agent/code-mode";
+import { ToolExecutionClass } from "@yielded/agent/durable-step";
+import { SandboxImplementation } from "@yielded/agent/sandbox";
+import { ToolBroker } from "@yielded/agent/tool-broker";
+import { CurrentToolCatalog } from "@yielded/agent/tool-exposure";
 import { Context, Duration, Effect, Layer, Ref, Schema, Stream } from "effect";
-import { CodeExecutionHost, CodeExecutionResult, CodeExecutor } from "effect-agent/code-executor";
-import * as CodeMode from "effect-agent/code-mode";
-import { ToolExecutionClass } from "effect-agent/durable-step";
-import { SandboxImplementation } from "effect-agent/sandbox";
-import { ToolBroker } from "effect-agent/tool-broker";
-import { CurrentToolCatalog } from "effect-agent/tool-exposure";
 import { Tool, Toolkit } from "effect/ai";
 
 const Query = Tool.make("query_warehouse", {

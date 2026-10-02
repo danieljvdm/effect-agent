@@ -37,7 +37,7 @@ beforeAll(async () => {
       contents: `
 import { DurableObject } from "cloudflare:workers";
 import { SqliteClient } from "@effect/sql-sqlite-do";
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { ThreadObjectIdentity } from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
 import { Cause, Effect, Layer } from "effect";
 import { WorkerEnvironment } from "effect-cf";
 import { PlannerError } from "../src/domain.ts";

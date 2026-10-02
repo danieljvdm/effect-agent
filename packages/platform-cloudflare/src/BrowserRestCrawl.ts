@@ -1,4 +1,16 @@
 import {
+  PageCrawl,
+  PageCrawlLimitError,
+  PageCrawlProtocolError,
+  PageCrawlRateLimitedError,
+  PageCrawlRecord,
+  PageCrawlTerminalError,
+  type PageCrawlCrawl,
+  type PageCrawlError,
+  type PageCrawlRequest,
+} from "@yielded/agent/page-crawl";
+import { SandboxImplementation } from "@yielded/agent/sandbox";
+import {
   Duration,
   Effect,
   Layer,
@@ -10,18 +22,6 @@ import {
   Scope,
   Stream,
 } from "effect";
-import {
-  PageCrawl,
-  PageCrawlLimitError,
-  PageCrawlProtocolError,
-  PageCrawlRateLimitedError,
-  PageCrawlRecord,
-  PageCrawlTerminalError,
-  type PageCrawlCrawl,
-  type PageCrawlError,
-  type PageCrawlRequest,
-} from "effect-agent/page-crawl";
-import { SandboxImplementation } from "effect-agent/sandbox";
 import {
   HttpClient,
   HttpClientRequest,

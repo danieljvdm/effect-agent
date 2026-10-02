@@ -1,8 +1,8 @@
 ---
-"@effect-agent/platform-node": minor
-"@effect-agent/platform-cloudflare": minor
-"@effect-agent/testing": patch
-"effect-agent": minor
+"@yielded/agent-platform-node": minor
+"@yielded/agent-platform-cloudflare": minor
+"@yielded/agent-testing": patch
+"@yielded/agent": minor
 ---
 
 Add crash-safe terminal delivery Tools and final model responses, completion-capacity reservation, Run-scoped prompt provenance, and target-aware compaction.

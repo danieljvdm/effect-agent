@@ -42,10 +42,10 @@ export const socialImages = (): AstroIntegration => ({
             const image = new URL(meta("og:image"));
 
             cards.push({
-              title: meta("og:title").replace(/ \| Effect Agent$/, ""),
+              title: meta("og:title").replace(/ \| Yielded Agent$/, ""),
               description: meta("og:description"),
               url: meta("og:url"),
-              imagePath: image.pathname.slice(1),
+              imagePath: image.pathname.replace(/^\/agent\//, ""),
             });
           }
 

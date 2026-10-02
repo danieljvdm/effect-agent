@@ -1,9 +1,12 @@
+import type { DurableBindingFailure } from "@yielded/agent/agent-registration";
+import {
+  DurableAgentRuntime,
+  type DurableWorkerFailure,
+} from "@yielded/agent/durable-agent-runtime";
+import type { ThreadId } from "@yielded/agent/identifiers";
+import { SubmissionLedger } from "@yielded/agent/submission-ledger";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
 import { Effect, Queue, Stream } from "effect";
-import type { DurableBindingFailure } from "effect-agent/agent-registration";
-import { DurableAgentRuntime, type DurableWorkerFailure } from "effect-agent/durable-agent-runtime";
-import type { ThreadId } from "effect-agent/identifiers";
-import { SubmissionLedger } from "effect-agent/submission-ledger";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
 
 const PENDING_CAPACITY = 1_024;
 

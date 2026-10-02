@@ -1,15 +1,15 @@
 ---
-"@effect-agent/ai-decision": minor
-"@effect-agent/platform-cloudflare": patch
-"@effect-agent/platform-node": patch
-"@effect-agent/pr-review": patch
-"@effect-agent/sandbox-local": patch
-"@effect-agent/storage-cloudflare": patch
-"@effect-agent/storage-memory": patch
-"@effect-agent/storage-sqlite": patch
-"@effect-agent/testing": patch
-"@effect-agent/workflow": patch
-"effect-agent": patch
+"@yielded/agent-ai-decision": minor
+"@yielded/agent-platform-cloudflare": patch
+"@yielded/agent-platform-node": patch
+"@yielded/agent-pr-review": patch
+"@yielded/agent-sandbox-local": patch
+"@yielded/agent-storage-cloudflare": patch
+"@yielded/agent-storage-memory": patch
+"@yielded/agent-storage-sqlite": patch
+"@yielded/agent-testing": patch
+"@yielded/agent-workflow": patch
+"@yielded/agent": patch
 ---
 
 Require Effect rc.116 and replace the local decision and TypeSafe APIs with native `Decision`, `DecisionModel`, and `@effect/ai-typesafe`, retaining `AutoModel` for thread selection.

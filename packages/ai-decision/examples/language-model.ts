@@ -1,4 +1,4 @@
-import { LanguageModelDecisionModel } from "@effect-agent/ai-decision";
+import { LanguageModelDecisionModel } from "@yielded/agent-ai-decision";
 import { Effect, Schema } from "effect";
 import { Decision, DecisionModel } from "effect/ai";
 

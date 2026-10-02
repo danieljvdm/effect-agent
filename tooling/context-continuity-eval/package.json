@@ -1,5 +1,5 @@
 {
-  "name": "@effect-agent/example-context-continuity-eval",
+  "name": "@yielded/agent-example-context-continuity-eval",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,13 +10,13 @@
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@effect-agent/platform-cloudflare": "workspace:*",
-    "@effect-agent/platform-node": "workspace:*",
     "@effect/ai-openai": "catalog:",
     "@effect/platform-browser": "catalog:",
     "@effect/platform-node": "catalog:",
+    "@yielded/agent": "workspace:*",
+    "@yielded/agent-platform-cloudflare": "workspace:*",
+    "@yielded/agent-platform-node": "workspace:*",
     "effect": "catalog:",
-    "effect-agent": "workspace:*",
     "effect-cf": "catalog:"
   },
   "devDependencies": {

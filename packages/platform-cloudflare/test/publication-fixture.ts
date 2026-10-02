@@ -1,11 +1,11 @@
-import { Effect, Layer, Option, Schema, Stream } from "effect";
 import {
   type LifecyclePublication,
   LifecyclePublicationError,
   LifecyclePublicationHandler,
-} from "effect-agent/lifecycle-publication";
-import { RecoverySnapshotRequest, SubmissionLedger } from "effect-agent/submission-ledger";
-import { ThreadStore, ThreadTailRequest } from "effect-agent/thread-store";
+} from "@yielded/agent/lifecycle-publication";
+import { RecoverySnapshotRequest, SubmissionLedger } from "@yielded/agent/submission-ledger";
+import { ThreadStore, ThreadTailRequest } from "@yielded/agent/thread-store";
+import { Effect, Layer, Option, Schema, Stream } from "effect";
 
 import { ThreadPublication, DurableAlarmError } from "../src/Alarm.ts";
 import { DurableObjectContext, ThreadObjectIdentity } from "../src/CloudflareBindings.ts";

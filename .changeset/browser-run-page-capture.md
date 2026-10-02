@@ -1,5 +1,5 @@
 ---
-"@effect-agent/platform-cloudflare": patch
+"@yielded/agent-platform-cloudflare": patch
 ---
 
 Add the schema-first `PageCapture` port and conservative `WebCapture.make`/`WebCapture.makeExtract` Tools over an immutable, deny-by-default browser-request allowlist. Add native `BrowserRun` Quick Action Layers with bounded response streaming and a typed Workers AI authorization and accounting failure for structured extraction.

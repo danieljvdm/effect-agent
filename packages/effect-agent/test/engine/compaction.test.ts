@@ -1,21 +1,21 @@
 import { expect, layer } from "@effect/vitest";
-import { Cause, Context, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy, CompactionPolicy } from "effect-agent/agent-policy";
-import * as AgentRuntime from "effect-agent/agent-runtime";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy, CompactionPolicy } from "@yielded/agent/agent-policy";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
 import {
   CompactionError,
   ContextCompactor,
   type CompactionDecision,
-} from "effect-agent/context-compactor";
-import { IdGenerator } from "effect-agent/id-generator";
-import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
-import { type RunEvent } from "effect-agent/run-event";
+} from "@yielded/agent/context-compactor";
+import { IdGenerator } from "@yielded/agent/id-generator";
+import { ThreadId, RunId, TurnId } from "@yielded/agent/identifiers";
+import { type RunEvent } from "@yielded/agent/run-event";
 import {
   type RunCompactionCommit,
   type RunContextHook,
   type RunDurabilityHook,
-} from "effect-agent/run-options";
+} from "@yielded/agent/run-options";
+import { Cause, Context, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
 import { AiError, LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/ai";
 
 import {

@@ -1,18 +1,16 @@
-import { DoValueBoundExceeded } from "@effect-agent/storage-cloudflare/do-storage-error";
-import { DoStorageFailpoint } from "@effect-agent/storage-cloudflare/do-storage-failpoint";
+import { BrowserCrypto } from "@effect/platform-browser";
+import { SqliteClient } from "@effect/sql-sqlite-do";
+import { DoValueBoundExceeded } from "@yielded/agent-storage-cloudflare/do-storage-error";
+import { DoStorageFailpoint } from "@yielded/agent-storage-cloudflare/do-storage-failpoint";
 import {
   ledgerLayer,
   submissionLedgerLayer,
-} from "@effect-agent/storage-cloudflare/do-submission-ledger";
+} from "@yielded/agent-storage-cloudflare/do-submission-ledger";
 import {
   layer as threadStoreLayer,
   storageConfigLayer,
-} from "@effect-agent/storage-cloudflare/do-thread-store";
-import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing/do-storage-failpoint-testing";
-import { BrowserCrypto } from "@effect/platform-browser";
-import { SqliteClient } from "@effect/sql-sqlite-do";
-import { runInDurableObject } from "cloudflare:test";
-import { Cause, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
+} from "@yielded/agent-storage-cloudflare/do-thread-store";
+import { evictionFailpointHandler } from "@yielded/agent-storage-cloudflare/testing/do-storage-failpoint-testing";
 import {
   AdmissionRequest,
   AdmissionPolicyError,
@@ -29,9 +27,11 @@ import {
   SubmissionLookupByKey,
   IdempotencyKey,
   UnknownResolutionCommand,
-} from "effect-agent/submission-ledger";
-import { submissionLedgerConformanceCases } from "effect-agent/testing/submission-ledger-conformance";
-import { ThreadMaterialization, ThreadStore, ThreadTailRequest } from "effect-agent/thread-store";
+} from "@yielded/agent/submission-ledger";
+import { submissionLedgerConformanceCases } from "@yielded/agent/testing/submission-ledger-conformance";
+import { ThreadMaterialization, ThreadStore, ThreadTailRequest } from "@yielded/agent/thread-store";
+import { runInDurableObject } from "cloudflare:test";
+import { Cause, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
 import * as SqlClientService from "effect/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 

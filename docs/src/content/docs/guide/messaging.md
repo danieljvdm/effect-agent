@@ -60,5 +60,5 @@ Node's scoped delivery pump and Cloudflare's persisted alarms rediscover stored 
 after both Runs settle and wake hints are lost. During an active Cloudflare maintenance pass,
 message delivery continues alongside source execution, so a message can reach its destination
 before the source Run finishes. Progress still needs a functioning host and
-available capacity. The [canonical Cloudflare application](https://github.com/danieljvdm/effect-agent/tree/main/examples/travel-planner)
+available capacity. The [canonical Cloudflare application](https://github.com/yielded-dev/agent/tree/main/examples/travel-planner)
 provides the runnable application entrypoint.

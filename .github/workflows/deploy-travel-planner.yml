@@ -49,7 +49,7 @@ jobs:
         run: vp install --frozen-lockfile --ignore-scripts
 
       - name: Check application
-        run: vp run -F @effect-agent/example-travel-planner check
+        run: vp run -F @yielded/agent-example-travel-planner check
 
       - name: Test application
         working-directory: examples/travel-planner
@@ -76,7 +76,7 @@ jobs:
               exit 1
             fi
           done
-          vp run -F @effect-agent/example-travel-planner deploy --yes
+          vp run -F @yielded/agent-example-travel-planner deploy --yes
 
       - name: Enable traces with query-string redaction
         env:

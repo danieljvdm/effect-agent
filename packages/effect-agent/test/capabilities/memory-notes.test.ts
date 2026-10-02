@@ -1,8 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Clock, Effect, Layer, Ref, Schema, Stream } from "effect";
-import { DurableStep, DurableStepError } from "effect-agent/durable-step";
-import * as MemoryNamespace from "effect-agent/memory-namespace";
-import { MemoryAttribution } from "effect-agent/memory-reference";
+import { DurableStep, DurableStepError } from "@yielded/agent/durable-step";
+import * as MemoryNamespace from "@yielded/agent/memory-namespace";
+import { MemoryAttribution } from "@yielded/agent/memory-reference";
 import {
   type MemoryWrite,
   applyMemoryWrite,
@@ -13,7 +12,8 @@ import {
   MemoryScope,
   MemoryStorageError,
   MemoryWriter,
-} from "effect-agent/memory-store";
+} from "@yielded/agent/memory-store";
+import { Clock, Effect, Layer, Ref, Schema, Stream } from "effect";
 import { IdGenerator } from "effect/ai";
 import { TestClock } from "effect/testing";
 

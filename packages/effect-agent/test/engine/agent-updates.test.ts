@@ -1,8 +1,8 @@
 import { expect, layer } from "@effect/vitest";
+import * as Agent from "@yielded/agent/agent";
+import * as AgentUpdates from "@yielded/agent/agent-updates";
+import { IdempotencyKey } from "@yielded/agent/receipt";
 import { Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import * as AgentUpdates from "effect-agent/agent-updates";
-import { IdempotencyKey } from "effect-agent/receipt";
 import { LanguageModel, Model, type Prompt, type Response, Tool, Toolkit } from "effect/ai";
 
 import * as AgentRuntime from "../../src/engine/AgentRuntime.ts";

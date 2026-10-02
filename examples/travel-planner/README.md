@@ -66,7 +66,7 @@ For a local UI preview without cloud accounts or provider credentials, run:
 
 ```sh
 vp install
-vp run -F @effect-agent/example-travel-planner preview
+vp run -F @yielded/agent-example-travel-planner preview
 ```
 
 Open `https://127.0.0.1:4173` and accept the local certificate. Create an email account;
@@ -83,7 +83,7 @@ A raw `vp preview` does not provision these bindings and its session endpoint re
 503 when `AUTH` is missing.
 
 For the full application, configure [.env.example](.env.example) with development-owned
-credentials and use `vp run -F @effect-agent/example-travel-planner dev` from the repository
+credentials and use `vp run -F @yielded/agent-example-travel-planner dev` from the repository
 root. Alchemy supplies the resources declared in [alchemy.run.ts](alchemy.run.ts), including
 `AUTH` and `AUTH_EMAIL`. Authentication requires a canonical HTTPS `AUTH_ORIGIN`, a matching
 GitHub OAuth callback at `AUTH_ORIGIN/auth/github/callback`, a verified email sender, and

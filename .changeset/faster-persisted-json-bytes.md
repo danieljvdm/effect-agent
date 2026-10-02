@@ -1,5 +1,5 @@
 ---
-"effect-agent": patch
+"@yielded/agent": patch
 ---
 
 Reduce persistence-validation CPU for ASCII JSON while preserving byte and structure limits.

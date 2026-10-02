@@ -1,7 +1,9 @@
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
 import {
   NodeDurableAgentRuntime,
   type NodeDurableAgentRuntimeOptions,
-} from "@effect-agent/platform-node/node-durable-agent-runtime";
+} from "@yielded/agent-platform-node/node-durable-agent-runtime";
 import {
   docsCoordinatorConfidentialMarker,
   docsDocumentBodySecret,
@@ -16,16 +18,14 @@ import {
   researchCorpusDocumentIds,
   researchMissionRequest,
   summarizeCallId,
-} from "@effect-agent/testing/docs-researcher";
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
+} from "@yielded/agent-testing/docs-researcher";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import { ThreadId, ToolCallId } from "@yielded/agent/identifiers";
+import { type CanonicalRecordEnvelope } from "@yielded/agent/records";
+import { childThreadIdFor, runIdForSubmission } from "@yielded/agent/run-journal";
+import { IdempotencyKey } from "@yielded/agent/submission-ledger";
+import { ThreadRead, ThreadStore } from "@yielded/agent/thread-store";
 import { Effect, FileSystem, type PlatformError, Schema, Stream } from "effect";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { ThreadId, ToolCallId } from "effect-agent/identifiers";
-import { type CanonicalRecordEnvelope } from "effect-agent/records";
-import { childThreadIdFor, runIdForSubmission } from "effect-agent/run-journal";
-import { IdempotencyKey } from "effect-agent/submission-ledger";
-import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 
 // ---------------------------------------------------------------------------
 // Red-team suite: child exfiltration through the durable join.

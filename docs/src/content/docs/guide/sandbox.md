@@ -36,12 +36,12 @@ browser session lifetime.
 In your application, install the local adapter:
 
 ```sh
-bun add @effect-agent/sandbox-local@beta effect
+bun add @yielded/agent-sandbox-local@beta effect
 ```
 
 Keep framework packages at the [same release](/guide/getting-started/#installation-and-compatibility).
 
-`@effect-agent/sandbox-local` runs a child process on the current machine. It is useful for local
+`@yielded/agent-sandbox-local` runs a child process on the current machine. It is useful for local
 development and trusted automation. Every event identifies it as `unisolated`.
 
 ## Run a trusted local process
@@ -53,8 +53,8 @@ environment, then copies only those names. `LocalSandbox.layer` supplies the Nod
 ```ts twoslash
 // @types: node
 import { NodeRuntime } from "@effect/platform-node";
-import { NetworkDisabled, Sandbox, SandboxRequest } from "effect-agent/sandbox";
-import { LocalSandbox } from "@effect-agent/sandbox-local";
+import { NetworkDisabled, Sandbox, SandboxRequest } from "@yielded/agent/sandbox";
+import { LocalSandbox } from "@yielded/agent-sandbox-local";
 import { Console, Duration, Effect, Stream } from "effect";
 
 const request = SandboxRequest.make({

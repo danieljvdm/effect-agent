@@ -1,11 +1,11 @@
 import { SqliteClient } from "@effect/sql-sqlite-do";
-import { Effect, Layer, Schema } from "effect";
-import { MemoryStorageError, MemoryMutationFailpoint } from "effect-agent/memory-store";
+import { MemoryStorageError, MemoryMutationFailpoint } from "@yielded/agent/memory-store";
 import {
   memoryStoreLayerWithFailpoints,
   SqlMemoryLimits,
   SqlStorageOwner,
-} from "effect-agent/sql-memory-store";
+} from "@yielded/agent/sql-memory-store";
+import { Effect, Layer, Schema } from "effect";
 import * as SqlClientService from "effect/sql/SqlClient";
 
 import { ownedState } from "./internal/owned-state.ts";

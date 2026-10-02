@@ -1,11 +1,11 @@
-import { ScriptedModel } from "@effect-agent/testing/scripted-model";
+import { ScriptedModel } from "@yielded/agent-testing/scripted-model";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import { type DurableWorkerRequirements } from "@yielded/agent/durable-agent-runtime";
+import { RunContextPreparationPassthrough, type RunOptions } from "@yielded/agent/run-options";
+import { ThreadHistory } from "@yielded/agent/thread-history";
 import { Context, Effect, Layer, Schema, SchemaGetter, Scope } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import { type DurableWorkerRequirements } from "effect-agent/durable-agent-runtime";
-import { RunContextPreparationPassthrough, type RunOptions } from "effect-agent/run-options";
-import { ThreadHistory } from "effect-agent/thread-history";
 import { Model, Tool, Toolkit } from "effect/ai";
 
 type Equal<Left, Right> =

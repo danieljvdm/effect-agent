@@ -91,7 +91,7 @@ non-finite allowances. A run allowance never raises the definition's ceiling.
 
 ## Hierarchical usage budgets
 
-`effect-agent` can apply shared budgets in this order:
+`@yielded/agent` can apply shared budgets in this order:
 `global → tenant → agent → thread → run`.
 
 ```ts

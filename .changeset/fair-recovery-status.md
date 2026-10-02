@@ -1,10 +1,10 @@
 ---
-"effect-agent": patch
-"@effect-agent/storage-cloudflare": patch
-"@effect-agent/storage-memory": patch
-"@effect-agent/storage-sqlite": patch
-"@effect-agent/platform-cloudflare": patch
-"@effect-agent/platform-node": patch
+"@yielded/agent": patch
+"@yielded/agent-storage-cloudflare": patch
+"@yielded/agent-storage-memory": patch
+"@yielded/agent-storage-sqlite": patch
+"@yielded/agent-platform-cloudflare": patch
+"@yielded/agent-platform-node": patch
 ---
 
 Isolate Thread recovery faults with history-independent status and bounded retries, let Cloudflare dispatch fresh Threads while old cleanup is pending, and keep Node startup closed on blocked recovery. Preserve content-free storage diagnostics.

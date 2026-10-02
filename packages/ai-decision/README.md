@@ -1,11 +1,11 @@
-# @effect-agent/ai-decision
+# @yielded/agent-ai-decision
 
 Choose a native Effect language model once per thread with `AutoModel`. Follow-up runs retain
 that choice, while each child thread selects independently. The upstream `DecisionModel`
 service evaluates the application-approved catalog.
 
 ```ts
-import { AutoModel } from "@effect-agent/ai-decision";
+import { AutoModel } from "@yielded/agent-ai-decision";
 import { OpenAiLanguageModel } from "@effect/ai-openai";
 
 const ThreadModels = AutoModel.make({
@@ -38,8 +38,8 @@ that supports structured output. Provide your chosen model Layer to the adapter;
 and configuration remain application-owned. Its probabilities are LLM estimates, not calibrated
 confidence scores. Native validation rejects invalid distributions; retries and failover are explicit.
 See the [language-model example](examples/language-model.ts) and
-[provider setup](https://effect-agent.com/reference/decision-models#language-model-adapter).
+[provider setup](https://yielded.dev/agent/reference/decision-models#language-model-adapter).
 
-See the [reference](https://effect-agent.com/reference/decision-models#automodel) for ownership,
+See the [reference](https://yielded.dev/agent/reference/decision-models#automodel) for ownership,
 configuration, and migration details, or the runnable [decision](examples/decision.ts),
 [direct client](examples/evaluate.ts), and [tool](examples/tool.ts) examples.

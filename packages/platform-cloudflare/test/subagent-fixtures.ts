@@ -1,11 +1,11 @@
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import { DurableWorkerBinding, type ResolvedBinding } from "@yielded/agent/agent-registration";
+import { DefinitionDigests, Digest } from "@yielded/agent/records";
+import * as Subagent from "@yielded/agent/subagent";
+import { SubagentPolicy } from "@yielded/agent/subagent";
+import { SubagentReservationsMemoryLive } from "@yielded/agent/subagent-reservations";
 import { Duration, Effect, Layer, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { DurableWorkerBinding, type ResolvedBinding } from "effect-agent/agent-registration";
-import { DefinitionDigests, Digest } from "effect-agent/records";
-import * as Subagent from "effect-agent/subagent";
-import { SubagentPolicy } from "effect-agent/subagent";
-import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import { LanguageModel, Model, Toolkit, type Response } from "effect/ai";
 
 import {

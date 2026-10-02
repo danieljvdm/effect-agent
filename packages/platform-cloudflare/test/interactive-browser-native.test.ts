@@ -1,13 +1,12 @@
 import { createServer } from "node:http";
 
+import { expect, it } from "@effect/vitest";
 import {
   BrowserRunInteractiveBinding,
   BrowserRunPageObservation,
   browserRunInteractiveLayer,
   isBrowserRunUndispatchedActionError,
-} from "@effect-agent/platform-cloudflare/interactive-browser";
-import { expect, it } from "@effect/vitest";
-import { Config, Effect, Layer, Logger, Option, Schema } from "effect";
+} from "@yielded/agent-platform-cloudflare/interactive-browser";
 import {
   BrowserClickRequest,
   BrowserFillRequest,
@@ -15,7 +14,8 @@ import {
   BrowserReadTextRequest,
   InteractiveBrowser,
   InteractiveBrowserPolicy,
-} from "effect-agent/interactive-browser";
+} from "@yielded/agent/interactive-browser";
+import { Config, Effect, Layer, Logger, Option, Schema } from "effect";
 import nativePuppeteer, { type ElementHandle as NativeElementHandle } from "puppeteer-core";
 import { vi } from "vite-plus/test";
 
@@ -162,7 +162,7 @@ it.live(
         if (size === undefined || cart === undefined)
           return yield* Effect.die("Missing product controls");
 
-        // https://github.com/danieljvdm/effect-agent/commit/a20fb79eb86f5b279460cfbc23021c765b6fa2c5
+        // https://github.com/yielded-dev/agent/commit/a20fb79eb86f5b279460cfbc23021c765b6fa2c5
         yield* sdkCall(() =>
           page.$eval("#cart-target", (element) => {
             element.setAttribute("data-guard-clicks", "0");
@@ -195,7 +195,7 @@ it.live(
           ),
         ).toBe("0");
 
-        // https://github.com/danieljvdm/effect-agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
+        // https://github.com/yielded-dev/agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
         for (const update of [
           { property: "checked", value: true, restore: false },
           { property: "type", value: "password", restore: "radio" },

@@ -1,6 +1,6 @@
 ---
-"effect-agent": patch
-"@effect-agent/platform-cloudflare": patch
+"@yielded/agent": patch
+"@yielded/agent-platform-cloudflare": patch
 ---
 
 Export privacy-safe canonical Tool spans and bounded terminal logs from the engine, including

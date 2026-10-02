@@ -63,7 +63,7 @@ interface EntryPointAudit {
   readonly violations: ReadonlyArray<PurityViolation>;
 }
 
-const TEST_ONLY_PACKAGE = "@effect-agent/testing";
+const TEST_ONLY_PACKAGE = "@yielded/agent-testing";
 
 const bannedRuntimeDependencies = new Set([TEST_ONLY_PACKAGE, "@effect/vitest", "vitest"]);
 
@@ -78,7 +78,7 @@ const testOnlyExternalReason = (specifier: string): string | undefined => {
     return "imports a test runner";
   }
   if (specifier === TEST_ONLY_PACKAGE || specifier.startsWith(`${TEST_ONLY_PACKAGE}/`)) {
-    return "imports @effect-agent/testing";
+    return "imports @yielded/agent-testing";
   }
 
   return undefined;
@@ -88,7 +88,7 @@ const testOnlyModuleReason = (sourcePath: string): string | undefined => {
   const normalized = sourcePath.replaceAll("\\", "/");
 
   if (normalized.includes("/packages/testing/")) {
-    return "bundles the @effect-agent/testing package";
+    return "bundles the @yielded/agent-testing package";
   }
   if (/(^|\/)(?:test|tests|testing|__tests__|fixtures?)(?:\/|\.|$)/i.test(normalized)) {
     return "bundles a test or fixture module";
@@ -104,9 +104,9 @@ const testOnlyModuleReason = (sourcePath: string): string | undefined => {
 };
 
 const isWorkspaceImport = (specifier: string): boolean =>
-  specifier === "effect-agent" ||
-  specifier.startsWith("effect-agent/") ||
-  specifier.startsWith("@effect-agent/");
+  specifier === "@yielded/agent" ||
+  specifier.startsWith("@yielded/agent/") ||
+  specifier.startsWith("@yielded/agent-");
 
 const displayNameFor = (packageName: string, exportPath: string): string =>
   exportPath === "." ? packageName : `${packageName}${exportPath.slice(1)}`;

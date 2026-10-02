@@ -108,7 +108,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_WORKERS_SUBDOMAIN: ${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}
           BROWSER_RENDERING_API_TOKEN: ${{ secrets.BROWSER_RENDERING_API_TOKEN }}
-        run: ./node_modules/.bin/vp run --no-cache -F @effect-agent/example-browser-run-worker-proof prove:live
+        run: ./node_modules/.bin/vp run --no-cache -F @yielded/agent-example-browser-run-worker-proof prove:live
 
       - name: Retry recorded checkout cleanup
         if: ${{ always() && env.CHECKOUT_RUN_ID != '' }}
@@ -125,7 +125,7 @@ jobs:
           set -euo pipefail
           report="tooling/browser-run-worker-proof/.checkout-proof/$CHECKOUT_RUN_ID/report.json"
           if [[ -f "$report" && "$(jq -r '.cleanup' "$report")" != confirmed ]]; then
-            ./node_modules/.bin/vp run --no-cache -F @effect-agent/example-browser-run-worker-proof prove:live
+            ./node_modules/.bin/vp run --no-cache -F @yielded/agent-example-browser-run-worker-proof prove:live
           fi
 
       - name: Preserve checkout gate evidence

@@ -1,6 +1,5 @@
-import { Context, Crypto, Effect, Layer, Option, PubSub, Ref, Schema, Stream } from "effect";
-import { digestCanonicalBatch, EMPTY_TAIL_DIGEST } from "effect-agent/digest";
-import { ThreadId } from "effect-agent/identifiers";
+import { digestCanonicalBatch, EMPTY_TAIL_DIGEST } from "@yielded/agent/digest";
+import { ThreadId } from "@yielded/agent/identifiers";
 import {
   type ProducerEpoch,
   type RecordId,
@@ -9,12 +8,12 @@ import {
   ObservationOffset,
   type BatchId,
   type Digest,
-} from "effect-agent/records";
+} from "@yielded/agent/records";
 import {
   runIdForSubmission,
   subagentLineageRecordId,
   workerOriginRecordId,
-} from "effect-agent/run-journal";
+} from "@yielded/agent/run-journal";
 import {
   type ThreadCheckpoint,
   ThreadPeerCountRequest,
@@ -41,7 +40,8 @@ import {
   SaveRecoveryCheckpointRequest,
   type ThreadRecoveryCheckpoints,
   MAX_THREAD_EXPORT_RECORDS,
-} from "effect-agent/thread-store";
+} from "@yielded/agent/thread-store";
+import { Context, Crypto, Effect, Layer, Option, PubSub, Ref, Schema, Stream } from "effect";
 import { Base64 } from "effect/encoding";
 
 const MAX_THREADS = 256;

@@ -5,7 +5,7 @@ description: Compose durable agents inside Effect Workflows and recover pending 
 
 <a id="effect-workflows"></a>
 
-`@effect-agent/workflow` drives the durable agent runtime through upstream Effect Workflow.
+`@yielded/agent-workflow` drives the durable agent runtime through upstream Effect Workflow.
 Supply a `WorkflowEngine` Layer, durable dispatch storage, and a host-owned repair trigger.
 The agent definitions, registrations, and durable recovery rules stay the same when you
 replace the engine Layer.
@@ -17,7 +17,7 @@ Cluster runner.
 ## Install
 
 ```sh
-bun add @effect-agent/workflow@beta effect
+bun add @yielded/agent-workflow@beta effect
 ```
 
 Keep framework packages at one release and use compatible
@@ -32,8 +32,8 @@ its Schema-decoded output. A pending Agent suspends the handler through Effect's
 fiber alive in the parent.
 
 ```ts twoslash
-import { Agent } from "effect-agent";
-import { AgentWorkflow } from "@effect-agent/workflow";
+import { Agent } from "@yielded/agent";
+import { AgentWorkflow } from "@yielded/agent-workflow";
 import { Schema } from "effect";
 import { Toolkit } from "effect/ai";
 import { Workflow } from "effect/workflow";
@@ -103,7 +103,7 @@ ordinary Layer composition. The Workflow handler passes only a Thread ID to
 `processThreadHead`; it cannot replace captured model or tool services on an execution.
 
 Keep `deploymentId` identical in both runtime and Workflow host options. The optional
-`workflowName` is a stable versioned prefix, defaulting to `effect-agent/submission/v1`.
+`workflowName` is a stable versioned prefix, defaulting to `@yielded/agent/submission/v1`.
 The native name appends `/deployment/<length>:<deploymentId>`. Keep one host registration per
 deployment, name, and engine. Changing that identity leaves the old dispatch obligations for
 their original host to repair.
@@ -165,7 +165,7 @@ Closing the host Scope stops its repair trigger and closes acquired resources.
 ## Node.js with SQLite
 
 ```sh
-bun add @effect-agent/platform-node@beta effect
+bun add @yielded/agent-platform-node@beta effect
 ```
 
 This example reuses `node-agent.ts` from the [Node.js guide](/platforms/node/#create-an-agent),
@@ -177,12 +177,12 @@ persist in SQL. The dispatch store shares that SQL connection. Canonical agent h
 submission ledger use a separate SQLite file.
 
 ```ts twoslash
-import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/node-durable-agent-runtime";
+import { NodeDurableAgentRuntime } from "@yielded/agent-platform-node/node-durable-agent-runtime";
 import {
   NodeWorkflowRepairTrigger,
   SqlWorkflowDispatchStore,
-} from "@effect-agent/platform-node/node-workflow";
-import { WorkflowAgentHost } from "@effect-agent/workflow/workflow-agent-host";
+} from "@yielded/agent-platform-node/node-workflow";
+import { WorkflowAgentHost } from "@yielded/agent-workflow/workflow-agent-host";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Layer } from "effect";

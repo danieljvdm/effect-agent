@@ -1,35 +1,34 @@
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
-import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
-import { ObligationThresholds, RetryCommand } from "effect-agent/admin";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
+import { MemorySubmissionLedgerLive } from "@yielded/agent-storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@yielded/agent-storage-memory/memory-thread-store";
+import { ObligationThresholds, RetryCommand } from "@yielded/agent/admin";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
 import {
   DurableAgentRuntime,
   DurableRuntimeConfig,
   type DurableSubmitOptions,
-} from "effect-agent/durable-agent-runtime";
+} from "@yielded/agent/durable-agent-runtime";
 import {
   DurableRuntimeFailpointError,
   type DurableRuntimeFailpointLocation,
-} from "effect-agent/durable-failpoint";
-import { ThreadId, ToolCallId } from "effect-agent/identifiers";
+} from "@yielded/agent/durable-failpoint";
+import { ThreadId, ToolCallId } from "@yielded/agent/identifiers";
 import {
   OperationAuthorizer,
   OperationDenied,
   type AuthorizedOperation,
   type OperationAuthorizationRequest,
   type OperationAuthorizerService,
-} from "effect-agent/operation-authorizer";
+} from "@yielded/agent/operation-authorizer";
 import {
   CanonicalRecordEnvelope,
   DefinitionDigests,
   DeploymentId,
   Digest,
   ProducerId,
-} from "effect-agent/records";
+} from "@yielded/agent/records";
 import {
   AbortCommand,
   ApprovalDecisionCommand,
@@ -42,11 +41,12 @@ import {
   SubmissionLookupByKey,
   SubmissionLookupById,
   UnknownResolutionCommand,
-} from "effect-agent/submission-ledger";
-import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
-import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
-import { ToolReconciler } from "effect-agent/tool-reconciler";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
+} from "@yielded/agent/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "@yielded/agent/testing/durable-failpoint-test-control";
+import { ThreadRead, ThreadStore } from "@yielded/agent/thread-store";
+import { ToolReconciler } from "@yielded/agent/tool-reconciler";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
+import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));

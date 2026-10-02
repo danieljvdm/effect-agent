@@ -1,6 +1,6 @@
 ---
-"@effect-agent/platform-cloudflare": minor
-"effect-agent": patch
+"@yielded/agent-platform-cloudflare": minor
+"@yielded/agent": patch
 ---
 
 Expose host-supplied model-context preparation through Cloudflare Thread Object options

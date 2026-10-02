@@ -1,6 +1,6 @@
 ---
-"effect-agent": minor
-"@effect-agent/platform-cloudflare": minor
+"@yielded/agent": minor
+"@yielded/agent-platform-cloudflare": minor
 ---
 
 Replace protected browser passes with application-owned Cloudflare sessions, native Puppeteer actions, and authorized credential filling.

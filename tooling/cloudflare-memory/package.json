@@ -1,5 +1,5 @@
 {
-  "name": "@effect-agent/example-cloudflare-memory",
+  "name": "@yielded/agent-example-cloudflare-memory",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -9,11 +9,11 @@
     "measure:heap": "node --experimental-transform-types src/heap-main.ts"
   },
   "dependencies": {
-    "@effect-agent/platform-cloudflare": "workspace:*",
-    "@effect-agent/storage-cloudflare": "workspace:*",
     "@effect/platform-node": "catalog:",
+    "@yielded/agent": "workspace:*",
+    "@yielded/agent-platform-cloudflare": "workspace:*",
+    "@yielded/agent-storage-cloudflare": "workspace:*",
     "effect": "catalog:",
-    "effect-agent": "workspace:*",
     "effect-cf": "catalog:"
   },
   "devDependencies": {

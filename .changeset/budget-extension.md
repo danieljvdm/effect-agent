@@ -1,5 +1,5 @@
 ---
-"effect-agent": patch
+"@yielded/agent": patch
 ---
 
 Budget extension (D-037, ADR-0019 S3, RUN-021/SUB-034): `RunOptions` gains tightening-only

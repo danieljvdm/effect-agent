@@ -1,11 +1,11 @@
 import { expect, layer } from "@effect/vitest";
+import * as Agent from "@yielded/agent/agent";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import { IdGenerator } from "@yielded/agent/id-generator";
+import { RunId, ThreadId, TurnId } from "@yielded/agent/identifiers";
+import { RunContextPreparationPassthrough, type RunUsageDelta } from "@yielded/agent/run-options";
+import { ThreadHistory } from "@yielded/agent/thread-history";
 import { Cause, Effect, Exit, Layer, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import { IdGenerator } from "effect-agent/id-generator";
-import { RunId, ThreadId, TurnId } from "effect-agent/identifiers";
-import { RunContextPreparationPassthrough, type RunUsageDelta } from "effect-agent/run-options";
-import { ThreadHistory } from "effect-agent/thread-history";
 import { LanguageModel, Model, type Prompt, type Response, Tool, Toolkit } from "effect/ai";
 
 let threadSequence = 0;

@@ -52,14 +52,14 @@ type BundleReport = typeof BundleReport.Type;
 // aliased only in the scratch manifests so renamed modules remain comparable.
 // New modules still have no historical baseline and never count as a saving.
 const fixtures = [
-  { name: "agent-root", requires: ["effect-agent"] },
-  { name: "agent-module", requires: ["effect-agent/agent"] },
-  { name: "runtime-root", requires: ["effect-agent"] },
-  { name: "runtime-module", requires: ["effect-agent/agent-runtime"] },
-  { name: "in-memory-root", requires: ["effect-agent/in-memory"] },
-  { name: "in-memory-module", requires: ["effect-agent/in-memory"] },
-  { name: "lazy-root", requires: ["effect-agent"] },
-  { name: "lazy-module", requires: ["effect-agent/agent", "effect-agent/agent-runtime"] },
+  { name: "agent-root", requires: ["@yielded/agent"] },
+  { name: "agent-module", requires: ["@yielded/agent/agent"] },
+  { name: "runtime-root", requires: ["@yielded/agent"] },
+  { name: "runtime-module", requires: ["@yielded/agent/agent-runtime"] },
+  { name: "in-memory-root", requires: ["@yielded/agent/in-memory"] },
+  { name: "in-memory-module", requires: ["@yielded/agent/in-memory"] },
+  { name: "lazy-root", requires: ["@yielded/agent"] },
+  { name: "lazy-module", requires: ["@yielded/agent/agent", "@yielded/agent/agent-runtime"] },
 ];
 
 // Effect has no compression platform service. Keep Node's zlib at this typed

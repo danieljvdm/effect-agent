@@ -1,3 +1,4 @@
+import { describe, expect, it } from "@effect/vitest";
 import {
   makeReviewer,
   ReviewChange,
@@ -7,14 +8,13 @@ import {
   ReviewResolution,
   ReviewRequest,
   ReviewUsage,
-} from "@effect-agent/pr-review/review";
+} from "@yielded/agent-pr-review/review";
 import {
   ReviewContextError,
   ReviewFileList,
   ReviewRepository,
   ReviewSource,
-} from "@effect-agent/pr-review/review-repository";
-import { describe, expect, it } from "@effect/vitest";
+} from "@yielded/agent-pr-review/review-repository";
 import { Deferred, Effect, Exit, Fiber, Layer, Logger, Ref, Schema, Stream, Struct } from "effect";
 import {
   type Tool,

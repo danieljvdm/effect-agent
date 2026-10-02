@@ -1,9 +1,9 @@
 ---
-"@effect-agent/workflow": minor
-"@effect-agent/platform-node": minor
-"@effect-agent/platform-cloudflare": minor
-"@effect-agent/testing": minor
-"effect-agent": minor
+"@yielded/agent-workflow": minor
+"@yielded/agent-platform-node": minor
+"@yielded/agent-platform-cloudflare": minor
+"@yielded/agent-testing": minor
+"@yielded/agent": minor
 ---
 
 Run existing registered agents through an application-supplied Effect Workflow engine with durable dispatch repair. Add SQLite dispatch storage, a scoped Node repair trigger, and bounded durable processing with attempt-scoped ownership release.

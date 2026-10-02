@@ -53,8 +53,8 @@ Host policy can use store-level reads without acquiring `DurableAgentRuntime`:
 
 ```ts twoslash
 import { Effect } from "effect";
-import type { ThreadId } from "effect-agent/identifiers";
-import * as ThreadStore from "effect-agent/thread-store";
+import type { ThreadId } from "@yielded/agent/identifiers";
+import * as ThreadStore from "@yielded/agent/thread-store";
 
 const outstanding = Effect.fn("outstanding")(function* (threadId: ThreadId) {
   return yield* ThreadStore.readOutstanding({ threadId, limit: 4096 });
@@ -88,7 +88,7 @@ read, not an authorization grant. Custom ThreadStore adapters must implement thi
 deploy matching Cloudflare client and owner packages for its read-only port protocol.
 
 Use the existing `submissionInputRecordId` / `submissionSettlementRecordId` exports from
-`effect-agent/submission-ledger`, or these `effect-agent/run-journal` locators:
+`@yielded/agent/submission-ledger`, or these `@yielded/agent/run-journal` locators:
 
 - `workerInputRecordId(messageId)` and `firstWorkerInputRecordId(worker)` for source reservations,
   including before child admission and after retirement;
@@ -135,8 +135,8 @@ sends no alerts.
 After authorization, abort a submission with:
 
 ```ts twoslash
-import { AbortCommand } from "effect-agent/submission-ledger";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
+import { AbortCommand } from "@yielded/agent/submission-ledger";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
 import { Effect } from "effect";
 
 const abortSubmission = Effect.fn("abortSubmission")(function* (command: AbortCommand) {
@@ -189,8 +189,8 @@ stream by submission or run identifier. Joined input shares its host run, while 
 record keeps the original submission identifier.
 
 ```ts
-import { DurableAgentRuntime, type Receipt } from "effect-agent/durable-agent-runtime";
-import { type ObservationOffset } from "effect-agent/records";
+import { DurableAgentRuntime, type Receipt } from "@yielded/agent/durable-agent-runtime";
+import { type ObservationOffset } from "@yielded/agent/records";
 import { Effect, Stream } from "effect";
 
 const observeOutcome = (receipt: Receipt, after?: ObservationOffset) =>
@@ -261,7 +261,7 @@ old local producer epochs automatically.
 
 ## Authorization and isolation
 
-Put each runtime storage domain behind authenticated ingress. Effect Agent provides no tenant
+Put each runtime storage domain behind authenticated ingress. Yielded Agent provides no tenant
 authentication or row-level tenant isolation. Receipts, IDs, principal strings, and audit authors
 identify records. They grant no access.
 
@@ -346,8 +346,8 @@ together, pre-arms recovery before admission, and fences alarm acknowledgements 
 Storage failure that prevents alarm repair needs a later wake or operator action after storage
 recovers.
 
-See the compiling [Node](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-node/test/fixtures/scheduling-example.ts)
-and [Cloudflare](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-cloudflare/examples/scheduling.ts)
+See the compiling [Node](https://github.com/yielded-dev/agent/blob/main/packages/platform-node/test/fixtures/scheduling-example.ts)
+and [Cloudflare](https://github.com/yielded-dev/agent/blob/main/packages/platform-cloudflare/examples/scheduling.ts)
 examples.
 
 ## Event subscriptions
@@ -490,7 +490,7 @@ The native multiplexer processes at most 16 alarms per invocation and durably re
 independently, so a failed or unknown extension cannot block the subscription driver. Installing
 handlers reserves eight minutes of the twelve-minute invocation budget for ancillary work; native
 driver limits must fit the remaining four minutes. Unknown,
-ambiguous, malformed and reserved `effect-agent/` tags fail closed and are reported. A replacement
+ambiguous, malformed and reserved `@yielded/agent/` tags fail closed and are reported. A replacement
 alarm survives acknowledgement of its earlier version. The host owns external-effect idempotency,
 uncertainty, payloads and transactional prearming; this extension defines no provider scheduler.
 
@@ -555,13 +555,13 @@ Node uses a Scope-owned indexed polling driver. Cloudflare commits work and requ
 together and re-arms after failed passes. If storage prevents both mutation and alarm repair,
 restore storage and send a new wake or intervene as an operator.
 
-See the compiling [Node](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-node/test/fixtures/subscriptions-example.ts)
-and [Cloudflare](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-cloudflare/examples/subscriptions.ts)
+See the compiling [Node](https://github.com/yielded-dev/agent/blob/main/packages/platform-node/test/fixtures/subscriptions-example.ts)
+and [Cloudflare](https://github.com/yielded-dev/agent/blob/main/packages/platform-cloudflare/examples/subscriptions.ts)
 examples.
 
 ### GitHub workflow run completion
 
-Import GitHub integration from `effect-agent/git-hub-workflow-source`.
+Import GitHub integration from `@yielded/agent/git-hub-workflow-source`.
 `makeGitHubWorkflowRunSource` watches one repository, run ID, attempt, and expected head SHA. It
 reports successful and unsuccessful completion. It does not aggregate every check for a commit.
 

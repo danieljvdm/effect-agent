@@ -1,11 +1,11 @@
 {
-  "name": "@effect-agent/ai-decision",
+  "name": "@yielded/agent-ai-decision",
   "version": "0.1.0-beta.165",
   "description": "Native Effect decision adapters and thread-owned automatic model selection.",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/danieljvdm/effect-agent.git",
+    "url": "git+https://github.com/yielded-dev/agent.git",
     "directory": "packages/ai-decision"
   },
   "files": [

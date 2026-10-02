@@ -1,12 +1,12 @@
-import * as PostgresStorage from "@effect-agent/storage-postgres/postgres-storage";
 import { NodeCrypto } from "@effect/platform-node";
 import { PgClient } from "@effect/sql-pg";
 import { expect, it } from "@effect/vitest";
+import * as PostgresStorage from "@yielded/agent-storage-postgres/postgres-storage";
+import { ActivityProcessorStore } from "@yielded/agent/activity-store";
+import { SubscriptionStore } from "@yielded/agent/subscription";
+import { subscriptionConformancePartition } from "@yielded/agent/testing/subscription-store-conformance";
+import { ThreadMaterialization, ThreadStore } from "@yielded/agent/thread-store";
 import { Effect, Layer, Redacted, Result, Schema, String } from "effect";
-import { ActivityProcessorStore } from "effect-agent/activity-store";
-import { SubscriptionStore } from "effect-agent/subscription";
-import { subscriptionConformancePartition } from "effect-agent/testing/subscription-store-conformance";
-import { ThreadMaterialization, ThreadStore } from "effect-agent/thread-store";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { withTemporaryDatabase } from "./harness.ts";

@@ -1,7 +1,6 @@
-import { Cause, Clock, Context, Effect, Layer, Option, Predicate, Schema, Stream } from "effect";
-import type { DurableRuntimeFailpoint } from "effect-agent/durable-failpoint";
-import { LifecyclePublicationError } from "effect-agent/lifecycle-publication";
-import { MessageDeliveryStore, MessageDeliveryError } from "effect-agent/message-delivery";
+import type { DurableRuntimeFailpoint } from "@yielded/agent/durable-failpoint";
+import { LifecyclePublicationError } from "@yielded/agent/lifecycle-publication";
+import { MessageDeliveryStore, MessageDeliveryError } from "@yielded/agent/message-delivery";
 import {
   AdmissionIndeterminate,
   AdmissionConflict,
@@ -15,7 +14,7 @@ import {
   SubmissionLookupById,
   type SubmissionLookupByKey,
   type SubmissionSnapshot,
-} from "effect-agent/submission-ledger";
+} from "@yielded/agent/submission-ledger";
 import {
   AppendConflict,
   ThreadMaterialization,
@@ -23,13 +22,14 @@ import {
   ThreadStore,
   ThreadStoreError,
   FenceRejected,
-} from "effect-agent/thread-store";
-import type { WakeScheduler } from "effect-agent/wake-scheduler";
+} from "@yielded/agent/thread-store";
+import type { WakeScheduler } from "@yielded/agent/wake-scheduler";
 import {
   admitWorker,
   WorkerAdmissionPort,
   WorkerAdmissionFailure,
-} from "effect-agent/worker-admission";
+} from "@yielded/agent/worker-admission";
+import { Cause, Clock, Context, Effect, Layer, Option, Predicate, Schema, Stream } from "effect";
 
 import {
   WorkerAdmitCall,

@@ -1,6 +1,6 @@
 ---
-"@effect-agent/storage-postgres": patch
-"@effect-agent/storage-sql": patch
+"@yielded/agent-storage-postgres": patch
+"@yielded/agent-storage-sql": patch
 ---
 
 Compose PostgreSQL storage with an application-provided Effect SQL client and Crypto layer, preserving native connection pooling, codecs, and schema defaults.

@@ -1,11 +1,11 @@
-import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
-import type { CanonicalRecordEnvelope } from "effect-agent/records";
-import { CanonicalSequence } from "effect-agent/records";
+import type { CanonicalRecordEnvelope } from "@yielded/agent/records";
+import { CanonicalSequence } from "@yielded/agent/records";
 import {
   ThreadProjectionError,
   ThreadProjectionMaintenance,
-} from "effect-agent/thread-projection-maintenance";
-import { ThreadRead, ThreadStore, ThreadTailRequest } from "effect-agent/thread-store";
+} from "@yielded/agent/thread-projection-maintenance";
+import { ThreadRead, ThreadStore, ThreadTailRequest } from "@yielded/agent/thread-store";
+import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
 
 import { ThreadHostMaintenance, type ThreadHostMaintenanceLane } from "../src/Alarm.ts";

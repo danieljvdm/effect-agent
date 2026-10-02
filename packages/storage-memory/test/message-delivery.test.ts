@@ -1,10 +1,15 @@
-import { memoryMessageDeliveryStoreLayer } from "@effect-agent/storage-memory/memory-message-delivery-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Crypto, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
-import { digestJson } from "effect-agent/digest";
-import { Receipt } from "effect-agent/durable-agent-runtime";
-import { AgentId, ReceiptId, SettlementId, SubmissionId, ThreadId } from "effect-agent/identifiers";
+import { memoryMessageDeliveryStoreLayer } from "@yielded/agent-storage-memory/memory-message-delivery-store";
+import { digestJson } from "@yielded/agent/digest";
+import { Receipt } from "@yielded/agent/durable-agent-runtime";
+import {
+  AgentId,
+  ReceiptId,
+  SettlementId,
+  SubmissionId,
+  ThreadId,
+} from "@yielded/agent/identifiers";
 import {
   MessageDeliveryDriver,
   MessageDeliveryStore,
@@ -12,18 +17,19 @@ import {
   type MessageDeliveryKey,
   type MessageDeliveryPolicy,
   type MessageDeliveryStoreLimits,
-} from "effect-agent/message-delivery";
-import { PreparedInputAdmission } from "effect-agent/prepared-input-admission";
-import { DefinitionDigests, Digest } from "effect-agent/records";
-import { ScheduledInputRetryable } from "effect-agent/schedule";
+} from "@yielded/agent/message-delivery";
+import { PreparedInputAdmission } from "@yielded/agent/prepared-input-admission";
+import { DefinitionDigests, Digest } from "@yielded/agent/records";
+import { ScheduledInputRetryable } from "@yielded/agent/schedule";
 import {
   IdempotencyKey,
   Principal,
   QueueSequence,
   Settlement,
-} from "effect-agent/submission-ledger";
-import { SettledSubmission } from "effect-agent/submission-status";
-import { PreparedInput } from "effect-agent/subscription";
+} from "@yielded/agent/submission-ledger";
+import { SettledSubmission } from "@yielded/agent/submission-status";
+import { PreparedInput } from "@yielded/agent/subscription";
+import { Crypto, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
 const ownerThreadId = Schema.decodeSync(ThreadId)("sender");

@@ -1,7 +1,7 @@
 import {
   BrowserSessionError,
   type BrowserSession,
-} from "@effect-agent/platform-cloudflare/browser-session";
+} from "@yielded/agent-platform-cloudflare/browser-session";
 import { Effect, Option, Redacted, Schema, Semaphore } from "effect";
 import puppeteer, {
   type ConnectionTransport,

@@ -3,15 +3,15 @@ import {
   BrowserQuickActionRpcError,
   browserQuickActionScreenshotLayer,
   type BrowserQuickActionClient,
-} from "@effect-agent/platform-cloudflare/cloudflare-browser";
-import { Effect, Layer } from "effect";
-import { PageUrlTarget } from "effect-agent/page-capture";
+} from "@yielded/agent-platform-cloudflare/cloudflare-browser";
+import { PageUrlTarget } from "@yielded/agent/page-capture";
 import {
   PageScreenshot,
   PageScreenshotLimits,
   PageScreenshotRequest,
   type PageScreenshotError,
-} from "effect-agent/page-screenshot";
+} from "@yielded/agent/page-screenshot";
+import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 interface RequestOverrides {

@@ -1,10 +1,10 @@
 ---
-"@effect-agent/storage-memory": minor
-"@effect-agent/storage-sqlite": minor
-"@effect-agent/storage-cloudflare": minor
-"@effect-agent/platform-node": minor
-"@effect-agent/platform-cloudflare": minor
-"effect-agent": minor
+"@yielded/agent-storage-memory": minor
+"@yielded/agent-storage-sqlite": minor
+"@yielded/agent-storage-cloudflare": minor
+"@yielded/agent-platform-node": minor
+"@yielded/agent-platform-cloudflare": minor
+"@yielded/agent": minor
 ---
 
 Add durable schedules for typed Agent input with owner authorization, one-shot, interval and cron timing, and recovery through ordinary Submission admission on Node and Cloudflare.

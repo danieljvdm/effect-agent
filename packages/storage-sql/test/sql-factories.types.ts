@@ -1,6 +1,6 @@
 import { expectTypeOf } from "@effect/vitest";
+import type { AppendConflict, FenceRejected } from "@yielded/agent/thread-store";
 import { Context, Effect, Schema, type Crypto } from "effect";
-import type { AppendConflict, FenceRejected } from "effect-agent/thread-store";
 import type { SqlClient } from "effect/sql/SqlClient";
 
 import type { makeSqlJournal, SqlJournal } from "../src/SqlJournal.ts";

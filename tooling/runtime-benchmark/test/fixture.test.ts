@@ -1,12 +1,12 @@
-import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/node-durable-agent-runtime";
-import { ScriptedModel } from "@effect-agent/testing/scripted-model";
 import { NodeServices } from "@effect/platform-node";
+import { Agent } from "@yielded/agent";
+import { NodeDurableAgentRuntime } from "@yielded/agent-platform-node/node-durable-agent-runtime";
+import { ScriptedModel } from "@yielded/agent-testing/scripted-model";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import { ThreadId } from "@yielded/agent/identifiers";
+import { DeploymentId, DefinitionDigests, Digest, ProducerId } from "@yielded/agent/records";
+import { IdempotencyKey, Principal } from "@yielded/agent/submission-ledger";
 import { Effect, Exit, FileSystem, Layer, Schema } from "effect";
-import { Agent } from "effect-agent";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { ThreadId } from "effect-agent/identifiers";
-import { DeploymentId, DefinitionDigests, Digest, ProducerId } from "effect-agent/records";
-import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import { Model, Toolkit } from "effect/ai";
 import { expect, it } from "vite-plus/test";
 

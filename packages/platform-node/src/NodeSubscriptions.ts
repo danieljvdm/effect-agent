@@ -1,8 +1,7 @@
 import { NodeCrypto } from "@effect/platform-node";
-import { Cause, Duration, Effect, Exit, Layer, Option } from "effect";
-import { type EventSources } from "effect-agent/event-source";
-import { PreparedInputAdmission } from "effect-agent/prepared-input-admission";
-import { type ScheduledEnvelope, ScheduledInputAdmission } from "effect-agent/schedule";
+import { type EventSources } from "@yielded/agent/event-source";
+import { PreparedInputAdmission } from "@yielded/agent/prepared-input-admission";
+import { type ScheduledEnvelope, ScheduledInputAdmission } from "@yielded/agent/schedule";
 import {
   type PreparedInput,
   type SubscriptionAuthorizer,
@@ -11,9 +10,14 @@ import {
   type SubscriptionStoreFailure,
   SubscriptionStore,
   defaultSubscriptionLimits,
-} from "effect-agent/subscription";
-import { type SubscriptionInputBindings } from "effect-agent/subscription-input";
-import { SubscriptionDriver, SubscriptionIntake, Subscriptions } from "effect-agent/subscriptions";
+} from "@yielded/agent/subscription";
+import { type SubscriptionInputBindings } from "@yielded/agent/subscription-input";
+import {
+  SubscriptionDriver,
+  SubscriptionIntake,
+  Subscriptions,
+} from "@yielded/agent/subscriptions";
+import { Cause, Duration, Effect, Exit, Layer, Option } from "effect";
 
 import { makeNodePreparedInputAdmission, NodeAdmission } from "./internal/prepared-admission.ts";
 import { NodeDurableHost } from "./NodeDurableHost.ts";

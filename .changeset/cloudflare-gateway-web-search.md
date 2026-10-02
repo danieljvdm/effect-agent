@@ -1,6 +1,6 @@
 ---
-"@effect-agent/platform-cloudflare": minor
-"effect-agent": minor
+"@yielded/agent-platform-cloudflare": minor
+"@yielded/agent": minor
 ---
 
 Add a WebSearch tool with interchangeable native search backends and bounded, cited results. Route upstream Effect clients through Cloudflare AI Gateway with a pipeable Layer helper for search, model calls, streaming, and supported provider APIs.

@@ -1,11 +1,11 @@
 {
-  "name": "@effect-agent/testing",
+  "name": "@yielded/agent-testing",
   "version": "0.1.0-beta.165",
   "description": "Scripted models, deterministic fixtures, and adapter conformance kits for testing Effect Agent applications.",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/danieljvdm/effect-agent.git",
+    "url": "git+https://github.com/yielded-dev/agent.git",
     "directory": "packages/testing"
   },
   "files": [
@@ -32,18 +32,18 @@
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "effect-agent": "workspace:*"
+    "@yielded/agent": "workspace:*"
   },
   "devDependencies": {
-    "@effect-agent/ai-decision": "workspace:*",
-    "@effect-agent/platform-node": "workspace:*",
-    "@effect-agent/storage-memory": "workspace:*",
-    "@effect-agent/storage-postgres": "workspace:*",
-    "@effect-agent/storage-sqlite": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/sql-pg": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",
+    "@yielded/agent-ai-decision": "workspace:*",
+    "@yielded/agent-platform-node": "workspace:*",
+    "@yielded/agent-storage-memory": "workspace:*",
+    "@yielded/agent-storage-postgres": "workspace:*",
+    "@yielded/agent-storage-sqlite": "workspace:*",
     "effect": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"

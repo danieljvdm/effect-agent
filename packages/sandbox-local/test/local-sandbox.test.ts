@@ -2,11 +2,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { describe, expect, it, layer } from "@effect/vitest";
 import {
   layer as localSandboxLayer,
   sandboxLayer,
-} from "@effect-agent/sandbox-local/local-sandbox";
-import { describe, expect, it, layer } from "@effect/vitest";
+} from "@yielded/agent-sandbox-local/local-sandbox";
+import { Sandbox, type SandboxEvent, type SandboxRequest } from "@yielded/agent/sandbox";
 import {
   Cause,
   ConfigProvider,
@@ -22,7 +23,6 @@ import {
   Stream,
   type Scope,
 } from "effect";
-import { Sandbox, type SandboxEvent, type SandboxRequest } from "effect-agent/sandbox";
 import type { PlatformError } from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/process";
 import { TestClock } from "effect/testing";

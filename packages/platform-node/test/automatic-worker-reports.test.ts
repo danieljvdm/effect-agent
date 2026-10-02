@@ -1,16 +1,16 @@
-import * as NodeHost from "@effect-agent/platform-node/node-durable-host";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
+import * as NodeHost from "@yielded/agent-platform-node/node-durable-host";
+import * as Agent from "@yielded/agent/agent";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import { ThreadId } from "@yielded/agent/identifiers";
+import { MessageDeliveryStore } from "@yielded/agent/message-delivery";
+import { DefinitionDigestInput } from "@yielded/agent/records";
+import * as Subagent from "@yielded/agent/subagent";
+import { SubagentHost } from "@yielded/agent/subagent-host";
+import { IdempotencyKey, Principal } from "@yielded/agent/submission-ledger";
+import { WorkerHostAuthorizer } from "@yielded/agent/worker-host";
 import { Context, Effect, FileSystem, Layer, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { ThreadId } from "effect-agent/identifiers";
-import { MessageDeliveryStore } from "effect-agent/message-delivery";
-import { DefinitionDigestInput } from "effect-agent/records";
-import * as Subagent from "effect-agent/subagent";
-import { SubagentHost } from "effect-agent/subagent-host";
-import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
-import { WorkerHostAuthorizer } from "effect-agent/worker-host";
 import { LanguageModel, Model, Toolkit, type Response } from "effect/ai";
 
 const principal = Schema.decodeSync(Principal)("automatic-owner");
@@ -40,7 +40,7 @@ const model = (name: string, streamText: Parameters<typeof LanguageModel.make>[0
     ),
   );
 
-// Regression: https://github.com/danieljvdm/effect-agent/blob/36a411fc3f468fa87d4dd91234988a716d4ebbc5/packages/effect-agent/src/durable/internal/worker-host.ts#L3058-L3075
+// Regression: https://github.com/yielded-dev/agent/blob/36a411fc3f468fa87d4dd91234988a716d4ebbc5/packages/effect-agent/src/durable/internal/worker-host.ts#L3058-L3075
 it.effect(
   "authorizes successor completion reports as the current source principal",
   () =>

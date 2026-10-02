@@ -1,12 +1,12 @@
+import { Agent, AgentRuntime } from "@yielded/agent";
 import {
   ScriptedModel,
   type ScriptedTurnInput,
   type ScriptedStreamPart,
-} from "@effect-agent/testing/scripted-model";
+} from "@yielded/agent-testing/scripted-model";
+import { ModelCallContext } from "@yielded/agent/context-window";
+import { RunContextPreparation, RunToolAuthorization } from "@yielded/agent/run-options";
 import { Clock, Context, Effect, Layer, Schema } from "effect";
-import { Agent, AgentRuntime } from "effect-agent";
-import { ModelCallContext } from "effect-agent/context-window";
-import { RunContextPreparation, RunToolAuthorization } from "effect-agent/run-options";
 import { AiError, type LanguageModel, Model, Tool, Toolkit } from "effect/ai";
 
 import { BenchmarkError, check } from "./contracts.js";

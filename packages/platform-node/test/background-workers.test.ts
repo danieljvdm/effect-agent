@@ -1,6 +1,24 @@
-import * as NodeHost from "@effect-agent/platform-node/node-durable-host";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
+import * as NodeHost from "@yielded/agent-platform-node/node-durable-host";
+import * as Agent from "@yielded/agent/agent";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
+import { DurableRuntimeFailpointError } from "@yielded/agent/durable-failpoint";
+import { ThreadId, ToolCallId } from "@yielded/agent/identifiers";
+import { MessageDeliveryFailpoint, MessageDeliveryStore } from "@yielded/agent/message-delivery";
+import type { Receipt } from "@yielded/agent/receipt";
+import { DefinitionDigestInput } from "@yielded/agent/records";
+import { RunToolAuthorization } from "@yielded/agent/run-options";
+import * as Subagent from "@yielded/agent/subagent";
+import { SubagentHost } from "@yielded/agent/subagent-host";
+import {
+  ApprovalDecisionCommand,
+  IdempotencyKey,
+  Principal,
+} from "@yielded/agent/submission-ledger";
+import { readOutstanding, ThreadExportRequest, ThreadStore } from "@yielded/agent/thread-store";
+import { AssignmentDisposition, WorkerError, type WorkerSummary } from "@yielded/agent/worker";
+import { WorkerHostAuthorizer } from "@yielded/agent/worker-host";
 import {
   Clock,
   Context,
@@ -14,20 +32,6 @@ import {
   Scope,
   Stream,
 } from "effect";
-import * as Agent from "effect-agent/agent";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
-import { ThreadId, ToolCallId } from "effect-agent/identifiers";
-import { MessageDeliveryFailpoint, MessageDeliveryStore } from "effect-agent/message-delivery";
-import type { Receipt } from "effect-agent/receipt";
-import { DefinitionDigestInput } from "effect-agent/records";
-import { RunToolAuthorization } from "effect-agent/run-options";
-import * as Subagent from "effect-agent/subagent";
-import { SubagentHost } from "effect-agent/subagent-host";
-import { ApprovalDecisionCommand, IdempotencyKey, Principal } from "effect-agent/submission-ledger";
-import { readOutstanding, ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
-import { AssignmentDisposition, WorkerError, type WorkerSummary } from "effect-agent/worker";
-import { WorkerHostAuthorizer } from "effect-agent/worker-host";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/ai";
 import { TestClock } from "effect/testing";
 
@@ -94,7 +98,7 @@ const withFacet = <A, E>(
   effect: Effect.Effect<A, E, SubagentHost>,
 ) => effect.pipe(Effect.provideService(SubagentHost, facet));
 
-// Regression: https://github.com/danieljvdm/effect-agent/blob/4c417d98e8cc790c42ab4200a54a0548fe32e6e3/packages/effect-agent/src/durable/internal/worker-host.ts#L1645-L1691
+// Regression: https://github.com/yielded-dev/agent/blob/4c417d98e8cc790c42ab4200a54a0548fe32e6e3/packages/effect-agent/src/durable/internal/worker-host.ts#L1645-L1691
 for (const completion of ["interrupted"] as const) {
   it.effect(
     `tracks one retained delivery through acceptance and completion after its ${completion} claim`,
@@ -1345,7 +1349,7 @@ it.effect(
   15_000,
 );
 
-// Regression: https://github.com/danieljvdm/effect-agent/blob/c721a292205e06185f0136c3ed05dcf53e29ca66/packages/effect-agent/src/durable/internal/worker-host.ts#L2189-L2210
+// Regression: https://github.com/yielded-dev/agent/blob/c721a292205e06185f0136c3ed05dcf53e29ca66/packages/effect-agent/src/durable/internal/worker-host.ts#L2189-L2210
 for (const point of ["worker:after-source-append", "worker:after-origin-append"] as const) {
   it.effect(
     `recovers a successor after interruption at ${point}`,

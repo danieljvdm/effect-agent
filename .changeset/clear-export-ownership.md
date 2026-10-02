@@ -1,14 +1,14 @@
 ---
-"effect-agent": minor
-"@effect-agent/storage-memory": minor
-"@effect-agent/storage-sqlite": minor
-"@effect-agent/storage-cloudflare": minor
-"@effect-agent/platform-node": minor
-"@effect-agent/platform-cloudflare": minor
-"@effect-agent/sandbox-local": minor
-"@effect-agent/pr-review": minor
-"@effect-agent/testing": minor
-"@effect-agent/workflow": minor
+"@yielded/agent": minor
+"@yielded/agent-storage-memory": minor
+"@yielded/agent-storage-sqlite": minor
+"@yielded/agent-storage-cloudflare": minor
+"@yielded/agent-platform-node": minor
+"@yielded/agent-platform-cloudflare": minor
+"@yielded/agent-sandbox-local": minor
+"@yielded/agent-pr-review": minor
+"@yielded/agent-testing": minor
+"@yielded/agent-workflow": minor
 ---
 
 Import module namespaces from package roots, or import declarations from their explicit PascalCase module paths, following the package map's migration examples. Discard unused modules from audited packages when bundling consumers.

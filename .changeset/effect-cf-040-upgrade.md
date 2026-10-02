@@ -1,13 +1,13 @@
 ---
-"effect-agent": patch
-"@effect-agent/sandbox-local": patch
-"@effect-agent/storage-memory": patch
-"@effect-agent/storage-sqlite": patch
-"@effect-agent/storage-cloudflare": patch
-"@effect-agent/platform-node": patch
-"@effect-agent/platform-cloudflare": patch
-"@effect-agent/pr-review": patch
-"@effect-agent/testing": patch
+"@yielded/agent": patch
+"@yielded/agent-sandbox-local": patch
+"@yielded/agent-storage-memory": patch
+"@yielded/agent-storage-sqlite": patch
+"@yielded/agent-storage-cloudflare": patch
+"@yielded/agent-platform-node": patch
+"@yielded/agent-platform-cloudflare": patch
+"@yielded/agent-pr-review": patch
+"@yielded/agent-testing": patch
 ---
 
 Upgrade to Effect rc.112 and `effect-cf` 0.40.0 while preserving MCP transports and Cloudflare host behavior.

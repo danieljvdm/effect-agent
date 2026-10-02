@@ -1,8 +1,7 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Schema as NamespaceSchema, type Crypto, Effect, Layer } from "effect";
-import * as MemoryNamespace from "effect-agent/memory-namespace";
-import { MemoryAccess } from "effect-agent/memory-revalidation";
+import * as MemoryNamespace from "@yielded/agent/memory-namespace";
+import { MemoryAccess } from "@yielded/agent/memory-revalidation";
 import {
   MemoryScope,
   ActiveMemoryDocument,
@@ -11,21 +10,22 @@ import {
   MemoryReader,
   type MemoryStorageError,
   WithdrawnMemoryDocument,
-} from "effect-agent/memory-store";
+} from "@yielded/agent/memory-store";
 import {
   SemanticIndexLimits,
   SemanticQueryLimits,
   indexMemorySource,
   querySemanticMemory,
-} from "effect-agent/semantic-memory";
+} from "@yielded/agent/semantic-memory";
 import {
   type MemoryIndexError,
   MemoryIndexCandidate,
   type SemanticMemoryChunk,
   SemanticMemoryIndex,
   SemanticMemoryProfile,
-} from "effect-agent/semantic-memory-index";
-import { type SemanticMemoryError } from "effect-agent/semantic-memory-revalidation";
+} from "@yielded/agent/semantic-memory-index";
+import { type SemanticMemoryError } from "@yielded/agent/semantic-memory-revalidation";
+import { Schema as NamespaceSchema, type Crypto, Effect, Layer } from "effect";
 import type { AiError } from "effect/ai";
 import { EmbeddingModel } from "effect/ai";
 

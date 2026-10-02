@@ -53,9 +53,9 @@ jobs:
               // publication timestamp, not tag creation order or a sibling package.
               const releases = await github.paginate(github.rest.repos.listReleases, { ...context.repo, per_page: 100 });
               const latest = releases.filter(release => !release.draft && release.published_at &&
-                /^effect-agent@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(release.tag_name))
+                /^(?:effect-agent|@yielded\/agent)@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(release.tag_name))
                 .sort((a, b) => b.published_at.localeCompare(a.published_at) || b.id - a.id)[0];
-              if (!latest) throw new Error('No published effect-agent release found');
+              if (!latest) throw new Error('No published @yielded/agent release found');
               baseRef = baseTag = latest.tag_name;
             }
             const headRef = process.env.HEAD_REF.trim() || 'main';

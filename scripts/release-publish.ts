@@ -429,7 +429,7 @@ export const publishRelease = Effect.fn("releasePublish.publishRelease")(functio
         "run",
         "--no-cache",
         "-F",
-        "@effect-agent/example-browser-run-worker-proof",
+        "@yielded/agent-example-browser-run-worker-proof",
         "prove:live",
       ]);
     // Recheck at the point of publication: a newer release line must never be overtaken.

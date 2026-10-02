@@ -1,6 +1,6 @@
-import { makeSqlScheduleStore } from "@effect-agent/storage-sql/sql-schedule-store";
+import { makeSqlScheduleStore } from "@yielded/agent-storage-sql/sql-schedule-store";
+import { ScheduleStore } from "@yielded/agent/schedule";
 import { Effect, Layer } from "effect";
-import { ScheduleStore } from "effect-agent/schedule";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { initializeSqliteJournal } from "./internal/sqlite-journal.ts";

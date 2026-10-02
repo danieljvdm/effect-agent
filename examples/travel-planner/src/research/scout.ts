@@ -1,8 +1,8 @@
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import { OpenAiTool } from "@effect/ai-openai";
+import { Subagent, Agent } from "@yielded/agent";
+import { ThreadObjectIdentity } from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
+import { SubagentGrant } from "@yielded/agent/subagent-contract";
 import { Effect } from "effect";
-import { Subagent, Agent } from "effect-agent";
-import { SubagentGrant } from "effect-agent/subagent-contract";
 import { Toolkit } from "effect/ai";
 
 import { PlannerError } from "../domain.ts";

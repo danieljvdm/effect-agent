@@ -1,10 +1,10 @@
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
-import { Effect } from "effect";
-import { type Receipt } from "effect-agent/durable-agent-runtime";
+import { CloudflareThreadClient } from "@yielded/agent-platform-cloudflare/cloudflare-thread-client";
+import { type Receipt } from "@yielded/agent/durable-agent-runtime";
 import {
   submissionInputRecordId,
   submissionSettlementRecordId,
-} from "effect-agent/submission-ledger";
+} from "@yielded/agent/submission-ledger";
+import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { searchDefinition } from "./fixtures.ts";

@@ -1,13 +1,13 @@
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
-import { Duration, Effect, Layer, Option, Schema } from "effect";
-import { SubmissionLedger, SubmissionLookupById } from "effect-agent/submission-ledger";
-import { WorkerError } from "effect-agent/worker";
+import { ThreadObjectIdentity } from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
+import { SubmissionLedger, SubmissionLookupById } from "@yielded/agent/submission-ledger";
+import { WorkerError } from "@yielded/agent/worker";
 import {
   WorkerBudgetAuthorizer,
   WorkerHostAuthorizer,
   WorkerHostConfig,
   WorkerPolicyResolver,
-} from "effect-agent/worker-host";
+} from "@yielded/agent/worker-host";
+import { Duration, Effect, Layer, Option, Schema } from "effect";
 import { WorkerEnvironment } from "effect-cf";
 import { Toolkit } from "effect/ai";
 

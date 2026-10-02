@@ -1,13 +1,13 @@
-import { makeSqlTransaction, SqlInteger } from "@effect-agent/storage-sql/sql-storage";
-import { makeSqlThreadStore } from "@effect-agent/storage-sql/sql-thread-store";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { SqliteClient } from "@effect/sql-sqlite-node";
+import { makeSqlTransaction, SqlInteger } from "@yielded/agent-storage-sql/sql-storage";
+import { makeSqlThreadStore } from "@yielded/agent-storage-sql/sql-thread-store";
+import { ThreadId } from "@yielded/agent/identifiers";
+import { ProducerEpoch } from "@yielded/agent/records";
+import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "@yielded/agent/submission-ledger";
+import { ThreadStore } from "@yielded/agent/thread-store";
 import type { Crypto } from "effect";
 import { Duration, Effect, Layer, Schema } from "effect";
-import { ThreadId } from "effect-agent/identifiers";
-import { ProducerEpoch } from "effect-agent/records";
-import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "effect-agent/submission-ledger";
-import { ThreadStore } from "effect-agent/thread-store";
 import * as SqlClientService from "effect/sql/SqlClient";
 
 import { CurrentSqliteStorageVersion } from "./internal/migrations.ts";
@@ -30,7 +30,7 @@ export interface SqliteStorageOptions {
   readonly busyTimeout?: number | undefined;
   /**
    * Submission ownership lease duration in milliseconds (D5). Defaults to
-   * `DEFAULT_OWNERSHIP_LEASE_DURATION` from `effect-agent/submission-ledger`.
+   * `DEFAULT_OWNERSHIP_LEASE_DURATION` from `@yielded/agent/submission-ledger`.
    */
   readonly ownershipLeaseDuration?: number | undefined;
   /**

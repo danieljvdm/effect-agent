@@ -1,10 +1,10 @@
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
+import { CloudflareThreadClient } from "@yielded/agent-platform-cloudflare/cloudflare-thread-client";
+import * as ThreadObject from "@yielded/agent-platform-cloudflare/thread-object";
+import { type Receipt } from "@yielded/agent/durable-agent-runtime";
+import { type DurableRuntimeFailpointLocation } from "@yielded/agent/durable-failpoint";
+import { AbortCommand } from "@yielded/agent/submission-ledger";
 import { runDurableObjectAlarm } from "cloudflare:test";
 import { Effect } from "effect";
-import { type Receipt } from "effect-agent/durable-agent-runtime";
-import { type DurableRuntimeFailpointLocation } from "effect-agent/durable-failpoint";
-import { AbortCommand } from "effect-agent/submission-ledger";
 import { describe, expect, it } from "vite-plus/test";
 
 import {

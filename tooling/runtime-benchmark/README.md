@@ -35,10 +35,10 @@ apply only to the comparison fixtures; they add no published export aliases or r
 
 The performance workflow runs only by manual dispatch. Select exact base/head refs, a fixed
 profile, optional comma-separated case IDs, and optional CPU profiling. A blank base defaults
-to the most recently published `effect-agent@…` release, including beta prereleases and excluding
+to the most recently published `@yielded/agent@…` release, including beta prereleases and excluding
 drafts and sibling-package/Action releases; head defaults to `main`. Refs are resolved to exact
 commits before checkout. Local `--base-dir` comparisons remain available for exact-revision
-investigations. Use `--base-tag effect-agent@<version>` to name a release in a local report.
+investigations. Use `--base-tag @yielded/agent@<version>` to name a release in a local report.
 
 The workflow uses Node 24.20.0 and sequential production builds.
 The default `pr` profile runs three sequential cohorts (base/head, head/base, base/head). Each warm cohort retains two

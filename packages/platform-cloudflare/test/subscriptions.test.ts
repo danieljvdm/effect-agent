@@ -2,10 +2,10 @@ import {
   CloudflareSubscriptionsClient,
   sourcePartitionName,
   SubscriptionPartitionNamespace,
-} from "@effect-agent/platform-cloudflare/cloudflare-subscriptions";
+} from "@yielded/agent-platform-cloudflare/cloudflare-subscriptions";
+import { SubscriptionIntake, Subscriptions } from "@yielded/agent/subscriptions";
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { DateTime, Effect, Layer } from "effect";
-import { SubscriptionIntake, Subscriptions } from "effect-agent/subscriptions";
 import { DurableObject, DurableObjectAlarm } from "effect-cf";
 import { expect, it } from "vite-plus/test";
 

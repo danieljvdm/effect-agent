@@ -1,20 +1,20 @@
-import { ThreadObjectNamespace } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { describe, expect, it } from "@effect/vitest";
+import { ThreadObjectNamespace } from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
 import {
   LedgerLookupCall,
   encodePortRequest,
-} from "@effect-agent/storage-cloudflare/port-protocol";
-import { ThreadPortTransport } from "@effect-agent/storage-cloudflare/port-routing";
-import { describe, expect, it } from "@effect/vitest";
+} from "@yielded/agent-storage-cloudflare/port-protocol";
+import { ThreadPortTransport } from "@yielded/agent-storage-cloudflare/port-routing";
+import { SubmissionLookupByKey } from "@yielded/agent/submission-ledger";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Effect, Layer, Option, Tracer } from "effect";
-import { SubmissionLookupByKey } from "effect-agent/submission-ledger";
 
 import { threadPortTransportLayer } from "../src/internal/transport.ts";
 import { decodeIdempotencyKey, decodeThreadId, TEST_PRINCIPAL } from "./fixtures.ts";
 import { telemetryProbe } from "./observability-fixture.ts";
 
 describe("DEPLOY-016 native receiver invocation contract", () => {
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/baecd08f1d6f2c0698e16487cdcccf2f6ffcebca
+  // Regression: https://github.com/yielded-dev/agent/commit/baecd08f1d6f2c0698e16487cdcccf2f6ffcebca
   it.effect.each([
     { label: "enabled", rpcTracing: true, sampled: true, disablePropagation: false },
     { label: "disabled", rpcTracing: false, sampled: true, disablePropagation: false },

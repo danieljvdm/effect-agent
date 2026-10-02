@@ -3,7 +3,7 @@
 This directory contains the GitHub Action contract in `action.yml`. CI builds
 the JavaScript bundle and commits it only on distribution tags.
 
-Use `danieljvdm/effect-agent/action@action-v1` for the latest validated release,
+Use `yielded-dev/agent/action@action-v1` for the latest validated release,
 or pin the distribution commit SHA reported by CI for an immutable version.
 Each release also has an immutable `action-<source-commit-sha>` tag.
 New source commits, including `@main`, do not contain a runnable bundle. Switch
@@ -11,9 +11,9 @@ to a distribution ref to receive updates. Older SHA pins that contain a bundle
 continue to work.
 
 The private
-[`@effect-agent/pr-review-action`](../packages/pr-review-action) workspace
+[`@yielded/agent-pr-review-action`](../packages/pr-review-action) workspace
 owns the source and tests. The public
-[`@effect-agent/pr-review`](../packages/pr-review) package remains provider-
+[`@yielded/agent-pr-review`](../packages/pr-review) package remains provider-
 and transport-neutral.
 
 Build locally with `vp run action:build`. The generated `action/dist/` directory
@@ -288,7 +288,7 @@ Set `priority: default` to force Standard processing, or `priority: fast` (local
 `PR_REVIEW_PRIORITY=fast`) to request [OpenAI Fast mode](https://developers.openai.com/api/docs/guides/fast-mode).
 Fast is supported for the listed models, subject to account and regional availability.
 Fast mode costs twice the standard token rates for the supported models and uses the same
-size-scaled spending cap, so the allowance buys fewer tokens. The effect-agent repository's
+size-scaled spending cap, so the allowance buys fewer tokens. The @yielded/agent repository's
 workflow opts into Fast mode with `base-cost-usd: "20.00"` and `max-cost-usd: "25.00"`;
 its allowance still scales with PR size.
 Requests with omitted priority reserve at Fast rates because the project setting can enable Fast.
@@ -298,7 +298,7 @@ Fast pricing. Unknown response tiers retain their reservation and stop the attem
 requests are not retried at another tier; the selected model and effort stay unchanged.
 
 ```yaml
-- uses: danieljvdm/effect-agent/action@action-v1
+- uses: yielded-dev/agent/action@action-v1
   with:
     openai-api-key: ${{ secrets.OPENAI_API_KEY }}
     github-token: ${{ secrets.GITHUB_TOKEN }}

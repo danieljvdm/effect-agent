@@ -1,8 +1,8 @@
 ---
-"effect-agent": minor
-"@effect-agent/storage-sql": minor
-"@effect-agent/storage-cloudflare": patch
-"@effect-agent/platform-cloudflare": minor
+"@yielded/agent": minor
+"@yielded/agent-storage-sql": minor
+"@yielded/agent-storage-cloudflare": patch
+"@yielded/agent-platform-cloudflare": minor
 ---
 
 Publish retained lifecycle facts asynchronously in ordered owner batches without delaying model attempts, with atomic receipts and bounded retries that park exhausted work.

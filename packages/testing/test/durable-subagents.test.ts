@@ -1,10 +1,62 @@
+import { NodeCrypto } from "@effect/platform-node";
+import { expect, layer } from "@effect/vitest";
 import {
   MemorySubmissionLedgerLive,
   memorySubmissionLedgerLayer,
-} from "@effect-agent/storage-memory/memory-submission-ledger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
-import { NodeCrypto } from "@effect/platform-node";
-import { expect, layer } from "@effect/vitest";
+} from "@yielded/agent-storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@yielded/agent-storage-memory/memory-thread-store";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import {
+  CurrentBindingSelection,
+  compileRegistrations,
+  DurableWorkerBinding,
+  type ResolvedBinding,
+} from "@yielded/agent/agent-registration";
+import { ContextRolloverRequest, ContextRolloverTool } from "@yielded/agent/context-window";
+import {
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  type DurableSubmitOptions,
+} from "@yielded/agent/durable-agent-runtime";
+import {
+  DurableRuntimeFailpointError,
+  type DurableRuntimeFailpointLocation,
+} from "@yielded/agent/durable-failpoint";
+import { ToolExecutionClass } from "@yielded/agent/durable-step";
+import { IdGenerator } from "@yielded/agent/id-generator";
+import { ThreadId, RunId, ToolCallId, TurnId, type SubmissionId } from "@yielded/agent/identifiers";
+import {
+  DefinitionDigests,
+  DefinitionDigestInput,
+  DeploymentId,
+  Digest,
+  ProducerId,
+  RecordEnvelope,
+  ToolCallPrepared,
+  type CanonicalRecordEnvelope,
+} from "@yielded/agent/records";
+import { childThreadIdFor, runIdForSubmission } from "@yielded/agent/run-journal";
+import { RunToolAuthorization } from "@yielded/agent/run-options";
+import * as Subagent from "@yielded/agent/subagent";
+import { SubagentPolicy } from "@yielded/agent/subagent";
+import { SubagentReservationsMemoryLive } from "@yielded/agent/subagent-reservations";
+import {
+  AdmissionRequest,
+  ParentLinkage,
+  type AdmissionResult,
+  IdempotencyKey,
+  Principal,
+  RecoverySnapshotRequest,
+  ResolutionCompletedWithResult,
+  SubmissionLedger,
+  SubmissionLookupById,
+  UnknownResolutionCommand,
+} from "@yielded/agent/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "@yielded/agent/testing/durable-failpoint-test-control";
+import { ThreadRead, ThreadStore, ThreadStoreError } from "@yielded/agent/thread-store";
+import { ToolReconciler } from "@yielded/agent/tool-reconciler";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
 import {
   Cause,
   Deferred,
@@ -18,58 +70,6 @@ import {
   Schema,
   Stream,
 } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import {
-  CurrentBindingSelection,
-  compileRegistrations,
-  DurableWorkerBinding,
-  type ResolvedBinding,
-} from "effect-agent/agent-registration";
-import { ContextRolloverRequest, ContextRolloverTool } from "effect-agent/context-window";
-import {
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  type DurableSubmitOptions,
-} from "effect-agent/durable-agent-runtime";
-import {
-  DurableRuntimeFailpointError,
-  type DurableRuntimeFailpointLocation,
-} from "effect-agent/durable-failpoint";
-import { ToolExecutionClass } from "effect-agent/durable-step";
-import { IdGenerator } from "effect-agent/id-generator";
-import { ThreadId, RunId, ToolCallId, TurnId, type SubmissionId } from "effect-agent/identifiers";
-import {
-  DefinitionDigests,
-  DefinitionDigestInput,
-  DeploymentId,
-  Digest,
-  ProducerId,
-  RecordEnvelope,
-  ToolCallPrepared,
-  type CanonicalRecordEnvelope,
-} from "effect-agent/records";
-import { childThreadIdFor, runIdForSubmission } from "effect-agent/run-journal";
-import { RunToolAuthorization } from "effect-agent/run-options";
-import * as Subagent from "effect-agent/subagent";
-import { SubagentPolicy } from "effect-agent/subagent";
-import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
-import {
-  AdmissionRequest,
-  ParentLinkage,
-  type AdmissionResult,
-  IdempotencyKey,
-  Principal,
-  RecoverySnapshotRequest,
-  ResolutionCompletedWithResult,
-  SubmissionLedger,
-  SubmissionLookupById,
-  UnknownResolutionCommand,
-} from "effect-agent/submission-ledger";
-import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
-import { ThreadRead, ThreadStore, ThreadStoreError } from "effect-agent/thread-store";
-import { ToolReconciler } from "effect-agent/tool-reconciler";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { LanguageModel, Model, Tool, Toolkit, type Prompt, type Response } from "effect/ai";
 import { TestClock } from "effect/testing";
 
@@ -573,7 +573,7 @@ const payloadsOf = <Tag extends string>(
   records.filter((envelope) => envelope.record.payload._tag === tag);
 
 layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/e66e913e
+  // Regression: https://github.com/yielded-dev/agent/commit/e66e913e
   it.effect("retains selected replay contracts when restoring a shared-ID child's policy", () =>
     Effect.gen(function* () {
       let lookups = 0;
@@ -1094,7 +1094,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       }),
   );
 
-  // https://github.com/danieljvdm/effect-agent/commit/c1a6e6a915be73a49b2c266e2df74256f44c25e2
+  // https://github.com/yielded-dev/agent/commit/c1a6e6a915be73a49b2c266e2df74256f44c25e2
   // A later suspension duplicated prior Turn results and broke rollover after recovery.
   // https://linear.app/reve-ai/issue/KOM-127
   // Real provider metadata and assistant content must also survive the resumed declaration.

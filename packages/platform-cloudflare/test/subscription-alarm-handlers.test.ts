@@ -1,6 +1,6 @@
-import { makeSubscriptionPartitionAlarmHandler } from "@effect-agent/platform-cloudflare/cloudflare-subscriptions";
+import { makeSubscriptionPartitionAlarmHandler } from "@yielded/agent-platform-cloudflare/cloudflare-subscriptions";
+import { SubscriptionDriver } from "@yielded/agent/subscriptions";
 import { Context, DateTime, Deferred, Effect, Exit, Fiber, Schema, SchemaGetter } from "effect";
-import { SubscriptionDriver } from "effect-agent/subscriptions";
 import { DurableObjectAlarm } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { expect, it } from "vite-plus/test";

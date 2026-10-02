@@ -1,18 +1,18 @@
+import { BrowserCrypto } from "@effect/platform-browser";
 import {
   ThreadObjectPlacement,
   ThreadObjectNamespace,
   DurableObjectContext,
-} from "@effect-agent/platform-cloudflare/cloudflare-bindings";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
-import { invalidate } from "@effect-agent/storage-cloudflare/do-thread-store";
-import { BrowserCrypto } from "@effect/platform-browser";
+} from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
+import * as ThreadObject from "@yielded/agent-platform-cloudflare/thread-object";
+import { invalidate } from "@yielded/agent-storage-cloudflare/do-thread-store";
+import { digestDefinitions, digestJson } from "@yielded/agent/digest";
+import { AgentId, SubmissionId, ThreadId } from "@yielded/agent/identifiers";
+import { IdempotencyKey, Principal } from "@yielded/agent/receipt";
+import { DefinitionDigestInput, DeploymentId } from "@yielded/agent/records";
+import { AdmissionRequest, SubmissionLedger } from "@yielded/agent/submission-ledger";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Context, Effect, Layer, Option } from "effect";
-import { digestDefinitions, digestJson } from "effect-agent/digest";
-import { AgentId, SubmissionId, ThreadId } from "effect-agent/identifiers";
-import { IdempotencyKey, Principal } from "effect-agent/receipt";
-import { DefinitionDigestInput, DeploymentId } from "effect-agent/records";
-import { AdmissionRequest, SubmissionLedger } from "effect-agent/submission-ledger";
 import { Statement } from "effect/sql";
 import { SqlClient } from "effect/sql/SqlClient";
 import { expect, it } from "vite-plus/test";
@@ -21,7 +21,7 @@ import { stubFor } from "./harness.ts";
 
 const options = { deploymentId: "binding-layer", producerPrefix: "binding-layer" };
 
-// Regression: https://github.com/danieljvdm/effect-agent/commit/227b5e8a98ce4d1b303bacbeaf35c15ff45f6c75
+// Regression: https://github.com/yielded-dev/agent/commit/227b5e8a98ce4d1b303bacbeaf35c15ff45f6c75
 it("keeps local submission lookups inside the physical owner, including corrupt identity rows", async () => {
   const thread = `local-lookup-${crypto.randomUUID()}`;
   const colocated = ThreadId.make(`${thread}:colocated`);

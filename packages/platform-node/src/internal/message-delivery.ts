@@ -1,9 +1,9 @@
-import { Cause, Clock, Effect, Exit, Option } from "effect";
 import {
   MessageDeliveryDriver,
   type MessageDeliveryFailure,
   MessageDeliveryStore,
-} from "effect-agent/message-delivery";
+} from "@yielded/agent/message-delivery";
+import { Cause, Clock, Effect, Exit, Option } from "effect";
 
 const reportFailure = (cause: Cause.Cause<MessageDeliveryFailure>): Effect.Effect<void> =>
   Cause.hasInterruptsOnly(cause)

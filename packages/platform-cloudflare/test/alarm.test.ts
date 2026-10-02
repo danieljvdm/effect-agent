@@ -1,8 +1,6 @@
-import { DurableAlarmService, ThreadMutationGate } from "@effect-agent/platform-cloudflare/alarm";
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
-import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Cause, Clock, Deferred, Effect, Exit, Fiber, Scheduler, Schema } from "effect";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
+import { DurableAlarmService, ThreadMutationGate } from "@yielded/agent-platform-cloudflare/alarm";
+import { CloudflareThreadClient } from "@yielded/agent-platform-cloudflare/cloudflare-thread-client";
+import { DurableAgentRuntime } from "@yielded/agent/durable-agent-runtime";
 import {
   AbortCommand,
   ApprovalDecisionCommand,
@@ -10,7 +8,9 @@ import {
   ResolutionSafeToRetry,
   SubmissionLedger,
   UnknownResolutionCommand,
-} from "effect-agent/submission-ledger";
+} from "@yielded/agent/submission-ledger";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { Cause, Clock, Deferred, Effect, Exit, Fiber, Scheduler, Schema } from "effect";
 import { DurableObject } from "effect-cf";
 import { SqlClient } from "effect/sql/SqlClient";
 import { TestClock } from "effect/testing";
@@ -101,7 +101,7 @@ const maintenanceGeneration = (thread: string) =>
   );
 
 describe("DC alarm semantics", () => {
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/78d05490a
+  // Regression: https://github.com/yielded-dev/agent/commit/78d05490a
   it("keeps alarm changes independent of an interrupted concurrent SQL transaction", async () => {
     const thread = lane("sql-alarm-isolation");
 
@@ -169,7 +169,7 @@ describe("DC alarm semantics", () => {
     );
   });
 
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/e6407479ae233527685928bead040dbfe5153a22
+  // Regression: https://github.com/yielded-dev/agent/commit/e6407479ae233527685928bead040dbfe5153a22
   it("returns after one head Attempt and leaves later FIFO work armed for another event", () =>
     Effect.runPromise(
       Effect.gen(function* () {

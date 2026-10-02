@@ -1,5 +1,5 @@
 ---
-"effect-agent": patch
+"@yielded/agent": patch
 ---
 
 Keep standard worker progress and completion independent of parent runtime reads, with live

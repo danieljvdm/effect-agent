@@ -10,7 +10,7 @@ track worker ownership, and recover after restarts.
 
 |            | [Node.js](/platforms/node/)                   | [Cloudflare](/platforms/cloudflare/) |
 | ---------- | --------------------------------------------- | ------------------------------------ |
-| Package    | `@effect-agent/platform-node`                 | `@effect-agent/platform-cloudflare`  |
+| Package    | `@yielded/agent-platform-node`                | `@yielded/agent-platform-cloudflare` |
 | Execution  | Worker process you operate                    | Durable Object per thread            |
 | Storage    | Persistent SQLite file                        | Each Object's SQLite database        |
 | Scheduling | Worker pool, wake notifications, ledger scans | RPC calls and alarms                 |
@@ -29,7 +29,7 @@ Use a durable host when accepted work must survive a restart.
 See [durability](/concepts/durability/) for recovery rules and unconfirmed tool outcomes.
 
 For work that can end with its process, use [`AgentRuntime.run`](/guide/run-agents/)
-with provider and tool Layers plus `InMemory.layer` from `effect-agent`.
+with provider and tool Layers plus `InMemory.layer` from `@yielded/agent`.
 Provide a `RunContextPreparation` Layer only when you need host context loading.
 
 To retain completed history without recovering unfinished work, provide

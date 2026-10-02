@@ -1,4 +1,4 @@
-# @effect-agent/workflow
+# @yielded/agent-workflow
 
 ## 0.1.0-beta.165
 

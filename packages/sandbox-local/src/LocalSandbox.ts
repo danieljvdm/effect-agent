@@ -1,5 +1,4 @@
 import { NodeServices } from "@effect/platform-node";
-import { Clock, Config, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
 import {
   SANDBOX_DIAGNOSTIC_MAX_LENGTH,
   Sandbox,
@@ -16,7 +15,8 @@ import {
   type SandboxEvent,
   type SandboxExecute,
   type SandboxRequest,
-} from "effect-agent/sandbox";
+} from "@yielded/agent/sandbox";
+import { Clock, Config, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
 import { ChildProcess } from "effect/process";
 import { ChildProcessSpawner } from "effect/process/ChildProcessSpawner";
 

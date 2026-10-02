@@ -1,11 +1,11 @@
-import { Effect, Schema } from "effect";
-import { Receipt } from "effect-agent/durable-agent-runtime";
-import { AdmissionRequest, SubmissionLedger } from "effect-agent/submission-ledger";
+import { Receipt } from "@yielded/agent/durable-agent-runtime";
+import { AdmissionRequest, SubmissionLedger } from "@yielded/agent/submission-ledger";
 import {
   AcceptedEvent,
   SubscriptionStore,
   defaultSubscriptionLimits,
-} from "effect-agent/subscription";
+} from "@yielded/agent/subscription";
+import { Effect, Schema } from "effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { expect } from "vite-plus/test";
 

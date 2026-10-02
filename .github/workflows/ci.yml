@@ -136,42 +136,42 @@ jobs:
               -F './packages/*'
               -F './examples/*'
               -F './tooling/*'
-              -F '!@effect-agent/platform-node'
-              -F '!@effect-agent/testing'
-              -F '!@effect-agent/storage-postgres'
-              -F '!@effect-agent/platform-cloudflare'
-              -F '!@effect-agent/storage-cloudflare'
-              -F '!@effect-agent/example-travel-planner'
-              -F '!@effect-agent/example-context-continuity-eval'
-              -F '!@effect-agent/example-runtime-benchmark'
+              -F '!@yielded/agent-platform-node'
+              -F '!@yielded/agent-testing'
+              -F '!@yielded/agent-storage-postgres'
+              -F '!@yielded/agent-platform-cloudflare'
+              -F '!@yielded/agent-storage-cloudflare'
+              -F '!@yielded/agent-example-travel-planner'
+              -F '!@yielded/agent-example-context-continuity-eval'
+              -F '!@yielded/agent-example-runtime-benchmark'
           - suite: travel-planner
-            filters: -F @effect-agent/example-travel-planner
+            filters: -F @yielded/agent-example-travel-planner
             cache-seed: workspace
           - suite: context-continuity
-            filters: -F @effect-agent/example-context-continuity-eval
+            filters: -F @yielded/agent-example-context-continuity-eval
             cache-seed: workspace
           - suite: runtime-benchmark
-            filters: -F @effect-agent/example-runtime-benchmark
+            filters: -F @yielded/agent-example-runtime-benchmark
             cache-seed: workspace
           - suite: platform-node
-            filters: -F @effect-agent/platform-node
+            filters: -F @yielded/agent-platform-node
           - suite: testing
-            filters: -F @effect-agent/testing
+            filters: -F @yielded/agent-testing
             postgres: "17"
           # The adapter supports Postgres 16 and newer; the ends of that range are
           # the versions worth spending a runner on.
           - suite: storage-postgres-16
-            filters: -F @effect-agent/storage-postgres
+            filters: -F @yielded/agent-storage-postgres
             postgres: "16"
             cache-seed: storage-postgres
           - suite: storage-postgres-18
-            filters: -F @effect-agent/storage-postgres
+            filters: -F @yielded/agent-storage-postgres
             postgres: "18"
             cache-seed: storage-postgres
           - suite: platform-cloudflare
-            filters: -F @effect-agent/platform-cloudflare
+            filters: -F @yielded/agent-platform-cloudflare
           - suite: storage-cloudflare
-            filters: -F @effect-agent/storage-cloudflare
+            filters: -F @yielded/agent-storage-cloudflare
     services:
       postgres:
         image: ${{ matrix.postgres && format('postgres:{0}-alpine', matrix.postgres) || '' }}
@@ -390,7 +390,7 @@ jobs:
           git -c core.hooksPath=/dev/null commit -m "Build Action from $GITHUB_SHA"
           git push --atomic --force-with-lease="$CHANNEL_REF:$PREVIOUS_CHANNEL" origin \
             "HEAD:$RELEASE_REF" "HEAD:$CHANNEL_REF"
-          echo "Published danieljvdm/effect-agent/action@$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Published yielded-dev/agent/action@$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
 
   # Fan-in for branch protection: the required status check is named `ready`.
   # It runs even after a PR gate fails, and never posts a main-push ready check.

@@ -1,13 +1,13 @@
-import type * as PostgresStorage from "@effect-agent/storage-postgres/postgres-storage";
+import { expectTypeOf } from "@effect/vitest";
+import type * as PostgresStorage from "@yielded/agent-storage-postgres/postgres-storage";
 import type {
   PostgresStorageError,
   PostgresStorageInitializationError,
-} from "@effect-agent/storage-postgres/postgres-storage-error";
-import { expectTypeOf } from "@effect/vitest";
+} from "@yielded/agent-storage-postgres/postgres-storage-error";
+import type { ActivityMutationFailure, ActivityStoreError } from "@yielded/agent/activity-store";
+import type { SubmissionLedger } from "@yielded/agent/submission-ledger";
+import type { ThreadStore } from "@yielded/agent/thread-store";
 import type { Crypto, Layer } from "effect";
-import type { ActivityMutationFailure, ActivityStoreError } from "effect-agent/activity-store";
-import type { SubmissionLedger } from "effect-agent/submission-ledger";
-import type { ThreadStore } from "effect-agent/thread-store";
 import type { SqlClient } from "effect/sql/SqlClient";
 
 type Persistence = typeof PostgresStorage.layer;

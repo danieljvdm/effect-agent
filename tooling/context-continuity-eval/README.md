@@ -26,7 +26,7 @@ boundaries occur immediately before and after a canonical rollover append. Proce
 reuses persisted usage and refuses any unsettled provider reservation. Cloudflare confirms its
 evaluator-state writes before eviction; the next incarnation reads the same native notes revision.
 
-The follow-up includes the native [recovery checkpoint capability from #380](https://github.com/danieljvdm/effect-agent/pull/380).
+The follow-up includes the native [recovery checkpoint capability from #380](https://github.com/yielded-dev/agent/pull/380).
 `ThreadStore.recoveryCheckpoints` is an optional, latest-only cache bound to a canonical batch tail;
 it is separate from this evaluator's `resume.json` and Cloudflare audit/phase bookkeeping. Native
 recovery validates the cache and replays its suffix, or falls back to complete canonical replay
@@ -39,7 +39,7 @@ The deterministic SIGKILL and workerd tests require a valid native checkpoint co
 committed rollover, alongside the existing recovery, usage and original-history checks. Checkpoint
 presence does not establish fast-path selection, bounded startup work, or latency/CPU improvement.
 Actual hosted Cloudflare invocation latency and CPU remain open under
-[#356](https://github.com/danieljvdm/effect-agent/issues/356). The green live baseline in #372 is tied
+[#356](https://github.com/yielded-dev/agent/issues/356). The green live baseline in #372 is tied
 to `ad4b70a557b6e561e8471eae2fd3b57373bfdb3b`, before #380, and provides no live acceptance claim
 for this newer source. Workspace-source verification does not establish beta64 publication; the
 release coordinator owns that receipt. No paid profile runs solely because a runtime merge lands.
@@ -62,7 +62,7 @@ is no paid PR trigger or profile matrix. Cloudflare and production-capacity runs
 automatic jobs. Published versions skip evaluation/publication; registry errors fail closed.
 
 For a Cloudflare host, build from a clean candidate with
-`vp run -F @effect-agent/example-context-continuity-eval build`. The bundle embeds its commit and
+`vp run -F @yielded/agent-example-context-continuity-eval build`. The bundle embeds its commit and
 clean/dirty state. `wrangler.jsonc` is a deployment template for a separately selected account and
 evaluation Worker. Configure `OPENAI_API_KEY` and `CONTEXT_EVAL_TOKEN` as secrets. Deployment is an
 explicit operation; the build and runner never deploy. The live runner requires an already deployed

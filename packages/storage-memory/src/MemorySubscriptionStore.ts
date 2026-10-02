@@ -1,6 +1,5 @@
-import { Clock, Effect, Layer, Ref, Result, Schema } from "effect";
-import { Digest } from "effect-agent/records";
-import { compareScheduleNames } from "effect-agent/schedule-transition";
+import { Digest } from "@yielded/agent/records";
+import { compareScheduleNames } from "@yielded/agent/schedule-transition";
 import {
   AcceptedEvent,
   DeliveryChange,
@@ -19,7 +18,7 @@ import {
   SubscriptionStore,
   subscriptionDeliveryKeyString,
   subscriptionKeyString,
-} from "effect-agent/subscription";
+} from "@yielded/agent/subscription";
 import {
   sameAcceptedEventIdentity,
   applySubscriptionDeliveryChange,
@@ -27,7 +26,8 @@ import {
   validateEventRetention,
   subscriptionCanSelect,
   subscriptionDeliveryCanSelect,
-} from "effect-agent/subscription-transition";
+} from "@yielded/agent/subscription-transition";
+import { Clock, Effect, Layer, Ref, Result, Schema } from "effect";
 
 interface MemorySubscriptionState {
   readonly sequence: number;

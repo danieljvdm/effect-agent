@@ -1,14 +1,51 @@
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
-import { SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/sqlite-storage-failpoint";
-import { submissionLedgerLayer } from "@effect-agent/storage-sqlite/sqlite-submission-ledger";
-import {
-  storageConfigLayer,
-  threadStoreLayer,
-} from "@effect-agent/storage-sqlite/sqlite-thread-store";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, layer } from "@effect/vitest";
+import { MemorySubmissionLedgerLive } from "@yielded/agent-storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@yielded/agent-storage-memory/memory-thread-store";
+import { SqliteStorageFailpoint } from "@yielded/agent-storage-sqlite/sqlite-storage-failpoint";
+import { submissionLedgerLayer } from "@yielded/agent-storage-sqlite/sqlite-submission-ledger";
+import {
+  storageConfigLayer,
+  threadStoreLayer,
+} from "@yielded/agent-storage-sqlite/sqlite-thread-store";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import {
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  type DurableSubmitOptions,
+} from "@yielded/agent/durable-agent-runtime";
+import {
+  DurableRuntimeFailpointError,
+  type DurableRuntimeFailpointLocation,
+} from "@yielded/agent/durable-failpoint";
+import { ThreadId, type SubmissionId } from "@yielded/agent/identifiers";
+import {
+  drainLifecyclePublications,
+  LifecyclePublicationError,
+  LifecyclePublicationHandler,
+  lifecyclePublicationLayer,
+} from "@yielded/agent/lifecycle-publication";
+import {
+  DefinitionDigests,
+  DeploymentId,
+  Digest,
+  ProducerId,
+  type CanonicalRecordEnvelope,
+} from "@yielded/agent/records";
+import { runIdForSubmission } from "@yielded/agent/run-journal";
+import {
+  AbortCommand,
+  IdempotencyKey,
+  Principal,
+  SubmissionLedger,
+  SubmissionLookupById,
+} from "@yielded/agent/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "@yielded/agent/testing/durable-failpoint-test-control";
+import { ThreadRead, ThreadStore } from "@yielded/agent/thread-store";
+import { ToolReconciler } from "@yielded/agent/tool-reconciler";
+import { WakeScheduler } from "@yielded/agent/wake-scheduler";
 import {
   Cause,
   Clock,
@@ -25,43 +62,6 @@ import {
   SchemaGetter,
   Stream,
 } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import {
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  type DurableSubmitOptions,
-} from "effect-agent/durable-agent-runtime";
-import {
-  DurableRuntimeFailpointError,
-  type DurableRuntimeFailpointLocation,
-} from "effect-agent/durable-failpoint";
-import { ThreadId, type SubmissionId } from "effect-agent/identifiers";
-import {
-  drainLifecyclePublications,
-  LifecyclePublicationError,
-  LifecyclePublicationHandler,
-  lifecyclePublicationLayer,
-} from "effect-agent/lifecycle-publication";
-import {
-  DefinitionDigests,
-  DeploymentId,
-  Digest,
-  ProducerId,
-  type CanonicalRecordEnvelope,
-} from "effect-agent/records";
-import { runIdForSubmission } from "effect-agent/run-journal";
-import {
-  AbortCommand,
-  IdempotencyKey,
-  Principal,
-  SubmissionLedger,
-  SubmissionLookupById,
-} from "effect-agent/submission-ledger";
-import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
-import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
-import { ToolReconciler } from "effect-agent/tool-reconciler";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { LanguageModel, Model, Tool, Toolkit, type Prompt, type Response } from "effect/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
@@ -681,7 +681,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
     }),
   );
 
-  // https://github.com/danieljvdm/effect-agent/blob/e40e0574/packages/effect-agent/src/engine/internal/agent-runtime.ts
+  // https://github.com/yielded-dev/agent/blob/e40e0574/packages/effect-agent/src/engine/internal/agent-runtime.ts
   // A live provider cannot deterministically admit input inside the completion Tool boundary.
   it.effect(
     "covers a queued burst and a follow-up arriving inside a completion tool in one Run",

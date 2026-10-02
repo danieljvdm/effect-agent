@@ -1,5 +1,4 @@
-import { Clock, Crypto, Effect, Option, Ref, Schema, Stream } from "effect";
-import { digestCanonicalBatch, EMPTY_TAIL_DIGEST } from "effect-agent/digest";
+import { digestCanonicalBatch, EMPTY_TAIL_DIGEST } from "@yielded/agent/digest";
 import {
   CanonicalBatch,
   CanonicalRecord,
@@ -7,7 +6,7 @@ import {
   CanonicalSequence,
   Digest,
   ObservationOffset,
-} from "effect-agent/records";
+} from "@yielded/agent/records";
 import {
   AppendConflict,
   AppendResult,
@@ -31,7 +30,8 @@ import {
   SaveRecoveryCheckpointRequest,
   MAX_THREAD_EXPORT_RECORDS,
   type ThreadRecoveryCheckpoints,
-} from "effect-agent/thread-store";
+} from "@yielded/agent/thread-store";
+import { Clock, Crypto, Effect, Option, Ref, Schema, Stream } from "effect";
 
 import { RawAppendRequest, RawCheckpoint, RawReadRequest, type SqlJournal } from "./SqlJournal.ts";
 import type { Diagnostic, SqlStorageErrors, SqlStorageFailpoint } from "./SqlStorage.ts";

@@ -1,11 +1,10 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, layer } from "@effect/vitest";
-import { DateTime, Effect, Layer, Ref, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import { contextWindowId, contextWindowMessage } from "effect-agent/compaction";
-import { digestCanonicalBatch, EMPTY_TAIL_DIGEST } from "effect-agent/digest";
-import { ThreadId, SubmissionId, ToolCallId } from "effect-agent/identifiers";
+import * as Agent from "@yielded/agent/agent";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import { contextWindowId, contextWindowMessage } from "@yielded/agent/compaction";
+import { digestCanonicalBatch, EMPTY_TAIL_DIGEST } from "@yielded/agent/digest";
+import { ThreadId, SubmissionId, ToolCallId } from "@yielded/agent/identifiers";
 import {
   BatchId,
   CanonicalBatch,
@@ -20,7 +19,7 @@ import {
   ToolCallPrepared,
   ToolCallUnknown,
   ToolOperation,
-} from "effect-agent/records";
+} from "@yielded/agent/records";
 import {
   promptFromCanonicalRecords,
   projectRunJournal,
@@ -32,10 +31,11 @@ import {
   turnIdForRun,
   turnResponseBatch,
   turnResultsBatch,
-} from "effect-agent/run-journal";
-import { ThreadHistory } from "effect-agent/thread-history";
-import { Selection, Snapshot } from "effect-agent/tool-exposure";
-import { summarizeModelUsage } from "effect-agent/usage";
+} from "@yielded/agent/run-journal";
+import { ThreadHistory } from "@yielded/agent/thread-history";
+import { Selection, Snapshot } from "@yielded/agent/tool-exposure";
+import { summarizeModelUsage } from "@yielded/agent/usage";
+import { DateTime, Effect, Layer, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/ai";
 
 import { JournalCheckpointSeed } from "../../src/durable/internal/journal-checkpoint.ts";
@@ -696,7 +696,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
 
   layer(NodeCrypto.layer)((it) => {
     // Independent Runs can both resume, so neither continuation nor compaction may absorb the other:
-    // https://github.com/danieljvdm/effect-agent/commit/8fc53ad9eb6b110ca6faaaebbb6dbba08e3c292f
+    // https://github.com/yielded-dev/agent/commit/8fc53ad9eb6b110ca6faaaebbb6dbba08e3c292f
     it.effect("preserves both interleaved Run contexts and their complete Thread history", () =>
       Effect.gen(function* () {
         const first = yield* turnCanonicalBatch({
@@ -784,7 +784,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
     );
 
     // The same interleaving must retain each independently compacted context:
-    // https://github.com/danieljvdm/effect-agent/commit/8fc53ad9eb6b110ca6faaaebbb6dbba08e3c292f
+    // https://github.com/yielded-dev/agent/commit/8fc53ad9eb6b110ca6faaaebbb6dbba08e3c292f
     it.effect("does not restore retired exchanges when independent Runs both compact", () =>
       Effect.gen(function* () {
         const first = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
@@ -1005,7 +1005,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
               expect(otherView.policyUsage).toEqual(otherBaseline.policyUsage);
               if (projectionOwner === RUN_ID) {
                 // A later independent Run cannot rewrite this Run's resume context:
-                // https://github.com/danieljvdm/effect-agent/commit/8fc53ad9eb6b110ca6faaaebbb6dbba08e3c292f
+                // https://github.com/yielded-dev/agent/commit/8fc53ad9eb6b110ca6faaaebbb6dbba08e3c292f
                 expect(otherView).toEqual(otherBaseline);
                 expect(otherBaseline.usage).toMatchObject({
                   inputTokens: 100,

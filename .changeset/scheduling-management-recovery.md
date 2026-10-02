@@ -1,10 +1,10 @@
 ---
-"@effect-agent/storage-memory": patch
-"@effect-agent/storage-sqlite": patch
-"@effect-agent/storage-cloudflare": patch
-"@effect-agent/platform-node": minor
-"@effect-agent/platform-cloudflare": minor
-"effect-agent": minor
+"@yielded/agent-storage-memory": patch
+"@yielded/agent-storage-sqlite": patch
+"@yielded/agent-storage-cloudflare": patch
+"@yielded/agent-platform-node": minor
+"@yielded/agent-platform-cloudflare": minor
+"@yielded/agent": minor
 ---
 
 Separate scheduling management from driver authority, expose explicit public status, and fix DST delivery, failed-record starvation, and repeated resume. Allow positive host interval minimums and release operational capacity when schedules finish while retaining creation replay guarantees.

@@ -1,9 +1,8 @@
-import { Effect, Layer, Option, Schema } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { type DurableSubmitOptions } from "effect-agent/durable-agent-runtime";
-import { DurableStep, DurableStepError, ToolExecutionClass } from "effect-agent/durable-step";
-import { type ThreadId } from "effect-agent/identifiers";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import { type DurableSubmitOptions } from "@yielded/agent/durable-agent-runtime";
+import { DurableStep, DurableStepError, ToolExecutionClass } from "@yielded/agent/durable-step";
+import { type ThreadId } from "@yielded/agent/identifiers";
 import {
   DefinitionDigests,
   DeploymentId,
@@ -11,15 +10,16 @@ import {
   PersistedJson,
   ProducerId,
   type CanonicalRecordEnvelope,
-} from "effect-agent/records";
-import { Principal, type IdempotencyKey } from "effect-agent/submission-ledger";
+} from "@yielded/agent/records";
+import { Principal, type IdempotencyKey } from "@yielded/agent/submission-ledger";
 import {
   ReconciliationCompleted,
   ReconciliationSafeToRetry,
   ReconciliationUncertain,
   ToolReconciler,
   ToolReconcilerError,
-} from "effect-agent/tool-reconciler";
+} from "@yielded/agent/tool-reconciler";
+import { Effect, Layer, Option, Schema } from "effect";
 import { Tool, Toolkit } from "effect/ai";
 
 import {

@@ -1,13 +1,13 @@
 ---
-"effect-agent": minor
-"@effect-agent/platform-cloudflare": minor
-"@effect-agent/platform-node": minor
-"@effect-agent/pr-review": minor
-"@effect-agent/sandbox-local": minor
-"@effect-agent/storage-cloudflare": minor
-"@effect-agent/storage-memory": minor
-"@effect-agent/storage-sqlite": minor
-"@effect-agent/testing": minor
+"@yielded/agent": minor
+"@yielded/agent-platform-cloudflare": minor
+"@yielded/agent-platform-node": minor
+"@yielded/agent-pr-review": minor
+"@yielded/agent-sandbox-local": minor
+"@yielded/agent-storage-cloudflare": minor
+"@yielded/agent-storage-memory": minor
+"@yielded/agent-storage-sqlite": minor
+"@yielded/agent-testing": minor
 ---
 
 Rename `@effect-agent/session` to `@effect-agent/thread` and rename the Conversation framework API to Thread.

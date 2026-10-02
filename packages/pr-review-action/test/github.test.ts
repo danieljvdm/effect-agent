@@ -1,5 +1,5 @@
-import { ReviewFollowUp } from "@effect-agent/pr-review/review";
 import { describe, expect, it } from "@effect/vitest";
+import { ReviewFollowUp } from "@yielded/agent-pr-review/review";
 import { Effect, Exit, Fiber, Logger, Redacted, Schema } from "effect";
 import { Base64 } from "effect/encoding";
 import { HttpClient, HttpClientResponse } from "effect/http";

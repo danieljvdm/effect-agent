@@ -1,7 +1,7 @@
+import { AgentToolAuthorizationCheckError } from "@yielded/agent/agent-error";
+import * as FailureDiagnostic from "@yielded/agent/failure-diagnostic";
+import { ToolCallId } from "@yielded/agent/identifiers";
 import { Cause, Redacted, Schema } from "effect";
-import { AgentToolAuthorizationCheckError } from "effect-agent/agent-error";
-import * as FailureDiagnostic from "effect-agent/failure-diagnostic";
-import { ToolCallId } from "effect-agent/identifiers";
 import { describe, expect, it } from "vite-plus/test";
 
 class DependencyFailure extends Schema.TaggedError<DependencyFailure>()("DependencyFailure", {

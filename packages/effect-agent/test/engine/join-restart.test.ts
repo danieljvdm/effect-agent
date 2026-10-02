@@ -1,12 +1,12 @@
 import { expect, it } from "@effect/vitest";
+import * as Agent from "@yielded/agent/agent";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import { IdGenerator } from "@yielded/agent/id-generator";
+import { ThreadId, RunId, TurnId } from "@yielded/agent/identifiers";
+import type { RunEvent } from "@yielded/agent/run-event";
+import type { RunInputCommand } from "@yielded/agent/run-options";
+import { ThreadHistory } from "@yielded/agent/thread-history";
 import { Deferred, Effect, Exit, Fiber, Layer, Schema, Stream, Tracer } from "effect";
-import * as Agent from "effect-agent/agent";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import { IdGenerator } from "effect-agent/id-generator";
-import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
-import type { RunEvent } from "effect-agent/run-event";
-import type { RunInputCommand } from "effect-agent/run-options";
-import { ThreadHistory } from "effect-agent/thread-history";
 import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/ai";
 
 // Requested engine seam: an in-flight joined input must replace disposable drafts,

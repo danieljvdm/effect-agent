@@ -1,6 +1,6 @@
+import { type ThreadId } from "@yielded/agent/identifiers";
+import { type ProducerId } from "@yielded/agent/records";
 import { Context, Effect, Layer, Predicate, Schema } from "effect";
-import { type ThreadId } from "effect-agent/identifiers";
-import { type ProducerId } from "effect-agent/records";
 import { RpcTargets } from "effect-cf";
 
 /**
@@ -24,7 +24,7 @@ export class CloudflareBindingError extends Schema.TaggedError<CloudflareBinding
  * Thread Objects. `ThreadObject.make` implements it; the Worker-side client
  * and the cross-Object transport call it through `DurableObjectNamespace` stubs. Every
  * `encoded` value is a Schema-encoded envelope (`client.ts` wire schemas for host entry
- * points, `@effect-agent/storage-cloudflare` port envelopes for `portCall`), so the RPC
+ * points, `@yielded/agent-storage-cloudflare` port envelopes for `portCall`), so the RPC
  * boundary carries only structured-cloneable JSON. The optional trailing trace context is
  * transient native RPC metadata, stripped by an opted-in effect-cf receiver before decoding
  * the host or port envelope. It never enters durable state.

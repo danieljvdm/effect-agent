@@ -1,5 +1,5 @@
 ---
-"effect-agent": patch
+"@yielded/agent": patch
 ---
 
 Harden context economics per the reviewer's second pass: the cost budget is

@@ -1,6 +1,6 @@
+import { ThreadId, RunId, TurnId, ToolCallId } from "@yielded/agent/identifiers";
+import { WorkerUpdate, type FrameworkMessage } from "@yielded/agent/worker";
 import { Effect, Schema } from "effect";
-import { ThreadId, RunId, TurnId, ToolCallId } from "effect-agent/identifiers";
-import { WorkerUpdate, type FrameworkMessage } from "effect-agent/worker";
 import { expect, it } from "vite-plus/test";
 
 import { publicationAuthorization } from "../src/server/security.ts";

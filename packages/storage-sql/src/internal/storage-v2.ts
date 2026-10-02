@@ -1,17 +1,17 @@
-import { Schema } from "effect";
 import {
   ScheduleConfiguration,
   ScheduledEnvelope,
   ScheduleRecord,
   ScheduleRetry,
   ScheduleInstant,
-} from "effect-agent/schedule";
+} from "@yielded/agent/schedule";
 import {
   PreparedInput,
   SubscriptionConfiguration,
   SubscriptionDelivery,
   SubscriptionRecord,
-} from "effect-agent/subscription";
+} from "@yielded/agent/subscription";
+import { Schema } from "effect";
 
 // Frozen beta49/beta50 persisted shapes, before 75898aef (#341). Decode with
 // onExcessProperty:error: a patched or partially upgraded v2 store is not this contract.

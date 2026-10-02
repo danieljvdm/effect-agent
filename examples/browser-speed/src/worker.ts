@@ -1,4 +1,4 @@
-import { BrowserSessions } from "@effect-agent/platform-cloudflare/browser-session";
+import { BrowserSessions } from "@yielded/agent-platform-cloudflare/browser-session";
 import { DurableObject } from "cloudflare:workers";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";

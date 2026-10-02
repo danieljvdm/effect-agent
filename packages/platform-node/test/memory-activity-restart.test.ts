@@ -1,8 +1,18 @@
-import { activityProcessorStoreLayer } from "@effect-agent/storage-sqlite/sqlite-activity-store";
-import { layer as sqliteThreadStoreLayer } from "@effect-agent/storage-sqlite/sqlite-thread-store";
 import { NodeServices } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";
+import { PersistentHistory } from "@yielded/agent";
+import { activityProcessorStoreLayer } from "@yielded/agent-storage-sqlite/sqlite-activity-store";
+import { layer as sqliteThreadStoreLayer } from "@yielded/agent-storage-sqlite/sqlite-thread-store";
+import { ActivityProcessorStore } from "@yielded/agent/activity-store";
+import * as Agent from "@yielded/agent/agent";
+import { AgentPolicy } from "@yielded/agent/agent-policy";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import { ThreadId } from "@yielded/agent/identifiers";
+import { MemoryReader } from "@yielded/agent/memory-store";
+import { RunContextPreparationPassthrough } from "@yielded/agent/run-options";
+import { memoryReaderLayer } from "@yielded/agent/sql-memory-store";
+import { ThreadExportRequest, ThreadStore } from "@yielded/agent/thread-store";
 import {
   Duration,
   Effect,
@@ -15,16 +25,6 @@ import {
   Schema,
   Stream,
 } from "effect";
-import { PersistentHistory } from "effect-agent";
-import { ActivityProcessorStore } from "effect-agent/activity-store";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import { ThreadId } from "effect-agent/identifiers";
-import { MemoryReader } from "effect-agent/memory-store";
-import { RunContextPreparationPassthrough } from "effect-agent/run-options";
-import { memoryReaderLayer } from "effect-agent/sql-memory-store";
-import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { LanguageModel, Model, type Response, Toolkit } from "effect/ai";
 import { ChildProcess, type ChildProcessSpawner } from "effect/process";
 

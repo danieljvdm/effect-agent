@@ -1,8 +1,7 @@
-import { Effect, Schema } from "effect";
-import { digestJson } from "effect-agent/digest";
-import { DefinitionDigests } from "effect-agent/records";
-import { ScheduleRecord, ScheduleFailpoint } from "effect-agent/schedule";
-import { scheduleDeadline } from "effect-agent/schedule-transition";
+import { digestJson } from "@yielded/agent/digest";
+import { DefinitionDigests } from "@yielded/agent/records";
+import { ScheduleRecord, ScheduleFailpoint } from "@yielded/agent/schedule";
+import { scheduleDeadline } from "@yielded/agent/schedule-transition";
 import {
   SubscriptionConfiguration,
   SubscriptionFailpoint,
@@ -10,7 +9,8 @@ import {
   SubscriptionDelivery,
   PreparedInput,
   subscriptionDeliveryKeyString,
-} from "effect-agent/subscription";
+} from "@yielded/agent/subscription";
+import { Effect, Schema } from "effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { v2Columns } from "./internal/storage-v2-layout.ts";

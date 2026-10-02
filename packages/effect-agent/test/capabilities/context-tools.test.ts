@@ -1,8 +1,8 @@
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { describe, expect, it } from "@effect/vitest";
+import { ContextWindow, ContextWindowStatus } from "@yielded/agent/context-window";
+import { ThreadId, RunId } from "@yielded/agent/identifiers";
 import { Effect, Layer, Schema } from "effect";
-import { ContextWindow, ContextWindowStatus } from "effect-agent/context-window";
-import { ThreadId, RunId } from "effect-agent/identifiers";
 import { LanguageModel, Toolkit } from "effect/ai";
 import { HttpClient, HttpClientResponse } from "effect/http";
 

@@ -1,6 +1,26 @@
 import { NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
+import * as MemoryNamespace from "@yielded/agent/memory-namespace";
+import {
+  MemoryScope,
+  MemoryConflict,
+  MemoryKey,
+  MemoryMutationFailpoint,
+  MemoryMutationFailure,
+  MemoryOperationConflict,
+  MemoryReader,
+  MemoryStorageError,
+  MemoryWithdrawn,
+  MemoryWrite,
+  MemoryWriter,
+} from "@yielded/agent/memory-store";
+import {
+  SqlMemoryLimits,
+  memoryReaderLayer,
+  memoryStoreLayer,
+  memoryStoreLayerWithFailpoints,
+} from "@yielded/agent/sql-memory-store";
 import {
   Schema as NamespaceSchema,
   Cause,
@@ -14,26 +34,6 @@ import {
   Schema,
 } from "effect";
 import type { PlatformError } from "effect";
-import * as MemoryNamespace from "effect-agent/memory-namespace";
-import {
-  MemoryScope,
-  MemoryConflict,
-  MemoryKey,
-  MemoryMutationFailpoint,
-  MemoryMutationFailure,
-  MemoryOperationConflict,
-  MemoryReader,
-  MemoryStorageError,
-  MemoryWithdrawn,
-  MemoryWrite,
-  MemoryWriter,
-} from "effect-agent/memory-store";
-import {
-  SqlMemoryLimits,
-  memoryReaderLayer,
-  memoryStoreLayer,
-  memoryStoreLayerWithFailpoints,
-} from "effect-agent/sql-memory-store";
 import * as SqlClientService from "effect/sql/SqlClient";
 import { TestClock } from "effect/testing";
 

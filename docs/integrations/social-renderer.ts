@@ -88,7 +88,7 @@ const renderImage = (page: SocialPage, mark: Image) => {
   context.textBaseline = "top";
   context.fillStyle = "#f8f9fb";
   context.font = '500 32px "Social Sans"';
-  context.fillText("Effect Agent", 132, 55);
+  context.fillText("Yielded Agent", 132, 55);
 
   const url = new URL(page.url);
   const section = url.pathname.split("/")[1];

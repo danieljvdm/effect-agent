@@ -1,5 +1,5 @@
+import type { ThreadExport } from "@yielded/agent/thread-store";
 import { Schema } from "effect";
-import type { ThreadExport } from "effect-agent/thread-store";
 
 import type { EditorActivity } from "../domain.ts";
 import { emptyProgress } from "../server/progress.ts";

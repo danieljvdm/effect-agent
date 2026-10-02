@@ -1,4 +1,4 @@
-import { contextWindowId } from "effect-agent/compaction";
+import { contextWindowId } from "@yielded/agent/compaction";
 import { expect, it } from "vite-plus/test";
 
 import { type EvaluationReport } from "../src/contracts.ts";

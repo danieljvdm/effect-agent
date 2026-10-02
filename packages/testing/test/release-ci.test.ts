@@ -19,8 +19,8 @@ import {
   verifyMetadata,
 } from "../../../scripts/release-ci.ts";
 
-const repository = "danieljvdm/effect-agent";
-const packages = ["effect-agent", "@effect-agent/ai-decision"];
+const repository = "yielded-dev/agent";
+const packages = ["@yielded/agent", "@yielded/agent-ai-decision"];
 const base = "a".repeat(40);
 const head = "b".repeat(40);
 const checkout = "c".repeat(40);
@@ -28,13 +28,13 @@ const checkout = "c".repeat(40);
 const pre = {
   mode: "pre",
   tag: "beta",
-  initialVersions: { "effect-agent": "0.1.0-beta.44" },
+  initialVersions: { "@yielded/agent": "0.1.0-beta.44" },
   changesets: ["previous-change"],
 };
 
 const nextPre = {
   ...pre,
-  initialVersions: { ...pre.initialVersions, "@effect-agent/ai-decision": "0.1.0-beta.99" },
+  initialVersions: { ...pre.initialVersions, "@yielded/agent-ai-decision": "0.1.0-beta.99" },
   changesets: ["previous-change", "new-change"],
 };
 
@@ -56,11 +56,11 @@ const lock = (version: string) => `{
   "lockfileVersion": 1,
   "workspaces": {
     "packages/effect-agent": {
-      "name": "effect-agent",
+      "name": "@yielded/agent",
       "version": "${version}",
     },
     "packages/ai-decision": {
-      "name": "@effect-agent/ai-decision",
+      "name": "@yielded/agent-ai-decision",
       "version": "${version}",
     },
   },
@@ -84,7 +84,10 @@ const fixture = (): Array<MetadataChange> => [
     newMode: "100644",
   },
   ...packages.flatMap((name) => {
-    const directory = `packages/${name.replace("@effect-agent/", "")}`;
+    const directory =
+      name === "@yielded/agent"
+        ? "packages/effect-agent"
+        : `packages/${name.replace("@yielded/agent-", "")}`;
 
     return [
       {
@@ -97,14 +100,14 @@ const fixture = (): Array<MetadataChange> => [
       {
         path: `${directory}/CHANGELOG.md`,
         before:
-          name === "effect-agent"
-            ? "# effect-agent\n\n## 0.1.0-beta.99\n\nPrevious release.\n"
+          name === "@yielded/agent"
+            ? "# @yielded/agent\n\n## 0.1.0-beta.99\n\nPrevious release.\n"
             : null,
         after:
-          name === "effect-agent"
-            ? "# effect-agent\n\n## 0.1.0-beta.100\n\n## 0.1.0-beta.99\n\nPrevious release.\n"
-            : "# @effect-agent/ai-decision\n\n## 0.1.0-beta.100\n\n### Minor Changes\n\n- New provider.\n",
-        oldMode: name === "effect-agent" ? "100644" : null,
+          name === "@yielded/agent"
+            ? "# @yielded/agent\n\n## 0.1.0-beta.100\n\n## 0.1.0-beta.99\n\nPrevious release.\n"
+            : "# @yielded/agent-ai-decision\n\n## 0.1.0-beta.100\n\n### Minor Changes\n\n- New provider.\n",
+        oldMode: name === "@yielded/agent" ? "100644" : null,
         newMode: "100644",
       },
     ];
@@ -209,24 +212,24 @@ it.effect("falls back on errors, defects and bounded timeout and finalizes inter
   }),
 );
 
-// Regression: https://github.com/danieljvdm/effect-agent/commit/bd161066d6b805461f173c7c537014ae816d5177
+// Regression: https://github.com/yielded-dev/agent/commit/bd161066d6b805461f173c7c537014ae816d5177
 // Publication uses npm 12's package-name map; ordinary CI can use npm 11's array.
 it.effect("checks packed identity and every export for both supported npm output formats", () =>
   Effect.gen(function* () {
     const manifest = {
-      name: "effect-agent",
+      name: "@yielded/agent",
       version: "0.1.0-beta.100",
       exports: { ".": { default: "./dist/index.mjs", types: "./dist/index.d.mts" } },
     };
 
     const pack = {
-      name: "effect-agent",
+      name: "@yielded/agent",
       version: "0.1.0-beta.100",
       files: [{ path: "package.json" }, { path: "dist/index.mjs" }, { path: "dist/index.d.mts" }],
     };
 
     yield* verifyPackedFiles(manifest, [pack]);
-    yield* verifyPackedFiles(manifest, { "effect-agent": pack });
+    yield* verifyPackedFiles(manifest, { "@yielded/agent": pack });
     {
       const altered = {
         ...pack,
@@ -236,14 +239,14 @@ it.effect("checks packed identity and every export for both supported npm output
       expect(Exit.isFailure(yield* Effect.exit(verifyPackedFiles(manifest, [altered])))).toBe(true);
       expect(
         Exit.isFailure(
-          yield* Effect.exit(verifyPackedFiles(manifest, { "effect-agent": altered })),
+          yield* Effect.exit(verifyPackedFiles(manifest, { "@yielded/agent": altered })),
         ),
       ).toBe(true);
     }
   }),
 );
 
-// Regression: https://github.com/danieljvdm/effect-agent/actions/runs/36727368970
+// Regression: https://github.com/yielded-dev/agent/actions/runs/36727368970
 // Attempts 1/2 failed with an unidentified gate; attempt 3 passed the same CI evidence.
 it.effect("refetches exact-attempt jobs without combining incomplete gate evidence", () =>
   Effect.gen(function* () {
@@ -407,7 +410,7 @@ layer(NodeServices.layer)((it) => {
         for (const change of fixture())
           if (change.before !== null) yield* write(change.path, change.before);
         yield* write(".changeset/config.json", JSON.stringify({ fixed: [packages] }));
-        yield* write(".changeset/new-change.md", '---\n"effect-agent": patch\n---\nA change.\n');
+        yield* write(".changeset/new-change.md", '---\n"@yielded/agent": patch\n---\nA change.\n');
         yield* write(
           "scripts/release-ci.ts",
           "throw new Error('Candidate code must not execute');\n",

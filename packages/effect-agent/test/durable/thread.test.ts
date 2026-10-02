@@ -1,19 +1,19 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it, layer } from "@effect/vitest";
-import { Effect, Schema } from "effect";
-import { digestJson } from "effect-agent/digest";
-import { ThreadId } from "effect-agent/identifiers";
+import { digestJson } from "@yielded/agent/digest";
+import { ThreadId } from "@yielded/agent/identifiers";
 import {
   CanonicalRecordEnvelope,
   MAX_PERSISTED_JSON_BYTES,
   PersistedJson,
   RecordEnvelope,
-} from "effect-agent/records";
+} from "@yielded/agent/records";
 import {
   ThreadProjection,
   replayThread,
   replayThreadFromCheckpoint,
-} from "effect-agent/thread-projection";
+} from "@yielded/agent/thread-projection";
+import { Effect, Schema } from "effect";
 
 const SHA_256_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const SHA_256_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
