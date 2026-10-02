@@ -6,6 +6,7 @@ import {
 import { TypeSafeClient, TypeSafeDecisionModel } from "@effect/ai-typesafe";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { Agent, AgentRuntime, InMemory } from "effect-agent";
+import { CompactionPolicy } from "effect-agent/agent-policy";
 import * as BrowserUse from "effect-agent/browser-use";
 import { Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
@@ -45,7 +46,10 @@ const definition = {
     maxTurns: 30,
     maxToolCalls: 100,
     maxDuration: "3 minutes" as const,
-    tokenBudget: 60_000,
+    tokenBudget: 300_000,
+    contextTokenLimit: 10_000,
+    compaction: CompactionPolicy.make({ mode: "prune", keepRecentTokens: 4_000 }),
+    onExhaustion: "fail" as const,
     toolConcurrency: 1,
   },
 };
