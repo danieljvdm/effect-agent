@@ -125,7 +125,7 @@ All lever cases must belong to the `real-loss` suite. An empty lever reports `no
 
 Any failed executed check makes both fields `false`. Recorded citations are external evidence;
 the runner does not execute or verify those suites. Non-durable adapters can pass conformance
-without earning durable certification. Reports use the `@yielded/agent/certification@2` format.
+without earning durable certification. Reports keep the `effect-agent/certification@2` format.
 
 <a id="what-tier-2-asserts-exactly"></a>
 
