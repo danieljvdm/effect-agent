@@ -1,1 +1,49 @@
-{"name":"@yielded/agent-platform-node","version":"0.1.0-beta.167","dependencies":{"@effect/platform-node":"4.0.0","@effect/sql-sqlite-node":"4.0.0","@yielded/agent":"0.1.0-beta.167","@yielded/agent-storage-sqlite":"0.1.0-beta.167","@yielded/agent-workflow":"0.1.0-beta.167"},"devDependencies":{"@effect/vitest":"4.0.0","effect":"4.0.0","typescript":"7.0.2","vite-plus":"0.3.3"},"peerDependencies":{"effect":"^4.0.0"},"exports":{".":{"types":"./dist/index.d.mts","default":"./dist/index.mjs"},"./node-durable-agent-runtime":{"types":"./dist/NodeDurableAgentRuntime.d.mts","default":"./dist/NodeDurableAgentRuntime.mjs"},"./node-durable-host":{"types":"./dist/NodeDurableHost.d.mts","default":"./dist/NodeDurableHost.mjs"},"./node-scheduling":{"types":"./dist/NodeScheduling.d.mts","default":"./dist/NodeScheduling.mjs"},"./node-subscriptions":{"types":"./dist/NodeSubscriptions.d.mts","default":"./dist/NodeSubscriptions.mjs"},"./node-wake-scheduler":{"types":"./dist/NodeWakeScheduler.d.mts","default":"./dist/NodeWakeScheduler.mjs"},"./node-workflow":{"types":"./dist/NodeWorkflow.d.mts","default":"./dist/NodeWorkflow.mjs"}},"description":"Class DN layer assembly for Effect Agent: the durable Node/SQLite runtime host, wake scheduler, and ownership drain.","license":"MIT","repository":{"type":"git","url":"git+https://github.com/yielded-dev/agent.git","directory":"packages/platform-node"},"files":["dist","src"],"type":"module","sideEffects":[],"publishConfig":{"access":"public"},"scripts":{"build":"vp pack","check":"tsc --noEmit -p tsconfig.json"}}
+{
+  "name": "@yielded/agent-platform-node",
+  "version": "0.1.0-beta.167",
+  "description": "Class DN layer assembly for Effect Agent: the durable Node/SQLite runtime host, wake scheduler, and ownership drain.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yielded-dev/agent.git",
+    "directory": "packages/platform-node"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "type": "module",
+  "sideEffects": [],
+  "exports": {
+    ".": "./src/index.ts",
+    "./node-durable-agent-runtime": "./src/NodeDurableAgentRuntime.ts",
+    "./node-durable-host": "./src/NodeDurableHost.ts",
+    "./node-scheduling": "./src/NodeScheduling.ts",
+    "./node-subscriptions": "./src/NodeSubscriptions.ts",
+    "./node-wake-scheduler": "./src/NodeWakeScheduler.ts",
+    "./node-workflow": "./src/NodeWorkflow.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@effect/platform-node": "catalog:",
+    "@effect/sql-sqlite-node": "catalog:",
+    "@yielded/agent": "workspace:*",
+    "@yielded/agent-storage-sqlite": "workspace:*",
+    "@yielded/agent-workflow": "workspace:*"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "effect": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "^4.0.0"
+  }
+}

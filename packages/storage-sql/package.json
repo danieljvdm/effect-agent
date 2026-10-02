@@ -1,1 +1,54 @@
-{"name":"@yielded/agent-storage-sql","version":"0.1.0-beta.167","dependencies":{"@yielded/agent":"0.1.0-beta.167"},"devDependencies":{"@effect/vitest":"4.0.0","effect":"4.0.0","typescript":"7.0.2","vite-plus":"0.3.3"},"peerDependencies":{"effect":"^4.0.0"},"exports":{".":{"types":"./dist/index.d.mts","default":"./dist/index.mjs"},"./sql-storage":{"types":"./dist/SqlStorage.d.mts","default":"./dist/SqlStorage.mjs"},"./sql-storage-failpoint":{"types":"./dist/SqlStorageFailpoint.d.mts","default":"./dist/SqlStorageFailpoint.mjs"},"./sql-journal":{"types":"./dist/SqlJournal.d.mts","default":"./dist/SqlJournal.mjs"},"./sql-thread-store":{"types":"./dist/SqlThreadStore.d.mts","default":"./dist/SqlThreadStore.mjs"},"./sql-submission-ledger":{"types":"./dist/SqlSubmissionLedger.d.mts","default":"./dist/SqlSubmissionLedger.mjs"},"./sql-activity-store":{"types":"./dist/SqlActivityStore.d.mts","default":"./dist/SqlActivityStore.mjs"},"./sql-schedule-store":{"types":"./dist/SqlScheduleStore.d.mts","default":"./dist/SqlScheduleStore.mjs"},"./sql-storage-schema":{"types":"./dist/SqlStorageSchema.d.mts","default":"./dist/SqlStorageSchema.mjs"},"./sql-thread-native-reads":{"types":"./dist/SqlThreadNativeReads.d.mts","default":"./dist/SqlThreadNativeReads.mjs"},"./sql-message-delivery-store":{"types":"./dist/SqlMessageDeliveryStore.d.mts","default":"./dist/SqlMessageDeliveryStore.mjs"},"./sql-subscription-store":{"types":"./dist/SqlSubscriptionStore.d.mts","default":"./dist/SqlSubscriptionStore.mjs"},"./sql-storage-v2-upgrade":{"types":"./dist/SqlStorageV2Upgrade.d.mts","default":"./dist/SqlStorageV2Upgrade.mjs"},"./sql-lifecycle-publication":{"types":"./dist/SqlLifecyclePublication.d.mts","default":"./dist/SqlLifecyclePublication.mjs"},"./sql-storage-progress":{"types":"./dist/SqlStorageProgress.d.mts","default":"./dist/SqlStorageProgress.mjs"}},"description":"Shared SQL persistence implementations for Effect Agent storage adapters.","license":"MIT","repository":{"type":"git","url":"git+https://github.com/yielded-dev/agent.git","directory":"packages/storage-sql"},"files":["dist","src"],"type":"module","sideEffects":[],"publishConfig":{"access":"public"},"scripts":{"build":"vp pack","check":"tsc --noEmit -p tsconfig.json","test":"vp test --passWithNoTests"}}
+{
+  "name": "@yielded/agent-storage-sql",
+  "version": "0.1.0-beta.167",
+  "description": "Shared SQL persistence implementations for Effect Agent storage adapters.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yielded-dev/agent.git",
+    "directory": "packages/storage-sql"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "type": "module",
+  "sideEffects": [],
+  "exports": {
+    ".": "./src/index.ts",
+    "./sql-storage": "./src/SqlStorage.ts",
+    "./sql-storage-failpoint": "./src/SqlStorageFailpoint.ts",
+    "./sql-journal": "./src/SqlJournal.ts",
+    "./sql-thread-store": "./src/SqlThreadStore.ts",
+    "./sql-submission-ledger": "./src/SqlSubmissionLedger.ts",
+    "./sql-activity-store": "./src/SqlActivityStore.ts",
+    "./sql-schedule-store": "./src/SqlScheduleStore.ts",
+    "./sql-storage-schema": "./src/SqlStorageSchema.ts",
+    "./sql-thread-native-reads": "./src/SqlThreadNativeReads.ts",
+    "./sql-message-delivery-store": "./src/SqlMessageDeliveryStore.ts",
+    "./sql-subscription-store": "./src/SqlSubscriptionStore.ts",
+    "./sql-storage-v2-upgrade": "./src/SqlStorageV2Upgrade.ts",
+    "./sql-lifecycle-publication": "./src/SqlLifecyclePublication.ts",
+    "./sql-storage-progress": "./src/SqlStorageProgress.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "vp test --passWithNoTests"
+  },
+  "dependencies": {
+    "@yielded/agent": "workspace:*"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "effect": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "^4.0.0"
+  }
+}

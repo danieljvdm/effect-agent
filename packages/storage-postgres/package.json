@@ -1,1 +1,44 @@
-{"name":"@yielded/agent-storage-postgres","version":"0.1.0-beta.167","dependencies":{"@yielded/agent":"0.1.0-beta.167","@yielded/agent-storage-sql":"0.1.0-beta.167"},"devDependencies":{"@effect/platform-node":"4.0.0","@effect/sql-pg":"4.0.0","@effect/vitest":"4.0.0","effect":"4.0.0","typescript":"7.0.2","vite-plus":"0.3.3"},"peerDependencies":{"effect":"^4.0.0"},"exports":{".":{"types":"./dist/index.d.mts","default":"./dist/index.mjs"},"./postgres-storage":{"types":"./dist/PostgresStorage.d.mts","default":"./dist/PostgresStorage.mjs"},"./postgres-storage-error":{"types":"./dist/PostgresStorageError.d.mts","default":"./dist/PostgresStorageError.mjs"}},"description":"Postgres persistence adapters for the Effect Agent durable runtime.","license":"MIT","repository":{"type":"git","url":"git+https://github.com/yielded-dev/agent.git","directory":"packages/storage-postgres"},"files":["dist","src"],"type":"module","sideEffects":[],"publishConfig":{"access":"public"},"scripts":{"build":"vp pack","check":"tsc --noEmit -p tsconfig.json"}}
+{
+  "name": "@yielded/agent-storage-postgres",
+  "version": "0.1.0-beta.167",
+  "description": "Postgres persistence adapters for the Effect Agent durable runtime.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yielded-dev/agent.git",
+    "directory": "packages/storage-postgres"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "type": "module",
+  "sideEffects": [],
+  "exports": {
+    ".": "./src/index.ts",
+    "./postgres-storage": "./src/PostgresStorage.ts",
+    "./postgres-storage-error": "./src/PostgresStorageError.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@yielded/agent": "workspace:*",
+    "@yielded/agent-storage-sql": "workspace:*"
+  },
+  "devDependencies": {
+    "@effect/platform-node": "catalog:",
+    "@effect/sql-pg": "catalog:",
+    "@effect/vitest": "catalog:",
+    "effect": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "^4.0.0"
+  }
+}

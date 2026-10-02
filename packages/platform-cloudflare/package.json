@@ -1,1 +1,71 @@
-{"name":"@yielded/agent-platform-cloudflare","version":"0.1.0-beta.167","dependencies":{"@effect/platform-browser":"4.0.0","@effect/sql-sqlite-do":"4.0.0","@yielded/agent":"0.1.0-beta.167","@yielded/agent-storage-cloudflare":"0.1.0-beta.167","@yielded/agent-storage-sql":"0.1.0-beta.167","puppeteer-core":"24.29.0"},"devDependencies":{"@cloudflare/vitest-pool-workers":"0.21.3","@cloudflare/workers-types":"5.20260926.1","@effect/platform-node":"4.0.0","@effect/sql-d1":"4.0.0","@effect/vitest":"4.0.0","@yielded/agent-testing":"0.1.0-beta.167","effect":"4.0.0","effect-cf":"0.53.0","esbuild":"0.28.1","miniflare":"5.20260811.1-alpha","typescript":"7.0.2","vite-plus":"0.3.3","vitest":"4.1.11"},"peerDependencies":{"effect":"^4.0.0","effect-cf":"^0.53.0"},"exports":{".":{"types":"./dist/index.d.mts","default":"./dist/index.mjs"},"./alarm":{"types":"./dist/Alarm.d.mts","default":"./dist/Alarm.mjs"},"./browser-rest-capture":{"types":"./dist/BrowserRestCapture.d.mts","default":"./dist/BrowserRestCapture.mjs"},"./browser-rest-crawl":{"types":"./dist/BrowserRestCrawl.d.mts","default":"./dist/BrowserRestCrawl.mjs"},"./cloudflare-bindings":{"types":"./dist/CloudflareBindings.d.mts","default":"./dist/CloudflareBindings.mjs"},"./cloudflare-browser":{"types":"./dist/CloudflareBrowser.d.mts","default":"./dist/CloudflareBrowser.mjs"},"./cloudflare-code-mode":{"types":"./dist/CloudflareCodeMode.d.mts","default":"./dist/CloudflareCodeMode.mjs"},"./cloudflare-config":{"types":"./dist/CloudflareConfig.d.mts","default":"./dist/CloudflareConfig.mjs"},"./cloudflare-memory":{"types":"./dist/CloudflareMemory.d.mts","default":"./dist/CloudflareMemory.mjs"},"./cloudflare-scheduling":{"types":"./dist/CloudflareScheduling.d.mts","default":"./dist/CloudflareScheduling.mjs"},"./cloudflare-subscriptions":{"types":"./dist/CloudflareSubscriptions.d.mts","default":"./dist/CloudflareSubscriptions.mjs"},"./cloudflare-thread-client":{"types":"./dist/CloudflareThreadClient.d.mts","default":"./dist/CloudflareThreadClient.mjs"},"./interactive-browser":{"types":"./dist/InteractiveBrowser.d.mts","default":"./dist/InteractiveBrowser.mjs"},"./browser-session":{"types":"./dist/BrowserSession.d.mts","default":"./dist/BrowserSession.mjs"},"./browser-credentials":{"types":"./dist/BrowserCredentials.d.mts","default":"./dist/BrowserCredentials.mjs"},"./thread-object":{"types":"./dist/ThreadObject.d.mts","default":"./dist/ThreadObject.mjs"},"./wake-scheduler":{"types":"./dist/WakeScheduler.d.mts","default":"./dist/WakeScheduler.mjs"},"./cloudflare-ai-gateway":{"types":"./dist/CloudflareAiGateway.d.mts","default":"./dist/CloudflareAiGateway.mjs"}},"description":"Cloudflare Layer assembly for Effect Agent: Durable Objects and Browser Run adapters.","license":"MIT","repository":{"type":"git","url":"git+https://github.com/yielded-dev/agent.git","directory":"packages/platform-cloudflare"},"files":["dist","src"],"type":"module","sideEffects":[],"publishConfig":{"access":"public"},"scripts":{"build":"vp pack","check":"tsc --noEmit -p tsconfig.json"}}
+{
+  "name": "@yielded/agent-platform-cloudflare",
+  "version": "0.1.0-beta.167",
+  "description": "Cloudflare Layer assembly for Effect Agent: Durable Objects and Browser Run adapters.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yielded-dev/agent.git",
+    "directory": "packages/platform-cloudflare"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "type": "module",
+  "sideEffects": [],
+  "exports": {
+    ".": "./src/index.ts",
+    "./alarm": "./src/Alarm.ts",
+    "./browser-rest-capture": "./src/BrowserRestCapture.ts",
+    "./browser-rest-crawl": "./src/BrowserRestCrawl.ts",
+    "./cloudflare-bindings": "./src/CloudflareBindings.ts",
+    "./cloudflare-browser": "./src/CloudflareBrowser.ts",
+    "./cloudflare-code-mode": "./src/CloudflareCodeMode.ts",
+    "./cloudflare-config": "./src/CloudflareConfig.ts",
+    "./cloudflare-memory": "./src/CloudflareMemory.ts",
+    "./cloudflare-scheduling": "./src/CloudflareScheduling.ts",
+    "./cloudflare-subscriptions": "./src/CloudflareSubscriptions.ts",
+    "./cloudflare-thread-client": "./src/CloudflareThreadClient.ts",
+    "./interactive-browser": "./src/InteractiveBrowser.ts",
+    "./browser-session": "./src/BrowserSession.ts",
+    "./browser-credentials": "./src/BrowserCredentials.ts",
+    "./thread-object": "./src/ThreadObject.ts",
+    "./wake-scheduler": "./src/WakeScheduler.ts",
+    "./cloudflare-ai-gateway": "./src/CloudflareAiGateway.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@effect/platform-browser": "catalog:",
+    "@effect/sql-sqlite-do": "catalog:",
+    "@yielded/agent": "workspace:*",
+    "@yielded/agent-storage-cloudflare": "workspace:*",
+    "@yielded/agent-storage-sql": "workspace:*",
+    "puppeteer-core": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "catalog:",
+    "@cloudflare/workers-types": "catalog:",
+    "@effect/platform-node": "catalog:",
+    "@effect/sql-d1": "catalog:",
+    "@effect/vitest": "catalog:",
+    "@yielded/agent-testing": "workspace:*",
+    "effect": "catalog:",
+    "effect-cf": "catalog:",
+    "esbuild": "catalog:",
+    "miniflare": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:",
+    "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "^4.0.0",
+    "effect-cf": "^0.53.0"
+  }
+}

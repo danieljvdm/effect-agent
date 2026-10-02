@@ -1,1 +1,40 @@
-{"name":"@yielded/agent-ai-decision","version":"0.1.0-beta.167","devDependencies":{"@effect/ai-typesafe":"4.0.0","@effect/vitest":"4.0.0","effect":"4.0.0","typescript":"7.0.2","vite-plus":"0.3.3"},"peerDependencies":{"effect":"^4.0.0"},"exports":{".":{"types":"./dist/index.d.mts","default":"./dist/index.mjs"},"./auto-model":{"types":"./dist/AutoModel.d.mts","default":"./dist/AutoModel.mjs"},"./language-model-decision-model":{"types":"./dist/LanguageModelDecisionModel.d.mts","default":"./dist/LanguageModelDecisionModel.mjs"}},"description":"Native Effect decision adapters and thread-owned automatic model selection.","license":"MIT","repository":{"type":"git","url":"git+https://github.com/yielded-dev/agent.git","directory":"packages/ai-decision"},"files":["dist","src"],"type":"module","sideEffects":[],"publishConfig":{"access":"public"},"scripts":{"build":"vp pack","check":"tsc --noEmit -p tsconfig.json","test":"vp test"}}
+{
+  "name": "@yielded/agent-ai-decision",
+  "version": "0.1.0-beta.167",
+  "description": "Native Effect decision adapters and thread-owned automatic model selection.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yielded-dev/agent.git",
+    "directory": "packages/ai-decision"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "type": "module",
+  "sideEffects": [],
+  "exports": {
+    ".": "./src/index.ts",
+    "./auto-model": "./src/AutoModel.ts",
+    "./language-model-decision-model": "./src/LanguageModelDecisionModel.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "vp test"
+  },
+  "devDependencies": {
+    "@effect/ai-typesafe": "catalog:",
+    "@effect/vitest": "catalog:",
+    "effect": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "^4.0.0"
+  }
+}
