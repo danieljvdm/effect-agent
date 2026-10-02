@@ -13,13 +13,13 @@ export const ModelId = Schema.Literals(MODEL_IDS);
 export type ModelId = typeof ModelId.Type;
 export const ReasoningEffort = Schema.Literals(["low", "medium", "high"]);
 
-// USD per million tokens = microdollars per token. Standard, short-context pricing,
-// checked 2026-09-22: https://developers.openai.com/api/docs/pricing
-// Charge uncached input at the higher cache-write rate for a conservative estimate.
+// Microdollars per token. Priority budgeting uses twice the frozen standard
+// short-context estimates below, including the higher cache-write input rate.
+// These conservative reservations are estimates, never provider invoices.
 const prices: Readonly<Record<ModelId, { input: number; cached: number; output: number }>> = {
-  "gpt-6-astra": { input: 12.5, cached: 1, output: 50 },
-  "gpt-6-sol": { input: 2.5, cached: 0.2, output: 10 },
-  "gpt-6-luna": { input: 0.125, cached: 0.01, output: 0.5 },
+  "gpt-6-astra": { input: 25, cached: 2, output: 100 },
+  "gpt-6-sol": { input: 5, cached: 0.4, output: 20 },
+  "gpt-6-luna": { input: 0.25, cached: 0.02, output: 1 },
 };
 
 export const MAX_OUTPUT_TOKENS = 4_096;
@@ -144,7 +144,7 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
       original.previous_response_id !== undefined ||
       original.conversation !== undefined ||
       original.background === true ||
-      original.service_tier !== "default" ||
+      original.service_tier !== "priority" ||
       original.max_output_tokens !== MAX_OUTPUT_TOKENS ||
       original.tools?.some((tool) => tool.type !== "function")
     ) {
@@ -234,7 +234,7 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
       usage.input_tokens !== reservation.tokens ||
       usage.output_tokens > MAX_OUTPUT_TOKENS ||
       cost > reservation.cost ||
-      (response.service_tier !== undefined && response.service_tier !== "default")
+      (response.service_tier !== undefined && response.service_tier !== "priority")
     )
       return yield* refuse("Provider usage or service tier escaped the preflight reservation");
     const before = yield* Ref.get(state);

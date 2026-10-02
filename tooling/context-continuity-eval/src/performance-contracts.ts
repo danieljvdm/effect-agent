@@ -55,7 +55,7 @@ export const performanceSettings = {
   max_output_tokens: 4_096,
   reasoning: { effort: "low" },
   store: false,
-  service_tier: "default",
+  service_tier: "priority",
   strictJsonSchema: true,
 } as const;
 
@@ -73,7 +73,7 @@ export const PerformanceIdentity = Schema.Struct({
     max_output_tokens: Schema.Literal(4_096),
     reasoning: Schema.Struct({ effort: Schema.Literal("low") }),
     store: Schema.Literal(false),
-    service_tier: Schema.Literal("default"),
+    service_tier: Schema.Literal("priority"),
     strictJsonSchema: Schema.Literal(true),
   }),
 });

@@ -52,7 +52,7 @@ it("refuses inference and retry while spending is unresolved", async () => {
       const request = {
         model: "gpt-6-astra",
         store: false,
-        service_tier: "default",
+        service_tier: "priority",
         max_output_tokens: 4096,
         input: "hello",
       } as const;

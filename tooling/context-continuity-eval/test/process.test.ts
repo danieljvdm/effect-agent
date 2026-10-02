@@ -17,7 +17,7 @@ it("recovers the real SQLite runtime after two SIGKILLs with pressure and cumula
 
       const report = yield* supervise(
         {
-          model: "gpt-6-astra",
+          model: "gpt-6-luna",
           reasoningEffort: "low",
           seed: 17,
           outputDirectory,
@@ -81,7 +81,7 @@ it("does not respawn after an interruption", async () => {
 
       const run = supervise(
         {
-          model: "gpt-6-astra",
+          model: "gpt-6-luna",
           reasoningEffort: "low",
           seed: 17,
           outputDirectory,

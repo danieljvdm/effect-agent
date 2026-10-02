@@ -55,7 +55,7 @@ export const cloudflareModelSettings = {
   max_output_tokens: MAX_OUTPUT_TOKENS,
   reasoning: { effort: "low" },
   store: false,
-  service_tier: "default",
+  service_tier: "priority",
   strictJsonSchema: true,
 } as const;
 

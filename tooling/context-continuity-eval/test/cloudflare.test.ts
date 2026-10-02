@@ -45,7 +45,7 @@ it("runs the same pressure and evidence gate through the public Cloudflare host 
       bindings: {
         CONTEXT_EVAL_TOKEN: "test-token",
         OPENAI_API_KEY: "test-only",
-        CONTEXT_EVAL_MODEL: "gpt-6-astra",
+        CONTEXT_EVAL_MODEL: "gpt-6-luna",
       },
       outboundService: async (request) => {
         const json = await request.text();
@@ -67,7 +67,7 @@ it("runs the same pressure and evidence gate through the public Cloudflare host 
         calls.set(phase, ordinal + 1);
 
         const next = await Effect.runPromise(
-          scriptedResponse(json, phase, ordinal, countedInput, "gpt-6-astra", 17, original),
+          scriptedResponse(json, phase, ordinal, countedInput, "gpt-6-luna", 17, original),
         );
 
         original = next.original;
@@ -107,7 +107,7 @@ it("runs the same pressure and evidence gate through the public Cloudflare host 
 
         const report = yield* runCloudflareEvaluation(
           {
-            model: "gpt-6-astra",
+            model: "gpt-6-luna",
             reasoningEffort: "low",
             seed: 17,
             outputDirectory,
