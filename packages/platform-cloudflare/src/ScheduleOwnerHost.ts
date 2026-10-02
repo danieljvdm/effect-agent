@@ -643,7 +643,7 @@ export const scheduleAlarmHandler = (limits: SchedulingLimits) =>
           yield* alarmControl.reconcile;
         }
       }),
-    { mode: "ordered" },
+    { mode: "isolated" },
   ).pipe(
     // Bound due acquisition and acknowledgement as well as admission. Prepared occurrences
     // and their replacement alarm survive interruption and retain their idempotency keys.

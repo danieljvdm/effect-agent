@@ -34,17 +34,22 @@ export interface AlarmTransaction {
 }
 
 export interface ProcessOptions {
+  /** Ordered stops this invocation on failure; isolated continues after typed handler failures. */
   readonly mode: "ordered" | "isolated";
   readonly limit?: number;
+  /** Retry timing and backoff follow the host's policy. */
   readonly retryFailedAfter?: Duration.Input;
+  /** Failure notification; its timing relative to retry persistence is host-owned. */
   readonly onFailure?: () => Effect.Effect<void>;
 }
 
 /**
  * Host-owned logical alarms. Transactions commit application SQL, alarm rows and the
  * single native alarm together on the same DO storage. Acknowledge only after handler
- * success and only if its persisted row was not replaced. Ordered failure stops later
- * handlers; isolated failure retains a retry. Interruption must not acknowledge work.
+ * success and only if its persisted row was not replaced. Ordered failure propagates
+ * and stops later handlers in that invocation; isolated typed handler failures retain
+ * retries and allow later handlers. Retry deadlines are host-owned, so ordered mode
+ * does not promise FIFO across retries. Interruption must not acknowledge work.
  */
 export class CloudflareAlarms extends Context.Service<
   CloudflareAlarms,

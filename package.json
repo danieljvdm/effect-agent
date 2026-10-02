@@ -79,9 +79,6 @@
     "node": "^22.18.0 || >=24.11.0"
   },
   "packageManager": "bun@1.4.2",
-  "patchedDependencies": {
-    "alchemy@2.0.0-beta.80": "patches/alchemy@2.0.0-beta.80.patch"
-  },
   "catalog": {
     "alchemy": "2.0.0-beta.80",
     "@base-ui/react": "1.6.0",
@@ -154,5 +151,8 @@
     "docs": {
       "typescript": "6.0.3"
     }
+  },
+  "patchedDependencies": {
+    "alchemy@2.0.0-beta.80": "patches/alchemy@2.0.0-beta.80.patch"
   }
 }

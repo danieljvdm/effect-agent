@@ -109,6 +109,35 @@ const adoptLegacy = Effect.fnUntraced(function* (state: DurableObjectState["Serv
 
       if (!present) return;
 
+      const columns = yield* Effect.try({
+        try: () =>
+          state.raw.storage.sql.exec("PRAGMA table_info(effect_cf_scheduled_alarms)").toArray(),
+        catch: storage,
+      }).pipe(
+        Effect.flatMap(
+          Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ name: Schema.NonEmptyString }))),
+        ),
+        Effect.mapError(invalid),
+      );
+
+      const hasAttempts = yield* Effect.try({
+        try: () =>
+          state.raw.storage.sql
+            .exec(
+              "SELECT name FROM sqlite_master WHERE type='table' AND name='effect_cf_alarm_attempts'",
+            )
+            .toArray().length > 0,
+        catch: storage,
+      });
+
+      // Newer effect-cf formats own retry/parking state that this legacy transfer cannot preserve.
+      if (
+        hasAttempts ||
+        columns.length !== Object.keys(LegacyRow.fields).length ||
+        columns.some(({ name }) => !Object.hasOwn(LegacyRow.fields, name))
+      )
+        return yield* invalid("The previous alarm storage format is unsupported");
+
       const rows = yield* Effect.try({
         try: () =>
           state.raw.storage.sql

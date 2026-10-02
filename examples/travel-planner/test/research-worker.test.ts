@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { SettlementFailureDiagnostic } from "@yielded/agent/records";
 import { ThreadExport } from "@yielded/agent/thread-store";
-import { WorkerCompletion } from "@yielded/agent/worker";
+import { WorkerCompletion, WorkerUpdate } from "@yielded/agent/worker";
 import { Effect, Schema } from "effect";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
@@ -226,10 +226,25 @@ it("does not treat the retained request on a worker update or completion as fres
     (state) => state.pending === 0 && state.scouts?.[0]?.state === "idle",
   );
 
+  // A joined update can also fail its host user receipt. Check the reports themselves.
+  const reportSubmissions = new Set(
+    parent.records.flatMap(({ record }) => {
+      const input = record.payload;
+
+      return input._tag === "UserInputRecorded" &&
+        input.submissionId !== undefined &&
+        (Schema.is(WorkerUpdate)(input.messageAdmission) ||
+          Schema.is(WorkerCompletion)(input.messageAdmission))
+        ? [input.submissionId]
+        : [];
+    }),
+  );
+
   const denied = parent.records.filter(
     ({ record }) =>
       record.payload._tag === "SubmissionSettled" &&
       record.payload.outcome === "failed" &&
+      reportSubmissions.has(record.payload.submissionId) &&
       Schema.decodeOption(SettlementFailureDiagnostic)(record.payload.result).pipe(
         (failure) =>
           failure._tag === "Some" && failure.value.errorTag === "AgentToolAuthorizationDenied",

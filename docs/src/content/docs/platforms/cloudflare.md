@@ -235,8 +235,9 @@ imports; the original native host imports still require it.
 
 When switching an existing deployment, preserve its Durable Object namespace, exported class,
 binding, and object names. Replace the writer exclusively: do not run both alarm schedulers
-against one Object. Schedule and Subscription hosts atomically adopt supported `effect-cf` alarm rows
-and retain application storage; malformed rows or conflicting destination alarms fail without
+against one Object. Schedule and Subscription hosts atomically adopt the legacy six-column
+`effect-cf` alarm table and retain application storage. Newer formats with retry/parking state
+(including `effect-cf` 0.53), malformed rows, or conflicting destination alarms fail without
 mutation. Changing resource identity creates different storage, and reverting to the old alarm
 writer after adoption requires a separate migration.
 

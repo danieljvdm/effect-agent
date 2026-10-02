@@ -1,7 +1,12 @@
-import { Effect, Layer } from "effect";
+import { Cause, Effect, Layer, Option } from "effect";
 import { DurableObjectAlarm, DurableObjectStorage } from "effect-cf";
 
-import { CloudflareAlarmError, CloudflareAlarms } from "../CloudflareAlarms.ts";
+import {
+  type AlarmEvent,
+  CloudflareAlarmError,
+  CloudflareAlarms,
+  type ProcessOptions,
+} from "../CloudflareAlarms.ts";
 
 const alarmError = (cause: { readonly _tag: unknown }) =>
   new CloudflareAlarmError({
@@ -43,22 +48,77 @@ export const effectCfAlarmsLayer = Layer.effect(
             }),
           )
           .pipe(Effect.catchTag("StorageOperationError", (cause) => alarmError(cause))),
-      processDue: (handle, options) =>
-        alarms.processDueAlarms(handle, options).pipe(
-          Effect.asVoid,
-          Effect.catchTag(
-            [
-              "InvalidAlarmRefError",
-              "InvalidAlarmPayloadError",
-              "InvalidProcessDueAlarmsOptionsError",
-              "InvalidRepeatEveryError",
-              "InvalidScheduleConfigurationError",
-              "StorageOperationError",
-              "StoredAlarmDecodeError",
-            ],
-            (cause) => alarmError(cause),
-          ),
-        ),
+      processDue: <E, R>(
+        handle: (event: AlarmEvent) => Effect.Effect<void, E, R>,
+        options: ProcessOptions,
+      ): Effect.Effect<void, E | CloudflareAlarmError, R> =>
+        Effect.suspend(() => {
+          let handlerFailure = Option.none<Cause.Cause<E>>();
+
+          const process =
+            options.mode === "isolated"
+              ? alarms.processDueAlarms(handle, options)
+              : alarms.processDueAlarms(
+                  (event) =>
+                    Effect.suspend(() => handle(event)).pipe(
+                      Effect.tapCause((cause) =>
+                        Effect.sync(() => {
+                          handlerFailure = Option.some(cause);
+                        }),
+                      ),
+                    ),
+                  {
+                    ...options,
+                    onFailure: (failure) =>
+                      Effect.gen(function* () {
+                        if (options.onFailure !== undefined) yield* options.onFailure();
+
+                        // effect-cf commits retry bookkeeping before propagating this
+                        // hook's failure. Keep the original typed cause, including defects.
+                        if (Option.isSome(handlerFailure))
+                          return yield* Effect.failCause(handlerFailure.value);
+
+                        // A stored-row decode failure never entered the handler.
+                        const decodeError = (cause: unknown) =>
+                          cause instanceof DurableObjectAlarm.StoredAlarmDecodeError
+                            ? cause
+                            : new DurableObjectAlarm.StoredAlarmDecodeError({
+                                cause,
+                                storageId: failure.storageId,
+                              });
+
+                        return yield* Cause.isCause(failure.cause)
+                          ? Effect.failCause(Cause.map(failure.cause, decodeError))
+                          : Effect.fail(decodeError(failure.cause));
+                      }),
+                  },
+                );
+
+          return process.pipe(
+            Effect.asVoid,
+            Effect.catchTag(
+              [
+                "InvalidAlarmRefError",
+                "InvalidAlarmPayloadError",
+                "InvalidProcessDueAlarmsOptionsError",
+                "InvalidRepeatEveryError",
+                "InvalidScheduleConfigurationError",
+                "StorageOperationError",
+                "StoredAlarmDecodeError",
+              ],
+              (cause): Effect.Effect<never, E | CloudflareAlarmError> => {
+                const original = Option.flatMap(handlerFailure, Cause.findErrorOption);
+
+                // A handler may fail with a native error tag too. Map only adapter failures.
+                return Option.isSome(handlerFailure) &&
+                  Option.isSome(original) &&
+                  original.value === cause
+                  ? Effect.failCause(handlerFailure.value)
+                  : alarmError(cause);
+              },
+            ),
+          );
+        }),
     });
   }),
 );

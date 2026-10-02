@@ -4,9 +4,9 @@ import {
 } from "@yielded/agent-storage-cloudflare/port-routing";
 import type { ThreadId } from "@yielded/agent/identifiers";
 import { Effect, Layer } from "effect";
-import { RpcTracing } from "effect-cf";
 
 import { callThreadObject, ThreadObjectNamespace } from "../CloudflareHostBindings.ts";
+import { RpcStrategy } from "../CloudflareRpc.ts";
 
 /**
  * `ThreadPortTransport` over native Durable Object JS RPC (decision D-P6-3): one
@@ -30,13 +30,13 @@ export const threadPortTransportLayer: Layer.Layer<
 > = Layer.effect(ThreadPortTransport)(
   Effect.gen(function* () {
     const namespace = yield* ThreadObjectNamespace;
+    const rpcStrategy = yield* RpcStrategy;
     const { rpcTracing } = namespace;
 
     return ThreadPortTransport.of({
       call: Effect.fn(
         function* (threadId: ThreadId, request: unknown) {
-          const traceArgs =
-            rpcTracing === undefined ? [] : yield* RpcTracing.withRpcTraceContext([]);
+          const traceArgs = rpcTracing === undefined ? [] : yield* rpcStrategy.traceArguments;
 
           return yield* callThreadObject(
             threadId,
@@ -49,7 +49,7 @@ export const threadPortTransportLayer: Layer.Layer<
             ? Effect.withSpan(effect, "CloudflarePortTransport.call", {
                 attributes: { threadId },
               })
-            : RpcTracing.withRpcClientSpan(effect, rpcTracing, "portCall"),
+            : rpcStrategy.withClientSpan(effect, rpcTracing, "portCall"),
       ),
     });
   }),
