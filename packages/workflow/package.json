@@ -1,6 +1,6 @@
 {
   "name": "@yielded/agent-workflow",
-  "version": "0.1.0-beta.165",
+  "version": "0.1.0-beta.166",
   "description": "Effect Workflow execution for the existing durable Agent runtime.",
   "license": "MIT",
   "repository": {
