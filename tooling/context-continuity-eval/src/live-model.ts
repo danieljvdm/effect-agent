@@ -234,7 +234,9 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
       usage.input_tokens !== reservation.tokens ||
       usage.output_tokens > MAX_OUTPUT_TOKENS ||
       cost > reservation.cost ||
-      (response.service_tier !== undefined && response.service_tier !== "priority")
+      (response.service_tier !== undefined &&
+        response.service_tier !== "priority" &&
+        response.service_tier !== "fast")
     )
       return yield* refuse("Provider usage or service tier escaped the preflight reservation");
     const before = yield* Ref.get(state);
