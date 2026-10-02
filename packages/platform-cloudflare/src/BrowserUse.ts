@@ -717,7 +717,8 @@ export const make = Effect.fnUntraced(function* <R>(
             dispatch = "unknown";
             await page.keyboard.down(modifier);
             try {
-              await page.keyboard.press("KeyA");
+              // Headless browsers may not apply the platform shortcut's editing command.
+              await page.keyboard.press("KeyA", { commands: ["selectAll"] });
             } finally {
               await page.keyboard.up(modifier);
             }
