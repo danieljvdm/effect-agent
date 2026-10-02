@@ -42,12 +42,15 @@ import {
   type AbortCommand,
   type AbortIntent,
   type Settlement,
+  SubmissionLedger,
 } from "effect-agent/submission-ledger";
 import { type ThreadNotMaterialized, type ThreadStoreError } from "effect-agent/thread-store";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 
 import { ExclusiveSqliteHost } from "./internal/exclusive-host.ts";
 import { runNodeMessageDeliveries } from "./internal/message-delivery.ts";
 import { makeNodePreparedInputAdmission, NodeAdmission } from "./internal/prepared-admission.ts";
+import { runNodeWorkerDispatch } from "./internal/worker-dispatch.ts";
 import {
   NodeDurableAgentRuntime,
   NodeDurableAgentRuntimeConfig,
@@ -62,7 +65,13 @@ export class AdmissionClosed extends Schema.TaggedError<AdmissionClosed>()("Admi
   message: Schema.String,
 }) {}
 
-const makeHost = Effect.fn("NodeDurableHost.make")(function* (startWorkers: boolean) {
+const makeHost = Effect.fn("NodeDurableHost.make")(function* (
+  startWorkers: boolean,
+  dispatchServices?: {
+    readonly ledger: SubmissionLedger["Service"];
+    readonly wake: WakeScheduler["Service"];
+  },
+) {
   const runtime = yield* DurableAgentRuntime;
   const config = yield* NodeDurableAgentRuntimeConfig;
 
@@ -124,24 +133,35 @@ const makeHost = Effect.fn("NodeDurableHost.make")(function* (startWorkers: bool
     Effect.provide(Context.merge(deliveryServices, deliveryContext)),
   );
 
-  const runWorkers = <A, E, R>(worker: Effect.Effect<A, E, R>): Effect.Effect<void, E, R> =>
+  const withDeliveries = <A, E, R>(worker: Effect.Effect<A, E, R>): Effect.Effect<void, E, R> =>
     Effect.scoped(
       // Either side exiting stops and joins the other; delivery interruption cannot leave
       // an apparently healthy worker pool running without message recovery.
-      Effect.raceFirst(
-        Effect.forEach(
-          Array.from({ length: config.workerConcurrency }, (_, index) => index),
-          () => worker,
-          { concurrency: "unbounded", discard: true },
-        ),
-        runDeliveries,
+      Effect.raceFirst(worker, runDeliveries).pipe(Effect.asVoid),
+    );
+
+  const runWorkers = <A, E, R>(worker: Effect.Effect<A, E, R>): Effect.Effect<void, E, R> =>
+    withDeliveries(
+      Effect.forEach(
+        Array.from({ length: config.workerConcurrency }, (_, index) => index),
+        () => worker,
+        { concurrency: "unbounded", discard: true },
       ),
     );
 
-  // Every claimed head resolves the current Binding for its stable agentId, so one bounded
-  // pool serves parent and child lanes — the spec §12 smallest-pool suspension/wakeup proof
-  // runs `workerConcurrency: 1` over exactly this loop.
-  const runResolvedWorkers = runWorkers(runtime.runResolvedWorker);
+  // Managed hosts dispatch each lane once. Bare host layers retain their existing service
+  // requirements and generic worker-loop composition.
+  const runResolvedWorkers =
+    dispatchServices === undefined
+      ? runWorkers(runtime.runResolvedWorker)
+      : withDeliveries(
+          runNodeWorkerDispatch(
+            runtime,
+            dispatchServices.ledger,
+            dispatchServices.wake,
+            config.workerConcurrency,
+          ),
+        );
 
   const run = startWorkers
     ? Fiber.join(
@@ -254,7 +274,8 @@ export class NodeDurableHost extends Context.Service<
      * Run `workerConcurrency` copies of `DurableAgentRuntime.runResolvedWorker` over the host's
      * registered Bindings: every claimed head resolves the current Binding for its stable
      * agentId, so one bounded pool serves parent and attached-child lanes.
-     * Hosts built with the module-level `layer` instead join their existing pool.
+     * Hosts built with the module-level `layer` instead join their existing pool, which
+     * dispatches distinct Thread lanes through one bounded queue.
      */
     readonly runResolvedWorkers: Effect.Effect<void, DurableWorkerFailure | DurableBindingFailure>;
   }
@@ -353,7 +374,14 @@ export const layer = <
     ReconcilerRequirements
   >,
 ) =>
-  Layer.effect(NodeDurableHost)(makeHost(true)).pipe(
+  Layer.effect(NodeDurableHost)(
+    Effect.gen(function* () {
+      const ledger = yield* SubmissionLedger;
+      const wake = yield* WakeScheduler;
+
+      return yield* makeHost(true, { ledger, wake });
+    }),
+  ).pipe(
     Layer.provideMerge(
       NodeDurableAgentRuntime.layerRegistered(registrations, options).pipe(
         Layer.provide(Layer.succeed(ExclusiveSqliteHost, true)),

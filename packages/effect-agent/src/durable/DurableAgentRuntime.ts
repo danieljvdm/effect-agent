@@ -3783,14 +3783,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       }),
     );
 
-    const snapshot = yield* ledger.loadRecoverySnapshot(
-      RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
-    );
-
     yield* wake.notify(submission.threadId);
     yield* notifyParentOfChildSettlement(submission, record);
 
-    return materializeSettlement(settlement, snapshot.reservation?.record);
+    return materializeSettlement(settlement, record);
   });
 
   /**
@@ -5730,8 +5726,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           break;
         }
       }
-      /** Pre-existing joins of this host Run, loaded lazily at the first drain seam. */
-      let joinBacklog: ReadonlyArray<JoinSnapshot> | undefined;
+
+      /** Only canonical joined inputs can require restoration from an earlier Attempt. */
+      let joinBacklog: ReadonlyArray<JoinSnapshot> | undefined =
+        joinedInputEnvelopes.size === 0 ? [] : undefined;
+
       /** Joined inputs already handed to the engine during THIS Attempt (never re-deliver). */
       const deliveredJoinInputs = new Set<string>();
       // Canonical encoded parameters per declared call, for the approval request digest: seeded
@@ -8618,18 +8617,19 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const ordinaryCallsResolved = Effect.gen(function* () {
         const reconciliationRecords = yield* refreshControl();
 
-        const reconciliationSnapshot = yield* ledger.loadRecoverySnapshot(
-          RecoverySnapshotRequest.make({ submissionId }),
-        );
-
         const reconciliationEvidence = yield* evidenceFor(
           reconciliationRecords,
           submissionId,
           true,
-          reconciliationSnapshot.hostSubmissionId,
+          snapshot.hostSubmissionId,
         );
 
         if (reconciliationEvidence.openToolCalls.length === 0) return true;
+
+        const reconciliationSnapshot = yield* ledger.loadRecoverySnapshot(
+          RecoverySnapshotRequest.make({ submissionId }),
+        );
+
         for (const envelope of reconciliationRecords) knownIds.add(envelope.record.recordId);
 
         const review = yield* reconcileOpenCalls(
@@ -9098,11 +9098,18 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     ) => Effect.Effect<CapturedWorkerBinding, DurableBindingFailure | DurableWorkerFailure>,
     threadId: ThreadId,
     options?: { readonly yieldAfter?: DateTime.Utc },
-  ): Effect.Effect<Option.Option<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
+  ): Effect.Effect<
+    {
+      readonly settlement: Option.Option<Settlement>;
+      readonly firstClaimedSubmissionId: SubmissionId | undefined;
+    },
+    DurableWorkerFailure | DurableBindingFailure
+  > =>
     Effect.gen(function* () {
       let resumeAfterRetention = false;
       let handoff: ClaimHandoff | undefined;
       let nextHandoff: ClaimHandoff | undefined;
+      let firstClaimedSubmissionId: SubmissionId | undefined;
 
       const attempt = Effect.scoped(
         Effect.gen(function* () {
@@ -9110,6 +9117,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
           if (Option.isNone(claimed)) return Option.none();
           const { claim, tokenRef, renewAtRef } = claimed.value;
+
+          firstClaimedSubmissionId ??= claim.submissionId;
 
           const attributes = {
             threadId,
@@ -9221,7 +9230,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           handoff = nextHandoff;
           continue;
         }
-        if (!resumeAfterRetention) return settlement;
+        if (!resumeAfterRetention) return { settlement, firstClaimedSubmissionId };
       }
     }).pipe(withThreadHeadSpan);
 
@@ -9255,19 +9264,19 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const settlements: Array<Settlement> = [];
 
       while (true) {
-        const before = yield* eligibleThreadHead(threadId);
-        const settlement = yield* processThreadHead(resolve, threadId);
+        const { settlement, firstClaimedSubmissionId } = yield* processThreadHead(
+          resolve,
+          threadId,
+        );
 
         if (Option.isNone(settlement)) {
+          if (firstClaimedSubmissionId === undefined) return settlements;
           const after = yield* eligibleThreadHead(threadId);
 
           // Parking an unknown operation exposes later runnable work. Other suspensions,
           // live ownership and a transiently unproven operation retain the existing barrier.
-          if (
-            Option.isSome(before) &&
-            Option.isSome(after) &&
-            before.value.submissionId !== after.value.submissionId
-          )
+          // Keep the first claim across handoffs: its unfinished lane may still be the head.
+          if (Option.isSome(after) && firstClaimedSubmissionId !== after.value.submissionId)
             continue;
 
           return settlements;
@@ -9338,7 +9347,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     threadId: ThreadId,
     options?: { readonly yieldAfter?: DateTime.Utc },
   ): Effect.Effect<Option.Option<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
-    processThreadHead(resolveCurrentBinding, threadId, options);
+    processThreadHead(resolveCurrentBinding, threadId, options).pipe(
+      Effect.map(({ settlement }) => settlement),
+    );
 
   const claimFor = Effect.fn("DurableAgentRuntime.claimFor")(function* (
     submission: SubmissionSnapshot,

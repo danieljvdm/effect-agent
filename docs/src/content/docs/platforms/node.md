@@ -33,8 +33,9 @@ The automatic host holds SQLite's exclusive connection lock for its entire Scope
 fails startup, and independent readers cannot access the database while that connection is alive.
 Use a local filesystem with working SQLite locks; do not replace or unlink a live database file.
 New files are initialized in WAL mode; existing files must already use WAL mode.
-`workerConcurrency` limits worker loops and defaults to one.
-Active workers share one periodic ledger scan.
+`workerConcurrency` limits concurrently processed threads and defaults to one.
+The managed host dispatches wake hints through one bounded queue, coalescing repeated hints
+for pending or active threads. A shared periodic ledger scan recovers missed hints.
 The scan stops when the last subscriber leaves and restarts when another subscribes.
 `NodeDurableHost.layer` checks storage, recovers pending work, and starts the worker pool when
 the Layer is acquired. Save this as `node-host.ts`, replacing `producerId` for each process start:
