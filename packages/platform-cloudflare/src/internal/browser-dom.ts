@@ -31,7 +31,7 @@ export const inspectDom = (
       root,
       NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
       {
-        acceptNode: (node) => {
+        acceptNode(node) {
           if (!(node instanceof Element)) return NodeFilter.FILTER_ACCEPT;
           const style = getComputedStyle(node);
 
@@ -443,7 +443,7 @@ export const waitDom = (selector: string, state: string, text: string | undefine
     if (root === undefined) break;
 
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
-      acceptNode: (node) => {
+      acceptNode(node) {
         if (!(node instanceof Element)) return NodeFilter.FILTER_ACCEPT;
         const style = getComputedStyle(node);
 
