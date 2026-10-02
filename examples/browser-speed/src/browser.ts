@@ -91,7 +91,9 @@ export const makeBrowser = Effect.fnUntraced(function* (
       "Load task board",
       native(async (page) => {
         await page.setViewport({ width: 1100, height: 740 });
-        await page.setContent(fixtureHtml(), { waitUntil: "domcontentloaded" });
+        await page.goto(`data:text/html;charset=utf-8,${encodeURIComponent(fixtureHtml())}`, {
+          waitUntil: "domcontentloaded",
+        });
         await page.waitForSelector("#edit-1", { visible: true, timeout: 5_000 });
       }),
     ),
