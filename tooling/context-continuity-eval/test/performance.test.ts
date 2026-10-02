@@ -134,7 +134,7 @@ it("rejects fabricated tool consumption and missing history after workerd recove
                 model: "gpt-6-astra",
                 created_at: 1,
                 status: "completed",
-                service_tier: "default",
+                service_tier: "priority",
                 output,
                 usage: {
                   input_tokens: countedInput,

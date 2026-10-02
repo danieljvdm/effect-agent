@@ -278,8 +278,8 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
     provider: "openai",
     model: options.model,
     reasoningEffort: options.reasoningEffort,
-    serviceTier: "default",
-    pricingVersion: "openai-2026-09-08-conservative",
+    serviceTier: "priority",
+    pricingVersion: "openai-priority-2x-standard-2026-10-02",
     contextTokenLimit: CONTEXT_TOKEN_LIMIT,
     maxOutputTokens: MAX_OUTPUT_TOKENS,
     maxCostMicrousd: options.maxCostMicrousd,
@@ -332,7 +332,7 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
     max_output_tokens: MAX_OUTPUT_TOKENS,
     reasoning: { effort: options.reasoningEffort },
     store: false,
-    service_tier: "default",
+    service_tier: "priority",
     strictJsonSchema: true,
   } as const;
 

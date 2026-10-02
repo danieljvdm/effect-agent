@@ -143,7 +143,7 @@ export const scriptedResponse = Effect.fn("fixture.scriptedResponse")(function* 
         model,
         created_at: 1,
         status: "completed",
-        service_tier: "default",
+        service_tier: "priority",
         output: [item],
         usage: {
           input_tokens: countedInput,
