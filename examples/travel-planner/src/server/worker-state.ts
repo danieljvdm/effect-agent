@@ -1,5 +1,5 @@
 import { AgentUpdates } from "@yielded/agent";
-import { ThreadObjectIdentity } from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
+import { ThreadObjectIdentity } from "@yielded/agent-platform-alchemy-cloudflare/cloudflare-bindings";
 import { ThreadId } from "@yielded/agent/identifiers";
 import { MessageDeliveryStore } from "@yielded/agent/message-delivery";
 import { IdempotencyKey, Principal } from "@yielded/agent/receipt";
@@ -9,12 +9,12 @@ import { ThreadRead, ThreadStore } from "@yielded/agent/thread-store";
 import { WorkerRef } from "@yielded/agent/worker";
 import { WorkerHostAuthorizer } from "@yielded/agent/worker-host";
 import { Effect, Option, Schema, Stream } from "effect";
-import { WorkerEnvironment } from "effect-cf";
 
 import { PlannerError, PlannerWorkerDetail, PlannerWorkerRequest } from "../domain.ts";
 import { ScoutFindings } from "../research/contracts.ts";
 import { UpdatingResearchScout, updatingResearchScout } from "../research/scout.ts";
 import { plannerActivity } from "./activity.ts";
+import { plannerEnvironment } from "./alchemy.ts";
 import { readDiagnostics } from "./diagnostics.ts";
 import { ProgressStore } from "./progress.ts";
 import { ownerOfThread } from "./tenancy.ts";
@@ -106,7 +106,7 @@ export const plannerWorker = Effect.fn("plannerWorker")(
       yield* workerRequest(input),
     );
 
-    const env = yield* WorkerEnvironment;
+    const env = yield* plannerEnvironment;
 
     const reply = yield* Effect.tryPromise({
       try: () => env.ACCOUNT_THREADS.getByName(input.workerId).plannerWorkerStatus(request),

@@ -1,0 +1,289 @@
+diff --git a/src/Cloudflare/Workers/DurableObjectBridge.ts b/src/Cloudflare/Workers/DurableObjectBridge.ts
+--- a/src/Cloudflare/Workers/DurableObjectBridge.ts
++++ b/src/Cloudflare/Workers/DurableObjectBridge.ts
+@@ -7,7 +7,6 @@
+ import * as Exit from "effect/Exit";
+ import * as Layer from "effect/Layer";
+ import * as Scope from "effect/Scope";
+-import * as Stream from "effect/Stream";
+
+ import { HttpServerResponse } from "effect/http";
+ import {
+@@ -98,16 +97,23 @@
+                     );
+                   }),
+                 ),
+-                Effect.map((instance) => ({
+-                  instance,
+-                  services: Context.add(
+-                    services,
+-                    RuntimeContext,
+-                    instanceRuntimeContext,
+-                  ),
+-                  context,
+-                  telemetry,
+-                })),
++                Effect.map((instance) => {
++                  // Native RPC discovers prototype methods, not only Proxy properties.
++                  for (const name of Object.keys(instance)) {
++                    if (name in this) continue;
++                    Object.defineProperty(DurableObjectBridge.prototype, name, {
++                      value: function (this: DurableObjectBridge, ...args: unknown[]) {
++                        return this.#callRpc(name, args);
++                      },
++                    });
++                  }
++                  return {
++                    instance,
++                    services: Context.add(services, RuntimeContext, instanceRuntimeContext),
++                    context,
++                    telemetry,
++                  };
++                }),
+                 Effect.runPromise,
+               );
+             },
+@@ -120,30 +126,23 @@
+               typeof f === "function" ? f.bind(target) : f;
+             if (typeof prop !== "string") return bind((target as any)[prop]);
+             if (prop in target) return bind((target as any)[prop]);
+-            return async (...args: any[]) =>
+-              this.#execute((instance) => {
+-                const method = instance[prop as keyof DurableObjectShape];
+-                if (typeof method === "function") {
+-                  const result = (method as any)(...args);
+-                  // Effects (including nested-RPC values built by
+-                  // `asEffectOrStream`, which are Effects *branded* as Streams)
+-                  // must be run as effects — their resolved value may itself be
+-                  // a `Stream`, which `handleRpcExit` then encodes. Only a
+-                  // *genuine* `Stream` (not an Effect) is lifted into the
+-                  // success channel so `handleRpcExit` encodes it directly.
+-                  return Effect.isEffect(result)
+-                    ? result
+-                    : Stream.isStream(result)
+-                      ? Effect.succeed(result)
+-                      : result;
+-                } else if (Effect.isEffect(method)) {
+-                  return method;
+-                } else {
+-                  return Effect.succeed(method);
+-                }
+-              }, handleRpcExit);
++            return (...args: unknown[]) => this.#callRpc(prop, args);
+           },
+         });
++      }
++
++      #callRpc(name: string, args: unknown[]) {
++        return this.#execute((instance) => Effect.suspend(() => {
++          // Another instance may have introduced this name onto the shared prototype.
++          if (!Object.hasOwn(instance, name)) {
++            return Effect.die(new Error(`Method "${name}" not found on Durable Object`));
++          }
++          const member = instance[name as keyof DurableObjectShape];
++          const result = typeof member === "function"
++            ? (member as (...args: unknown[]) => unknown)(...args)
++            : member;
++          return Effect.isEffect(result) ? result : Effect.succeed(result);
++        }), handleRpcExit);
+       }
+
+       async #execute(
+diff --git a/lib/Cloudflare/Workers/DurableObjectBridge.js b/lib/Cloudflare/Workers/DurableObjectBridge.js
+--- a/lib/Cloudflare/Workers/DurableObjectBridge.js
++++ b/lib/Cloudflare/Workers/DurableObjectBridge.js
+@@ -4,7 +4,6 @@
+ import * as Exit from "effect/Exit";
+ import * as Layer from "effect/Layer";
+ import * as Scope from "effect/Scope";
+-import * as Stream from "effect/Stream";
+ import { HttpServerResponse } from "effect/http";
+ import { dispatchAlarmCallbacks, initializeAlarmCallbacks, makeDurableObjectCallbackFactory, } from "./AlarmCallback.js";
+ import { RuntimeContext } from "../../RuntimeContext.js";
+@@ -47,12 +46,24 @@
+                     const seal = initializeAlarmCallbacks(this.#state);
+                     const instanceContext = Layer.succeed(RuntimeContext, instanceRuntimeContext).pipe(Layer.provideMerge(doContext));
+                     return instance.pipe(Effect.provide(instanceContext), Effect.ensuring(Effect.sync(seal)));
+-                })), Effect.map((instance) => ({
+-                    instance,
+-                    services: Context.add(services, RuntimeContext, instanceRuntimeContext),
+-                    context,
+-                    telemetry,
+-                })), Effect.runPromise);
++                })), Effect.map((instance) => {
++                    // Native RPC discovers prototype methods, not only Proxy properties.
++                    for (const name of Object.keys(instance)) {
++                        if (name in this)
++                            continue;
++                        Object.defineProperty(DurableObjectBridge.prototype, name, {
++                            value: function (...args) {
++                                return this.#callRpc(name, args);
++                            },
++                        });
++                    }
++                    return {
++                        instance,
++                        services: Context.add(services, RuntimeContext, instanceRuntimeContext),
++                        context,
++                        telemetry,
++                    };
++                }), Effect.runPromise);
+             }));
+             return new Proxy(this, {
+                 get: (target, prop) => {
+@@ -61,31 +72,22 @@
+                         return bind(target[prop]);
+                     if (prop in target)
+                         return bind(target[prop]);
+-                    return async (...args) => this.#execute((instance) => {
+-                        const method = instance[prop];
+-                        if (typeof method === "function") {
+-                            const result = method(...args);
+-                            // Effects (including nested-RPC values built by
+-                            // `asEffectOrStream`, which are Effects *branded* as Streams)
+-                            // must be run as effects — their resolved value may itself be
+-                            // a `Stream`, which `handleRpcExit` then encodes. Only a
+-                            // *genuine* `Stream` (not an Effect) is lifted into the
+-                            // success channel so `handleRpcExit` encodes it directly.
+-                            return Effect.isEffect(result)
+-                                ? result
+-                                : Stream.isStream(result)
+-                                    ? Effect.succeed(result)
+-                                    : result;
+-                        }
+-                        else if (Effect.isEffect(method)) {
+-                            return method;
+-                        }
+-                        else {
+-                            return Effect.succeed(method);
+-                        }
+-                    }, handleRpcExit);
++                    return (...args) => this.#callRpc(prop, args);
+                 },
+             });
++        }
++        #callRpc(name, args) {
++            return this.#execute((instance) => Effect.suspend(() => {
++                // Another instance may have introduced this name onto the shared prototype.
++                if (!Object.hasOwn(instance, name)) {
++                    return Effect.die(new Error(`Method "${name}" not found on Durable Object`));
++                }
++                const member = instance[name];
++                const result = typeof member === "function"
++                    ? member(...args)
++                    : member;
++                return Effect.isEffect(result) ? result : Effect.succeed(result);
++            }), handleRpcExit);
+         }
+         async #execute(fn, onExit) {
+             const scope = Scope.makeUnsafe();
+@@ -133,4 +135,3 @@
+         }
+     };
+ };
+-//# sourceMappingURL=DurableObjectBridge.js.map
+\ No newline at end of file
+diff --git a/src/Cloudflare/Workers/DurableObjectStorage.ts b/src/Cloudflare/Workers/DurableObjectStorage.ts
+--- a/src/Cloudflare/Workers/DurableObjectStorage.ts
++++ b/src/Cloudflare/Workers/DurableObjectStorage.ts
+@@ -104,7 +104,6 @@
+     return yield* Effect.scoped(
+       Effect.gen(function* () {
+         let cancelled = false;
+-        let callbackFiber: Fiber.Fiber<A, E> | undefined;
+         let native: Promise<A> | undefined;
+         let failure: Exit.Failure<A, E> | undefined;
+         let currentTransaction: ActiveStorageTransaction | undefined;
+@@ -120,9 +119,9 @@
+         yield* Effect.addFinalizer(
+           Effect.fn(function* () {
+             cancelled = true;
+-            if (callbackFiber !== undefined) {
+-              yield* Fiber.interrupt(callbackFiber);
+-            }
++            // The synchronous scheduler can re-enter before runForkWith returns.
++            const owner = currentTransaction?.owner;
++            if (owner !== undefined) yield* Fiber.interrupt(owner);
+             const settlement = native;
+             if (settlement !== undefined) {
+               // The callback must finish before waiting for native rollback.
+@@ -178,7 +177,7 @@
+                 );
+
+                 return new Promise<A>((resolve, rejectCallback) => {
+-                  callbackFiber = Effect.runForkWith(callbackContext)(
++                  const callbackFiber = Effect.runForkWith(callbackContext)(
+                     Effect.withFiber((fiber) => {
+                       transaction.owner = fiber;
+                       return evaluate(transaction).pipe(
+diff --git a/lib/Cloudflare/Workers/DurableObjectStorage.js b/lib/Cloudflare/Workers/DurableObjectStorage.js
+--- a/lib/Cloudflare/Workers/DurableObjectStorage.js
++++ b/lib/Cloudflare/Workers/DurableObjectStorage.js
+@@ -45,7 +45,6 @@
+         const scheduler = new Scheduler.MixedScheduler("sync");
+         return yield* Effect.scoped(Effect.gen(function* () {
+             let cancelled = false;
+-            let callbackFiber;
+             let native;
+             let failure;
+             let currentTransaction;
+@@ -59,9 +58,10 @@
+             };
+             yield* Effect.addFinalizer(Effect.fn(function* () {
+                 cancelled = true;
+-                if (callbackFiber !== undefined) {
+-                    yield* Fiber.interrupt(callbackFiber);
+-                }
++                // The synchronous scheduler can re-enter before runForkWith returns.
++                const owner = currentTransaction?.owner;
++                if (owner !== undefined)
++                    yield* Fiber.interrupt(owner);
+                 const settlement = native;
+                 if (settlement !== undefined) {
+                     // The callback must finish before waiting for native rollback.
+@@ -99,7 +99,7 @@
+                         activeStorageTransactions.set(storage, transaction);
+                         const callbackContext = Context.add(context, ActiveStorageTransactions, new Map(transactions).set(storage, transaction));
+                         return new Promise((resolve, rejectCallback) => {
+-                            callbackFiber = Effect.runForkWith(callbackContext)(Effect.withFiber((fiber) => {
++                            const callbackFiber = Effect.runForkWith(callbackContext)(Effect.withFiber((fiber) => {
+                                 transaction.owner = fiber;
+                                 return evaluate(transaction).pipe(Effect.scoped, Effect.tap(() => flushDurableObjectAlarm(storage)));
+                             }), { scheduler });
+@@ -198,4 +198,3 @@
+         onNextSessionRestoreBookmark: (bookmark) => use(Effect.promise(() => storage.onNextSessionRestoreBookmark(bookmark))),
+     };
+ };
+-//# sourceMappingURL=DurableObjectStorage.js.map
+\ No newline at end of file
+diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -312,7 +312,19 @@
+       "default": "./lib/Util/index.js"
+     },
+     "./bin/alchemy.js": "./bin/alchemy.js",
+-    "./bin/exec.js": "./bin/exec.js"
++    "./bin/exec.js": "./bin/exec.js",
++    "./Cloudflare/Workers/*": {
++      "types": "./lib/Cloudflare/Workers/*.d.ts",
++      "bun": "./src/Cloudflare/Workers/*.ts",
++      "worker": "./src/Cloudflare/Workers/*.ts",
++      "default": "./lib/Cloudflare/Workers/*.js"
++    },
++    "./Cloudflare/R2/*": {
++      "types": "./lib/Cloudflare/R2/*.d.ts",
++      "bun": "./src/Cloudflare/R2/*.ts",
++      "worker": "./src/Cloudflare/R2/*.ts",
++      "default": "./lib/Cloudflare/R2/*.js"
++    }
+   },
+   "publishConfig": {
+     "access": "public"
+@@ -508,4 +520,4 @@
+     "test": "alchemy-test --exclude test/Railway",
+     "nuke": "cd ../../ && bun nuke"
+   }
+-}
+\ No newline at end of file
++}

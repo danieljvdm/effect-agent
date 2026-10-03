@@ -437,6 +437,9 @@ The separate memory protocol defines bounded batch requests, responses, and type
 ### `@yielded/agent-platform-cloudflare`
 
 Assembles the durable host, RPC client, alarms, and Code Mode executor.
+The native factories use `effect-cf`. Shared `/thread-object-host`, `/memory-object-host`,
+`/schedule-owner-host`, `/subscription-partition-host`, and `/cloudflare-thread-client-host`
+subpaths expose the same runtime and protocols without importing that optional peer.
 See the [Cloudflare guide](/platforms/cloudflare/) for bindings, service lifetimes, and admission limits.
 The [Code Mode guide](/guide/code-mode/#run-generated-code-on-cloudflare) covers the independent
 Dynamic Worker executor and Worker Loader binding.
@@ -501,6 +504,18 @@ available after filling.
 If a fill times out, `CredentialFillError` reports `reason: "timeout"`, the acknowledged
 `filled` count, dispatch evidence, and whether browser cleanup was confirmed. A pending write
 reply remains `possibly-dispatched`; its assignment is not included in `filled`.
+
+### `@yielded/agent-platform-alchemy-cloudflare`
+
+Experimental Alchemy Effect runtime hosts for Threads, Memory owners, Schedule Owners, and
+Subscription Partitions. `ThreadObject.make`, `MemoryObject.make`, `Scheduling.make`, and
+`Subscriptions.make` return constructors for Alchemy Durable Object declarations. The package
+reuses the Cloudflare host logic, schemas, clients, and storage without loading `effect-cf`.
+
+Alchemy owns construction and event scopes; the framework owns durable admission, execution,
+and recovery. Application authorizers remain explicit. Alchemy beta.80 requires the repository's
+runtime patch; the package's peer range alone does not install it.
+See [setup and adoption limits](/platforms/cloudflare/#alchemy-host).
 
 <a id="effect-agent-pr-review"></a>
 

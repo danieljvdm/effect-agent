@@ -4,6 +4,7 @@ import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
 
 import { type AppBuildRequest, TripApp } from "../src/domain.ts";
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 
 const request: AppBuildRequest = {
   owner: "test-owner",
@@ -33,12 +34,13 @@ let runtime: Miniflare;
 
 beforeAll(async () => {
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     stdin: {
       resolveDir: import.meta.dirname,
       loader: "ts",
       contents: `
     import { Cause, Effect, Layer, Schema } from "effect";
-    import { WorkerEnvironment } from "effect-cf";
+    import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
     import { AppBuildRequest, PlannerError, TripApp } from "../src/domain.ts";
     import { AppBuilder, buildTripApp, readBuild, settleBuild } from "../src/trip-app/build.ts";
     import { AppBuildBucketLive } from "../src/trip-app/bindings.ts";

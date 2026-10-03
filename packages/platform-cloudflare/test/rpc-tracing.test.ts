@@ -9,6 +9,7 @@ import { SubmissionLookupByKey } from "@yielded/agent/submission-ledger";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Effect, Layer, Option, Tracer } from "effect";
 
+import { effectCfRpcLayer } from "../src/internal/effect-cf-rpc.ts";
 import { threadPortTransportLayer } from "../src/internal/transport.ts";
 import { decodeIdempotencyKey, decodeThreadId, TEST_PRINCIPAL } from "./fixtures.ts";
 import { telemetryProbe } from "./observability-fixture.ts";
@@ -45,6 +46,7 @@ describe("DEPLOY-016 native receiver invocation contract", () => {
       });
 
       const transport = threadPortTransportLayer.pipe(
+        Layer.provide(effectCfRpcLayer),
         Layer.provide(
           ThreadObjectNamespace.layer(
             env.TELEMETRY,

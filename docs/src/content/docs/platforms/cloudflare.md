@@ -7,6 +7,8 @@ description: Run durable agents on Cloudflare Workers and Durable Objects.
 
 `@yielded/agent-platform-cloudflare` stores each thread and its pending work in a
 SQLite-backed Durable Object. RPC calls and alarms drive execution and recovery.
+The native adapter uses `effect-cf`; an experimental [Alchemy host](#alchemy-host) shares
+the same storage and recovery contracts.
 See [Cloudflare storage](/storage/cloudflare/) for database ownership and adapter composition.
 
 ## Install
@@ -172,6 +174,72 @@ no worker loop is needed.
 
 Register the exported class as a SQLite Durable Object under `THREADS`.
 `ThreadObject.layer([])` registers no agents and refuses every agent identity.
+
+## Alchemy host
+
+Use the experimental `@yielded/agent-platform-alchemy-cloudflare` host when Alchemy owns your Worker and Durable
+Object runtime. This repository currently requires Alchemy `2.0.0-beta.80` with its
+[runtime patch](https://github.com/yielded-dev/agent/blob/main/patches/alchemy%402.0.0-beta.80.patch); stock beta.80 does not supply the
+required native RPC dispatch, interruption rollback fix, and runtime module exports. This host is experimental.
+
+Pass the application Layer to `ThreadObject.make`, then give its two-phase constructor
+to an Alchemy Durable Object declaration. `RuntimeLive` contains the registrations and
+model clients shown above:
+
+```ts
+import { ThreadObject } from "@yielded/agent-platform-alchemy-cloudflare";
+import { DurableObject } from "alchemy/Cloudflare/Workers/DurableObject";
+
+class Threads extends DurableObject<Threads, ThreadObject.Rpc>()("THREADS") {}
+
+const ThreadsLive = Threads.make(
+  ThreadObject.make(RuntimeLive, {
+    namespaceBinding: "THREADS",
+    deploymentId: "travel-planner",
+    producerPrefix: "travel-worker",
+  }),
+);
+```
+
+Yield `Threads` in the Worker and provide `ThreadsLive`. The outer Effect captures the
+Worker environment; the inner Effect acquires the application once per Object incarnation,
+inside Alchemy's constructor gate with a host-owned instance Scope. Each RPC and alarm uses its own event Scope.
+Put resources needing timely cleanup and observability in `options.eventLayer`; eviction still cannot guarantee
+incarnation finalizers. See the [complete Alchemy setup](https://github.com/yielded-dev/agent/blob/main/examples/alchemy-cloudflare/alchemy.run.ts).
+
+Pass custom Effect RPC handlers as the third argument of
+`ThreadObject.make(RuntimeLive, options, handlers)`, and use
+`ThreadObject.Rpc<typeof handlers>` in the Durable Object declaration. These methods share
+the initialized application services and each call's event Scope and event Layer. They cannot
+replace framework operations or native lifecycle methods. Encode expected failures in the
+application's Schema-defined response when callers need a stable error protocol; uncaught
+handler failures reject the native RPC.
+
+The package also exports `MemoryObject.make`, `Scheduling.make`, and `Subscriptions.make`
+for Alchemy declarations. Supply the same explicit memory, schedule, and subscription
+authorizers as the existing hosts. The application authenticates callers and keeps bindings
+private. Thread hosts trust binding possession by default; supply `operationAuthorizer` for
+additional access rules. RPCs retain Schema-validated framework payloads and typed
+domain failures. Native initialization or alarm defects reject the invocation for host recovery.
+Use this package's `CloudflareThreadClient`; scope Worker client operations with `Rpc.withScope`
+to share RPC targets only within that event.
+The `/alarm`, `/cloudflare-bindings`, and `/cloudflare-browser` exports provide shared maintenance,
+identity, and Browser Run services without loading `effect-cf`. The
+[travel planner](https://github.com/yielded-dev/agent/tree/main/examples/travel-planner)
+uses this host with Alchemy Worker, auth, Workflow, and R2 runtimes.
+
+Both packages reuse the Cloudflare host modules and storage adapters. The shared
+`platform-cloudflare/*-host`, `/cloudflare-alarms`, `/cloudflare-rpc`, and
+`/cloudflare-host-bindings` imports do not load `effect-cf`. Its peer is optional for those
+imports; the original native host imports still require it.
+
+When switching an existing deployment, preserve its Durable Object namespace, exported class,
+binding, and object names. Replace the writer exclusively: do not run both alarm schedulers
+against one Object. Schedule and Subscription hosts atomically adopt the legacy six-column
+`effect-cf` alarm table and retain application storage. Newer formats with retry/parking state
+(including `effect-cf` 0.53), malformed rows, or conflicting destination alarms fail without
+mutation. Changing resource identity creates different storage, and reverting to the old alarm
+writer after adoption requires a separate migration.
 
 ## Configure the binding
 

@@ -1,4 +1,4 @@
-import { ThreadObjectIdentity } from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
+import { ThreadObjectIdentity } from "@yielded/agent-platform-alchemy-cloudflare/cloudflare-bindings";
 import { SubmissionLedger, SubmissionLookupById } from "@yielded/agent/submission-ledger";
 import { WorkerError } from "@yielded/agent/worker";
 import {
@@ -7,8 +7,8 @@ import {
   WorkerHostConfig,
   WorkerPolicyResolver,
 } from "@yielded/agent/worker-host";
+import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
 import { Duration, Effect, Layer, Option, Schema } from "effect";
-import { WorkerEnvironment } from "effect-cf";
 import { Toolkit } from "effect/ai";
 
 import { DeliverResponse } from "../agent.ts";
@@ -16,6 +16,7 @@ import { PlannerError } from "../domain.ts";
 import { researchCoordinatorId } from "../research/contracts.ts";
 import { UpdatingResearchScout, updatingResearchScout } from "../research/scout.ts";
 import { activeWorkerLimit, editorPolicy, scoutPolicy } from "../server/agent-limits.ts";
+import { plannerEnvironment } from "../server/alchemy.ts";
 import { PlannerAttempt, ProgressStore, trackTool } from "../server/progress.ts";
 import { ownerOfThread, StorageOwner } from "../server/tenancy.ts";
 import { tripRepositoryForOwner } from "../server/trip-rpc.ts";
@@ -48,7 +49,7 @@ export const editorAttemptLayer = (context: {
     Effect.gen(function* () {
       const ledger = yield* SubmissionLedger;
       const progress = yield* ProgressStore;
-      const env = yield* WorkerEnvironment;
+      const env = yield* plannerEnvironment;
       const identity = yield* ThreadObjectIdentity;
 
       const input = yield* Effect.cached(

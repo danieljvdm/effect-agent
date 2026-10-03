@@ -12,7 +12,7 @@ API that could be safer, simpler, or harder to misuse.
   under the root testing policy and changesets. Keep library source changes out of the demo PR.
 - Consume Effect Agent through explicit `workspace:*` dependencies so the demo
   validates the current framework. Use the root catalog for Effect-family and
-  `effect-cf` versions. Do not add source aliases or patch framework packages
+  Alchemy versions. Do not add source aliases or patch framework packages
   inside the demo. Keep application policy here.
 - Flag usability issues even when existing configuration fixes the app. Do not
   change public library semantics just to accommodate this example without

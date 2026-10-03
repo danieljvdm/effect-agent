@@ -7,7 +7,7 @@ import {
   callThreadObject,
   ThreadObjectPlacement,
   ThreadObjectNamespace,
-} from "./CloudflareBindings.ts";
+} from "./CloudflareHostBindings.ts";
 import { safeCauseMessage } from "./internal/boundary.ts";
 
 /**

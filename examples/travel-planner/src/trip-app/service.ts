@@ -1,12 +1,11 @@
-import { ThreadObjectIdentity } from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
+import { ThreadObjectIdentity } from "@yielded/agent-platform-alchemy-cloudflare/cloudflare-bindings";
 import { DateTime, Effect, Layer, Schema } from "effect";
-import { WorkerEnvironment } from "effect-cf";
 
 import { AppCommit, AppId, PlannerError, type AppFile, type TripApp } from "../domain.ts";
+import { plannerEnvironment } from "../server/alchemy.ts";
 import { ownerOfThread } from "../server/tenancy.ts";
 import { TripFailpoint } from "../server/trips.ts";
 import { publishTripAppAddress, tripAppHostname } from "./addresses.ts";
-import { SiteBuildBinding } from "./bindings.ts";
 import { AppRepository } from "./repository.ts";
 import { requireAppTrip } from "./scope.ts";
 import { AppSourceStore, appSourceLayer } from "./source.ts";
@@ -32,7 +31,7 @@ const requireApp = Effect.fn("requireTripApp")(function* (tripId: string) {
 });
 
 const startBuild = Effect.fn("startTripAppBuild")(function* (app: TripApp, label: string) {
-  const env = yield* WorkerEnvironment;
+  const env = yield* plannerEnvironment;
   const identity = yield* ThreadObjectIdentity;
   const failpoint = yield* TripFailpoint;
 
@@ -40,38 +39,37 @@ const startBuild = Effect.fn("startTripAppBuild")(function* (app: TripApp, label
     return yield* failed("The app builder isn't configured.");
   yield* publishTripAppAddress(ownerOfThread(identity.threadId), app, env.APP_DOMAIN);
   const id = `${app.id}-${app.sourceCommit}`;
+  const binding = env.SITE_BUILD;
+
+  const workflow = <A>(run: () => Promise<A>) =>
+    Effect.tryPromise({
+      try: run,
+      catch: () => failed("The source is saved, but the build couldn't start. Retry the build."),
+    });
 
   yield* failpoint.hit("app-build:before-start");
-  yield* Effect.gen(function* () {
-    const workflow = yield* SiteBuildBinding;
 
-    const params = {
-      owner: ownerOfThread(identity.threadId),
-      appId: app.id,
-      tripId: app.tripId,
-      repoName: app.repoName,
-      commitId: app.sourceCommit,
-      label,
-    };
+  const params = {
+    owner: ownerOfThread(identity.threadId),
+    appId: app.id,
+    tripId: app.tripId,
+    repoName: app.repoName,
+    commitId: app.sourceCommit,
+    label,
+  };
 
-    yield* workflow.create(params, { id }).pipe(
-      Effect.catch((error) =>
-        Effect.gen(function* () {
-          const existing = yield* workflow.get(id);
-          const status = yield* existing.status;
+  yield* workflow(() => binding.create({ params, id })).pipe(
+    Effect.catch((error) =>
+      Effect.gen(function* () {
+        const existing = yield* workflow(() => binding.get(id));
+        const status = yield* workflow(() => existing.status());
 
-          if (status.status === "errored" || status.status === "terminated")
-            yield* existing.restart();
-          if (status.status === "unknown") return yield* error;
+        if (status.status === "errored" || status.status === "terminated")
+          yield* workflow(() => existing.restart());
+        if (status.status === "unknown") return yield* error;
 
-          return existing;
-        }),
-      ),
-    );
-  }).pipe(
-    Effect.provide(SiteBuildBinding.layer({ binding: "SITE_BUILD" })),
-    Effect.mapError(() =>
-      failed("The source is saved, but the build couldn't start. Retry the build."),
+        return existing;
+      }),
     ),
   );
   yield* failpoint.hit("app-build:after-start");
@@ -86,7 +84,7 @@ export const createTripApp = Effect.fn("createTripApp")(function* (tripId: strin
 
   if (existing !== null)
     return existing.status === "building" ? yield* startBuild(existing, "Build app") : existing;
-  const env = yield* WorkerEnvironment;
+  const env = yield* plannerEnvironment;
 
   if (!env.APP_DOMAIN || !env.SITE_BUILD || !env.APP_BUILDS)
     return yield* failed("The app builder isn't configured.");
@@ -276,5 +274,5 @@ export const restoreTripApp = Effect.fn("restoreTripApp")(function* (
 });
 
 export const AppSourceLive = Layer.unwrap(
-  Effect.map(WorkerEnvironment, (env) => appSourceLayer(env.ARTIFACTS, env.ARTIFACTS_GIT_BASE)),
+  Effect.map(plannerEnvironment, (env) => appSourceLayer(env.ARTIFACTS, env.ARTIFACTS_GIT_BASE)),
 );

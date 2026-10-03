@@ -41,12 +41,11 @@ import {
   Stream,
   Struct,
 } from "effect";
-import { DurableObjectStorage } from "effect-cf";
 import { SqlClient } from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
 
-import { DurableObjectContext } from "./CloudflareBindings.ts";
 import { AuxiliaryDispatchMillis, CloudflareDurableRuntimeConfig } from "./CloudflareConfig.ts";
+import { DurableObjectContext } from "./CloudflareHostBindings.ts";
 import { safeCauseMessage } from "./internal/boundary.ts";
 import * as DueQueue from "./internal/due-queue.ts";
 
@@ -1087,8 +1086,6 @@ export class ThreadMaintenance extends Context.Service<
       const config = yield* CloudflareDurableRuntimeConfig;
       const { ctx } = yield* DurableObjectContext;
       const dueQueue = DueQueue.make(ctx.storage);
-      const storage = DurableObjectStorage.fromDurableObjectStorage(ctx.storage);
-      const runStorage = yield* makeStorageEffect;
       const failpoint = yield* ThreadMaintenanceFailpoint;
 
       const mutations = yield* ThreadMutationGate;
@@ -1763,34 +1760,22 @@ export class ThreadMaintenance extends Context.Service<
           // before joining fallible auxiliary work. This local fact neither acknowledges
           // a generation nor changes the shared alarm.
           yield* failpoint.hit("maintenance:binding-retry:before");
-          yield* runStorage(
-            "record submission binding wait",
-            storage
-              .transaction((transaction) =>
-                Effect.gen(function* () {
-                  const encoded = yield* transaction.get(MAINTENANCE_STATE_KEY);
+          yield* runTransaction("record submission binding wait", () =>
+            dueQueue.transaction(async (transaction) => {
+              const { state } = await readMaintenanceState(transaction);
 
-                  const state =
-                    encoded === undefined
-                      ? initialMaintenanceState()
-                      : yield* Schema.decodeUnknownEffect(ThreadMaintenanceState)(encoded);
+              const bindingWaits = [
+                ...(state.bindingWaits ?? []).filter(
+                  (entry) => entry.submissionId !== selected.submissionId,
+                ),
+                ...(wait === undefined ? [] : [wait]),
+              ];
 
-                  const bindingWaits = [
-                    ...(state.bindingWaits ?? []).filter(
-                      (entry) => entry.submissionId !== selected.submissionId,
-                    ),
-                    ...(wait === undefined ? [] : [wait]),
-                  ];
-
-                  yield* transaction.put(
-                    MAINTENANCE_STATE_KEY,
-                    yield* Schema.encodeEffect(ThreadMaintenanceState)(
-                      ThreadMaintenanceState.make({ ...state, bindingWaits }),
-                    ),
-                  );
-                }),
-              )
-              .pipe(Effect.mapError(alarmFailure("record submission binding wait"))),
+              await transaction.put(
+                MAINTENANCE_STATE_KEY,
+                encodeMaintenanceState(ThreadMaintenanceState.make({ ...state, bindingWaits })),
+              );
+            }),
           );
           yield* failpoint.hit("maintenance:binding-retry:after");
         }

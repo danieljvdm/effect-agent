@@ -10,6 +10,7 @@
   "fixed": [
     [
       "@yielded/agent-ai-decision",
+      "@yielded/agent-platform-alchemy-cloudflare",
       "@yielded/agent-platform-cloudflare",
       "@yielded/agent-platform-node",
       "@yielded/agent-pr-review",

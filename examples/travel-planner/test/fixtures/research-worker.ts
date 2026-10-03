@@ -1,9 +1,9 @@
-import { ThreadObjectIdentity } from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
+import { ThreadObjectIdentity } from "@yielded/agent-platform-alchemy-cloudflare/cloudflare-bindings";
 import { ThreadId } from "@yielded/agent/identifiers";
 import { ThreadExport, ThreadExportRequest, ThreadStore } from "@yielded/agent/thread-store";
 import { WorkerCompletion, WorkerUpdate } from "@yielded/agent/worker";
+import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
-import { DurableObject, WorkerEnvironment } from "effect-cf";
 import { LanguageModel, Model, Toolkit, type Prompt, type Response as AiResponse } from "effect/ai";
 
 import { PlannerError, PlannerInput, TripSiteStore } from "../../src/domain.ts";
@@ -197,9 +197,8 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
   sites,
   plannerApplication(model, "research-v1", "Research fixture", researchBrowser),
   { ownershipLeaseDuration: 3_000, leaseRenewalInterval: 500 },
-) {
-  fetch(request: Request): Promise<Response> {
-    return this[DurableObject.RunSymbol](
+  {
+    fixtureRequest: (request: Request) =>
       Effect.gen(function* () {
         const identity = yield* ThreadObjectIdentity;
         const store = yield* ThreadStore;
@@ -215,12 +214,18 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
           ),
         );
       }),
-    );
-  }
-}
+  },
+) {}
 
 export default {
-  async fetch(request: Request, env: Cloudflare.Env & { readonly PLANNER_TOKEN?: string }) {
+  async fetch(
+    request: Request,
+    env: Omit<Cloudflare.Env, "ACCOUNT_THREADS"> & {
+      readonly PLANNER_TOKEN?: string;
+      readonly ACCOUNT_THREADS: DurableObjectNamespace<TravelPlannerThread>;
+    },
+    ctx: ExecutionContext,
+  ) {
     const url = new URL(request.url);
 
     if (url.pathname.startsWith("/__research/")) {
@@ -232,9 +237,11 @@ export default {
       if (url.pathname === "/__research/journal") {
         const threadId = url.searchParams.get("thread") ?? "";
 
-        return env.ACCOUNT_THREADS.getByName(
+        using response = await env.ACCOUNT_THREADS.getByName(
           threadId.startsWith("worker:") ? threadId : ownerOfThread(threadId),
-        ).fetch(request);
+        ).fixtureRequest(request);
+
+        return new Response(await response.arrayBuffer(), response);
       }
       const bucket = env.APP_BUILDS;
 
@@ -248,6 +255,6 @@ export default {
       }
     }
 
-    return fixtureWorker.fetch(request, env);
+    return fixtureWorker.fetch(request, env, ctx);
   },
 };

@@ -45,6 +45,7 @@
     "@types/node": "catalog:",
     "@yielded/agent": "workspace:*",
     "@yielded/agent-ai-decision": "workspace:*",
+    "@yielded/agent-platform-alchemy-cloudflare": "workspace:*",
     "@yielded/agent-platform-cloudflare": "workspace:*",
     "@yielded/agent-platform-node": "workspace:*",
     "@yielded/agent-sandbox-local": "workspace:*",
@@ -150,5 +151,8 @@
     "docs": {
       "typescript": "6.0.3"
     }
+  },
+  "patchedDependencies": {
+    "alchemy@2.0.0-beta.80": "patches/alchemy@2.0.0-beta.80.patch"
   }
 }

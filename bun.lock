@@ -23,6 +23,7 @@
         "@types/node": "catalog:",
         "@yielded/agent": "workspace:*",
         "@yielded/agent-ai-decision": "workspace:*",
+        "@yielded/agent-platform-alchemy-cloudflare": "workspace:*",
         "@yielded/agent-platform-cloudflare": "workspace:*",
         "@yielded/agent-platform-node": "workspace:*",
         "@yielded/agent-sandbox-local": "workspace:*",
@@ -56,6 +57,22 @@
         "starlight-links-validator": "catalog:",
         "typescript": "catalog:docs",
         "typescript-twoslash": "catalog:",
+      },
+    },
+    "examples/alchemy-cloudflare": {
+      "name": "@yielded/agent-example-alchemy-cloudflare",
+      "dependencies": {
+        "@effect/ai-openai": "catalog:",
+        "@yielded/agent": "workspace:*",
+        "@yielded/agent-platform-alchemy-cloudflare": "workspace:*",
+        "alchemy": "catalog:",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@cloudflare/workers-types": "catalog:",
+        "@types/node": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
       },
     },
     "examples/browser-speed": {
@@ -102,7 +119,7 @@
         "@tanstack/react-router": "catalog:",
         "@tanstack/react-start": "catalog:",
         "@yielded/agent": "workspace:*",
-        "@yielded/agent-platform-cloudflare": "workspace:*",
+        "@yielded/agent-platform-alchemy-cloudflare": "workspace:*",
         "@yielded/agent-storage-cloudflare": "workspace:*",
         "@yielded/agent-testing": "workspace:*",
         "@yielded/auth": "0.1.0-beta.11",
@@ -110,11 +127,11 @@
         "@yielded/auth-openid-client": "0.1.0-beta.1",
         "@yielded/auth-persistence": "0.1.0-beta.11",
         "@yielded/auth-persistence-drizzle": "0.1.0-beta.1",
+        "alchemy": "catalog:",
         "class-variance-authority": "catalog:",
         "clsx": "catalog:",
         "drizzle-orm": "1.0.0-rc.5-ab785fc",
         "effect": "catalog:",
-        "effect-cf": "catalog:",
         "isomorphic-git": "catalog:",
         "lucide-react": "catalog:",
         "memfs": "catalog:",
@@ -170,6 +187,34 @@
         "effect": "^4.0.0",
       },
     },
+    "packages/platform-alchemy-cloudflare": {
+      "name": "@yielded/agent-platform-alchemy-cloudflare",
+      "version": "0.1.0-beta.166",
+      "dependencies": {
+        "@yielded/agent": "workspace:*",
+        "@yielded/agent-platform-cloudflare": "workspace:*",
+        "@yielded/agent-storage-cloudflare": "workspace:*",
+      },
+      "devDependencies": {
+        "@cloudflare/vitest-pool-workers": "catalog:",
+        "@cloudflare/workers-types": "catalog:",
+        "@effect/platform-browser": "catalog:",
+        "@effect/platform-node": "catalog:",
+        "@effect/vitest": "catalog:",
+        "@yielded/agent-testing": "workspace:*",
+        "alchemy": "catalog:",
+        "effect": "catalog:",
+        "esbuild": "catalog:",
+        "miniflare": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+        "vitest": "catalog:",
+      },
+      "peerDependencies": {
+        "alchemy": "^2.0.0-beta.80",
+        "effect": "^4.0.0",
+      },
+    },
     "packages/platform-cloudflare": {
       "name": "@yielded/agent-platform-cloudflare",
       "version": "0.1.0-beta.167",
@@ -200,6 +245,9 @@
         "effect": "^4.0.0",
         "effect-cf": "^0.53.0",
       },
+      "optionalPeers": [
+        "effect-cf",
+      ],
     },
     "packages/platform-node": {
       "name": "@yielded/agent-platform-node",
@@ -527,6 +575,9 @@
         "vite-plus": "catalog:",
       },
     },
+  },
+  "patchedDependencies": {
+    "alchemy@2.0.0-beta.80": "patches/alchemy@2.0.0-beta.80.patch",
   },
   "overrides": {
     "@effect/platform-browser": "catalog:",
@@ -1753,6 +1804,8 @@
 
     "@yielded/agent-docs": ["@yielded/agent-docs@workspace:docs"],
 
+    "@yielded/agent-example-alchemy-cloudflare": ["@yielded/agent-example-alchemy-cloudflare@workspace:examples/alchemy-cloudflare"],
+
     "@yielded/agent-example-browser-run-worker-proof": ["@yielded/agent-example-browser-run-worker-proof@workspace:tooling/browser-run-worker-proof"],
 
     "@yielded/agent-example-browser-speed": ["@yielded/agent-example-browser-speed@workspace:examples/browser-speed"],
@@ -1768,6 +1821,8 @@
     "@yielded/agent-example-semantic-memory-eval": ["@yielded/agent-example-semantic-memory-eval@workspace:tooling/semantic-memory-eval"],
 
     "@yielded/agent-example-travel-planner": ["@yielded/agent-example-travel-planner@workspace:examples/travel-planner"],
+
+    "@yielded/agent-platform-alchemy-cloudflare": ["@yielded/agent-platform-alchemy-cloudflare@workspace:packages/platform-alchemy-cloudflare"],
 
     "@yielded/agent-platform-cloudflare": ["@yielded/agent-platform-cloudflare@workspace:packages/platform-cloudflare"],
 

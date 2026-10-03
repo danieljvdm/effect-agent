@@ -1,0 +1,22 @@
+{
+  "name": "@yielded/agent-example-alchemy-cloudflare",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit -p tsconfig.json",
+    "dev": "vp exec alchemy dev alchemy.run.ts"
+  },
+  "dependencies": {
+    "@effect/ai-openai": "catalog:",
+    "@yielded/agent": "workspace:*",
+    "@yielded/agent-platform-alchemy-cloudflare": "workspace:*",
+    "alchemy": "catalog:",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

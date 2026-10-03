@@ -1,6 +1,7 @@
+import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
 import { Effect, Layer } from "effect";
-import { WorkerEnvironment } from "effect-cf";
 
+import { plannerEnvironment } from "../server/alchemy.ts";
 import { trackTool } from "../server/progress.ts";
 import { TripRepository } from "../server/trips.ts";
 import { AppRepository } from "./repository.ts";
@@ -15,7 +16,7 @@ import {
 import { AppTools } from "./tools.ts";
 
 export const AppToolsLive = Layer.unwrap(
-  Effect.map(WorkerEnvironment, (env) =>
+  Effect.map(plannerEnvironment, (env) =>
     AppTools.toLayer({
       create_trip_app: ({ tripId }, context) =>
         trackTool(

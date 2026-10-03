@@ -226,6 +226,7 @@ const sourceGates = [
     "platform-node",
     "testing",
     "platform-cloudflare",
+    "platform-alchemy-cloudflare",
     "storage-cloudflare",
     "storage-postgres-16",
     "storage-postgres-18",
