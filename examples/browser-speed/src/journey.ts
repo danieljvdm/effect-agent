@@ -127,7 +127,7 @@ const definition = {
     maxDuration: "8 minutes" as const,
     tokenBudget: 150_000,
     contextTokenLimit: 60_000,
-    compaction: CompactionPolicy.make({ mode: "summarize", keepRecentTokens: 8_000 }),
+    compaction: CompactionPolicy.make({ mode: "prune", keepRecentTokens: 8_000 }),
     toolResultBounds: ToolResultBounds.make({ maxBytes: 128 * 1024 }),
     toolConcurrency: 1,
   },

@@ -70,9 +70,8 @@ and a 1280 × 900 viewport; `BROWSER_JOURNEY_MODEL` chooses another compatible m
 and `BROWSER_JOURNEY_REASONING` selects none, low, medium or high reasoning.
 It permits 50 turns, 100 tools, eight minutes and two million cumulative tokens;
 `BROWSER_JOURNEY_TOKEN_BUDGET` changes the token limit. Exhaustion fails the run.
-Summary compaction bounds each model context to 60,000 estimated tokens, retaining
-earlier progress and an 8,000-token recent tail. Summary calls count toward the same
-run budget; the full journal remains available in the export.
+Existing mechanical compaction bounds each model context to 60,000 estimated tokens,
+retaining an 8,000-token recent tail; the full journal remains available in the export.
 `result.json` records the actual CDP engine revision, goal, trace ID, agent claim and a
 separate native DOM read. `thread.json` retains the existing conversation export;
 `page.png` and `cleanup.json` retain the final page and closure acknowledgement. Traces
