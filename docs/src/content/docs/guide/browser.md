@@ -154,7 +154,8 @@ They provide observe/act, scoped inspect, navigation, native key presses, select
 scrolling, screenshots, condition waits, observed tab/popup selection, and native dialog
 responses. Inspection accepts CSS and bounded attributes; it never accepts page JavaScript.
 Screenshots return PNG bytes for the host; composing visual model input remains host-owned.
-Condition waits accept a case-sensitive text qualifier for every state. For example,
+Condition waits accept a case-sensitive text qualifier for every state, normalizing whitespace
+as observations do. For example,
 `{ selector: "body", state: "hidden", text: "Loading", timeoutMillis: 5000 }`
 waits until the visible body no longer contains "Loading".
 The [standalone journey host](https://github.com/danieljvdm/effect-agent/tree/main/examples/browser-speed)

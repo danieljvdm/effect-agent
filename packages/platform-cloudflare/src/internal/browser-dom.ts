@@ -463,6 +463,7 @@ export const checkFrameDom = (node: Element, point: { x: number; y: number }, sc
 
 export const waitDom = (selector: string, state: string, text: string | undefined) => {
   const roots: Array<Document | ShadowRoot> = [document];
+  const expectedText = text?.replace(/\s+/g, " ").trim();
   let scanned = 0;
 
   for (let index = 0; index < roots.length; index++) {
@@ -494,7 +495,8 @@ export const waitDom = (selector: string, state: string, text: string | undefine
           node instanceof HTMLElement &&
           node.matches(selector) &&
           node.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) &&
-          (text === undefined || node.innerText.includes(text))
+          (expectedText === undefined ||
+            node.innerText.replace(/\s+/g, " ").trim().includes(expectedText))
         ) {
           if (state === "hidden") return false;
           if (
