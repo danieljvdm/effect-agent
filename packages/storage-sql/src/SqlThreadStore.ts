@@ -119,29 +119,30 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
     );
   });
 
-  const encodeCanonicalRecord = Effect.fnUntraced(function* (
+  const encodeCanonicalRecord = (
     record: CanonicalRecord,
-  ): Effect.fn.Return<string, ThreadStoreError> {
-    return yield* encodeRecordJson(record).pipe(
-      Effect.mapError((error) => schemaStoreError("encode canonical record", error)),
+  ): Effect.Effect<string, ThreadStoreError> =>
+    Effect.suspend(() =>
+      encodeRecordJson(record).pipe(
+        Effect.mapError((error) => schemaStoreError("encode canonical record", error)),
+      ),
     );
-  });
 
-  const encodeCanonicalBatch = Effect.fnUntraced(function* (
-    batch: CanonicalBatch,
-  ): Effect.fn.Return<string, ThreadStoreError> {
-    return yield* Schema.encodeEffect(Schema.fromJsonString(CanonicalBatch))(batch).pipe(
-      Effect.mapError((error) => schemaStoreError("encode canonical batch", error)),
+  const encodeCanonicalBatch = (batch: CanonicalBatch): Effect.Effect<string, ThreadStoreError> =>
+    Effect.suspend(() =>
+      Schema.encodeEffect(Schema.fromJsonString(CanonicalBatch))(batch).pipe(
+        Effect.mapError((error) => schemaStoreError("encode canonical batch", error)),
+      ),
     );
-  });
 
-  const encodeCheckpoint = Effect.fnUntraced(function* (
+  const encodeCheckpoint = (
     checkpoint: ThreadCheckpoint,
-  ): Effect.fn.Return<string, ThreadStoreError> {
-    return yield* Schema.encodeEffect(Schema.fromJsonString(ThreadCheckpoint))(checkpoint).pipe(
-      Effect.mapError((error) => schemaStoreError("encode checkpoint", error)),
+  ): Effect.Effect<string, ThreadStoreError> =>
+    Effect.suspend(() =>
+      Schema.encodeEffect(Schema.fromJsonString(ThreadCheckpoint))(checkpoint).pipe(
+        Effect.mapError((error) => schemaStoreError("encode checkpoint", error)),
+      ),
     );
-  });
 
   // Scalar decoders resolve immediately; eager error mapping preserves that fast path between
   // the full canonical JSON decode and envelope construction, within the enclosing read span.
@@ -185,13 +186,14 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
     });
   });
 
-  const decodeCheckpoint = Effect.fnUntraced(function* (
+  const decodeCheckpoint = (
     checkpointJson: string,
-  ): Effect.fn.Return<ThreadCheckpoint, ThreadStoreError> {
-    return yield* Schema.decodeEffect(Schema.fromJsonString(ThreadCheckpoint))(checkpointJson).pipe(
-      Effect.mapError((error) => schemaStoreError("decode checkpoint", error)),
+  ): Effect.Effect<ThreadCheckpoint, ThreadStoreError> =>
+    Effect.suspend(() =>
+      Schema.decodeEffect(Schema.fromJsonString(ThreadCheckpoint))(checkpointJson).pipe(
+        Effect.mapError((error) => schemaStoreError("decode checkpoint", error)),
+      ),
     );
-  });
 
   const requireThread = Effect.fnUntraced(function* (
     journal: SqlJournal<S, C, W, F>,

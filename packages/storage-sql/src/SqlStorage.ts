@@ -43,7 +43,7 @@ export const makeSqlQuery = Effect.fnUntraced(function* (namespace?: string) {
   const sql = yield* SqlClient;
   const postgres = sql.onDialectOrElse({ pg: () => true, orElse: () => false });
 
-  const execute = Effect.fnUntraced(function* <A extends object>(statement: Statement<A>) {
+  const executePostgres = Effect.fnUntraced(function* <A extends object>(statement: Statement<A>) {
     if (postgres) {
       for (const parameter of statement.compile(true)[1]) {
         if (typeof parameter === "string") {
@@ -64,6 +64,11 @@ export const makeSqlQuery = Effect.fnUntraced(function* (namespace?: string) {
 
     return yield* statement.withoutTransform;
   });
+
+  const execute = postgres
+    ? executePostgres
+    : <A extends object>(statement: Statement<A>) =>
+        Effect.suspend(() => statement.withoutTransform);
 
   return {
     table: (name: string) => sql(namespace === undefined ? name : `${namespace}.${name}`),

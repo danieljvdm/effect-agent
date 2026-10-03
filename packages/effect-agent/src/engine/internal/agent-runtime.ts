@@ -1081,18 +1081,6 @@ interface PreparedToolCall<Tools extends Record<string, Tool.Any>> {
   readonly declarationIndex: number;
 }
 
-const withSemaphorePermit = <A, E, R>(
-  semaphore: Semaphore.Semaphore,
-  stream: Stream.Stream<A, E, R>,
-): Stream.Stream<A, E, R> =>
-  Stream.scoped(
-    Stream.fromEffect(
-      Effect.acquireRelease(semaphore.take(1), (permits) =>
-        semaphore.release(permits).pipe(Effect.asVoid),
-      ),
-    ).pipe(Stream.flatMap(() => stream)),
-  );
-
 const hasTool = <Tools extends Record<string, Tool.Any>>(
   tools: Tools,
   name: string,
@@ -2525,7 +2513,6 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           message: "A context rollover Tool must be the only Tool Call in its batch",
         });
       }
-      const semaphore = yield* Semaphore.make(concurrency);
 
       const approvalPreflight = prepared.reduce<
         Stream.Stream<
@@ -2660,8 +2647,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
       >((stream, group) => {
         const channels = group.map(
           (call) =>
-            withSemaphorePermit(
-              semaphore,
+            Stream.scoped(
               Stream.unwrap(
                 Effect.gen(function* () {
                   const subagentHost = yield* SubagentHost.forTool;
@@ -2701,7 +2687,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
                     Stream.provideService(DurableStep, stepServiceFor(call)),
                     Stream.provideService(SubagentHost, subagentHost(source)),
                     Stream.provideService(MessagingHost, messagingHost(source)),
-                    // Construct and close the broker within this call's permit. Inner
+                    // Construct and close the broker within the channel scheduler's permit. Inner
                     // invocations use the handler's fiber and acquire no batch permit;
                     // retained passes cannot outlive the call's scheduling authority.
                     Stream.provideService(ToolBroker, broker.service),
@@ -2709,12 +2695,14 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
                     Stream.ensuring(Effect.sync(() => broker.close())),
                   );
                 }),
-              ),
+              ).pipe(Stream.concat(Stream.empty)),
             ).channel,
         );
 
-        // Stream.mergeAll uses sequential concatenation at concurrency one. Keep a scoped call
-        // fiber even then so early downstream close still runs terminal telemetry and observers.
+        // Channel.mergeAll owns the finite concurrency permit through call cleanup, including at
+        // concurrency one. The empty continuation closes the call's channel Scope before its
+        // Effect Scope, preserving cleanup failures before the scheduler releases that permit.
+        // Keep the call fiber so early close still runs terminal telemetry and observers.
         const next = Stream.fromChannel(
           Channel.mergeAll(Channel.fromIterable(channels), { concurrency }),
         );
