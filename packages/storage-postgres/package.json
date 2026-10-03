@@ -1,6 +1,6 @@
 {
   "name": "@yielded/agent-storage-postgres",
-  "version": "0.1.0-beta.166",
+  "version": "0.1.0-beta.167",
   "description": "Postgres persistence adapters for the Effect Agent durable runtime.",
   "license": "MIT",
   "repository": {

@@ -1,5 +1,11 @@
 # @yielded/agent
 
+## 0.1.0-beta.167
+
+### Patch Changes
+
+- [#771](https://github.com/yielded-dev/agent/pull/771) [`776aaca`](https://github.com/yielded-dev/agent/commit/776aaca3809ca5959327ebff5623d525503e8e34) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reuse immutable tool schema projections and successful fallback operation contracts across policy-only definition copies. Preserve operation hashes, host Crypto ownership, and validation failures.
+
 ## 0.1.0-beta.166
 
 ### Minor Changes
