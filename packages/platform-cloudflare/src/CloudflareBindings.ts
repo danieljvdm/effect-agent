@@ -35,6 +35,8 @@ export interface ThreadObjectRpc extends Rpc.DurableObjectBranded {
   /** Wake-hinted, poll-guaranteed settlement wait; answers an `AwaitSettlementResponse`. */
   submissionStatusEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   awaitSettlementEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
+  /** Finalized canonical settlement record; requires settlement and observation authority. */
+  awaitSettlementRecordEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   /** Event-driven durable progress wait; answers a `ProgressObserved` host response. */
   awaitProgressEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   /** Best-effort cancellation for one in-flight progress wait. */

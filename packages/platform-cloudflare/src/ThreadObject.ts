@@ -84,6 +84,7 @@ import {
   ProgressObserved,
   ProgressCancelled,
   SettlementReached,
+  SettlementRecordReached,
   SubmissionStatusResponse,
   SubmitSucceeded,
   UnknownResolutionRecorded,
@@ -472,6 +473,7 @@ const submissionStatusEndpoint = (
 
 const awaitSettlementEndpoint = (
   encoded: unknown,
+  includeRecord = false,
 ): Effect.Effect<unknown, never, EndpointServices> =>
   decodeReceipt(encoded).pipe(
     Effect.mapError(protocolFailure("The receipt could not be decoded")),
@@ -486,12 +488,23 @@ const awaitSettlementEndpoint = (
             submissionId: receipt.submissionId,
           }),
         );
+        if (includeRecord)
+          yield* authorizer.authorize(
+            OperationAuthorizationRequest.make({
+              operation: "observe",
+              threadId: receipt.threadId,
+            }),
+          );
         yield* requireReceiptThread(receipt.threadId);
         yield* requireSubmissionThread(receipt.submissionId);
         const runtime = yield* DurableAgentRuntime;
-        const settlement = yield* runtime.awaitSettlement(receipt);
 
-        return SettlementReached.make({ settlement });
+        if (includeRecord)
+          return SettlementRecordReached.make({
+            record: yield* runtime.awaitSettlementRecord(receipt),
+          });
+
+        return SettlementReached.make({ settlement: yield* runtime.awaitSettlement(receipt) });
       }),
     ),
     respond,
@@ -955,6 +968,7 @@ export const ThreadRpcOperation = Schema.Literals([
   "submitEncoded",
   "submissionStatusEncoded",
   "awaitSettlementEncoded",
+  "awaitSettlementRecordEncoded",
   "awaitProgressEncoded",
   "cancelProgressEncoded",
   "observePage",
@@ -971,6 +985,7 @@ const threadRpc = {
   submitEncoded: submitEndpoint,
   submissionStatusEncoded: submissionStatusEndpoint,
   awaitSettlementEncoded: awaitSettlementEndpoint,
+  awaitSettlementRecordEncoded: (encoded) => awaitSettlementEndpoint(encoded, true),
   awaitProgressEncoded: awaitProgressEndpoint,
   cancelProgressEncoded: cancelProgressEndpoint,
   observePage: observePageEndpoint,
@@ -1072,6 +1087,7 @@ export interface Instance<EventServices = never> extends InstanceType<
   submitEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   submissionStatusEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   awaitSettlementEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
+  awaitSettlementRecordEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   awaitProgressEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   cancelProgressEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   observePage(encoded: unknown, traceContext?: unknown): Promise<unknown>;
