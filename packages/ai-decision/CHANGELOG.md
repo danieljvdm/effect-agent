@@ -1,5 +1,7 @@
 # @yielded/agent-ai-decision
 
+## 0.1.0-beta.167
+
 ## 0.1.0-beta.166
 
 ### Minor Changes

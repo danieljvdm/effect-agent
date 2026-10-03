@@ -299,6 +299,7 @@
     "retained-message-delivery",
     "retained-worker-delivery",
     "returned-tool-results-before-input",
+    "reuse-immutable-replay-contracts",
     "review-budget-finalization",
     "review-cache-cost",
     "review-deadline-visibility",

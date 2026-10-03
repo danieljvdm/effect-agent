@@ -1,6 +1,6 @@
 {
   "name": "@yielded/agent-storage-cloudflare",
-  "version": "0.1.0-beta.166",
+  "version": "0.1.0-beta.167",
   "description": "Durable Object SQLite storage adapters and the routed port protocol for Effect Agent on Cloudflare.",
   "license": "MIT",
   "repository": {
