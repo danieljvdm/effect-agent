@@ -161,7 +161,7 @@ export const executeTask = Effect.fnUntraced(function* (
   trace.update({
     message: input.mode === "scripted" ? "Running browser sequence…" : "Agent is working…",
   });
-  if (input.mode === "scripted") yield* scripted(input.scenario);
+  if (input.mode === "scripted") yield* scripted(input.scenario, initial);
   else {
     const prompt =
       input.scenario === "custom"

@@ -151,11 +151,14 @@ export class Browser extends Context.Service<
 >()("browser-speed/Browser") {}
 
 /** A fixed diagnostic baseline uses the same input and observation path as individual tools. */
-export const scripted = Effect.fnUntraced(function* (scenario: Scenario) {
+export const scripted = Effect.fnUntraced(function* (
+  scenario: Scenario,
+  initial: typeof Observation.Type,
+) {
   const browser = yield* Browser;
+  let observed = initial;
 
   const step = Effect.fnUntraced(function* (action: Action) {
-    const observed = yield* browser.observe();
     const control = observed.controls.find((control) => control.attributes?.id === action.ref);
 
     if (control === undefined)
@@ -167,6 +170,9 @@ export const scripted = Effect.fnUntraced(function* (scenario: Scenario) {
 
     if (result.error !== null)
       return yield* new LabError({ code: "browser", message: result.error });
+    if (result.observation === null)
+      return yield* new LabError({ code: "browser", message: "Missing post-action observation." });
+    observed = result.observation;
   });
 
   const create = Effect.fnUntraced(function* (title: string) {
