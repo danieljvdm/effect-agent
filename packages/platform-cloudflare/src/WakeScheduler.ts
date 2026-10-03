@@ -11,8 +11,8 @@ import {
 import { safeCauseMessage } from "./internal/boundary.ts";
 
 /**
- * Bounded in-memory wake buffer for same-incarnation `awaitSettlement` subscribers. Wake
- * hints are droppable by contract (consumers pair every subscription with ledger polls), so
+ * Bounded in-memory wake buffer for same-incarnation workers. Wake
+ * hints are droppable by contract (consumers pair hints with durable authority), so
  * a full buffer slides out the oldest hint and an eviction simply loses the buffer — the
  * poll interval and the persisted alarm keep liveness (persistence §14).
  */
@@ -28,14 +28,13 @@ class RemoteWakeDropped extends Schema.TaggedError<RemoteWakeDropped>()("RemoteW
 /**
  * The DC `WakeScheduler` (plan §1.4):
  *
- * - `notify(local)` → `setAlarm(now)` — durable, cheap, coalescing (the alarm slot keeps the
- *   earliest deadline) — plus a same-incarnation PubSub hint for `awaitSettlement` waiters.
+ * - `notify(local)` wakes progress and settlement registrations, publishes a worker hint, and
+ *   schedules the earliest alarm. Progress hints skip settlement registrations only.
  * - `notify(remote)` → fire-and-forget `wake()` on the owning Object's stub with every error
  *   swallowed and logged: hints are droppable, and the target's own alarm/scan pairing (the
  *   maintenance pass re-polls unsettled children) guarantees liveness without this call.
- * - `wakes` → the bounded sliding PubSub only. No important state lives in memory: the
- *   subscription accelerates waiters within one incarnation and the settlement poll interval
- *   is the correctness path.
+ * - `wakes` → the bounded sliding PubSub only. Thread waiters use Scope-owned one-shot hubs;
+ *   the settlement poll interval and persisted alarm retain liveness after hint loss.
  */
 export const cloudflareWakeSchedulerLayer: Layer.Layer<
   WakeScheduler,
@@ -48,11 +47,15 @@ export const cloudflareWakeSchedulerLayer: Layer.Layer<
     const namespace = yield* ThreadObjectNamespace;
     const hints = yield* PubSub.sliding<ThreadId>(WAKE_BUFFER_CAPACITY);
     const progress = yield* makeWakeSubscriptionHub;
+    const settlements = yield* makeWakeSubscriptionHub;
 
     yield* Effect.addFinalizer(() => PubSub.shutdown(hints));
 
-    const notifyLocal = (threadId: ThreadId) =>
-      progress.notify(threadId).pipe(
+    const notifyLocal = (threadId: ThreadId, kind?: "progress") =>
+      (kind === "progress"
+        ? progress.notify(threadId)
+        : settlements.notify(threadId).pipe(Effect.andThen(progress.notify(threadId)))
+      ).pipe(
         Effect.andThen(PubSub.publish(hints, threadId)),
         Effect.andThen(alarm.scheduleNow),
         Effect.catch((error) =>
@@ -82,9 +85,10 @@ export const cloudflareWakeSchedulerLayer: Layer.Layer<
       );
 
     return WakeScheduler.of({
-      notify: (threadId) =>
-        placement.ownsThread(threadId) ? notifyLocal(threadId) : notifyRemote(threadId),
-      subscribe: progress.subscribe,
+      notify: (threadId, kind) =>
+        placement.ownsThread(threadId) ? notifyLocal(threadId, kind) : notifyRemote(threadId),
+      subscribe: (threadId, kind) =>
+        (kind === "settlement" ? settlements : progress).subscribe(threadId),
       wakes: Stream.fromPubSub(hints),
     });
   }),

@@ -3,7 +3,6 @@ import {
   DoScheduleTransaction,
   scheduleStoreLayer,
 } from "@effect-agent/storage-cloudflare/do-schedule-store";
-import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Clock, Context, DateTime, Effect, Layer, Schema } from "effect";
 import { type DurableSubmitAgent } from "effect-agent/durable-agent-runtime";
@@ -47,6 +46,7 @@ import {
 
 import type { ThreadObjectNamespace } from "./CloudflareBindings.ts";
 import { CloudflareThreadClient } from "./CloudflareThreadClient.ts";
+import { cloudflareCryptoLayer } from "./internal/crypto.ts";
 import {
   cloudflarePreparedInputAdmissionLayer,
   cloudflareScheduledInputAdmissionLayer,
@@ -706,7 +706,7 @@ export const makeScheduleOwnerObjectClass = <E>(
       ),
     ),
     Layer.provide(ScheduleWakeNoop),
-    Layer.provide(BrowserCrypto.layer),
+    Layer.provide(cloudflareCryptoLayer),
     Layer.provideMerge(DurableObjectAlarm.DurableObjectAlarm.layer),
     Layer.provide(host),
     Layer.provideMerge(ownerLayer),

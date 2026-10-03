@@ -1139,8 +1139,10 @@ interface DeclaredToolCalls {
  * retain their terminal results, while only application calls enter the durable prepared/settled
  * protocol and completion singleton invariant.
  */
-const declaredToolCalls = Effect.fn("DurableAgentRuntime.declaredToolCalls")(
-  (messages: PersistedJson): Effect.Effect<DeclaredToolCalls, RunJournalError> =>
+const declaredToolCalls = (
+  messages: PersistedJson,
+): Effect.Effect<DeclaredToolCalls, RunJournalError> =>
+  Effect.suspend(() =>
     decodePrompt(messages).pipe(
       Effect.mapError((cause) =>
         RunJournalError.make({
@@ -1199,13 +1201,15 @@ const declaredToolCalls = Effect.fn("DurableAgentRuntime.declaredToolCalls")(
         return Effect.succeed({ application, all, providerResults });
       }),
     ),
-);
+  );
 
 /** Application calls alone drive durable preparation, settlement, and batch resume. */
-const declaredApplicationCalls = Effect.fn("DurableAgentRuntime.declaredApplicationCalls")(
-  (messages: PersistedJson): Effect.Effect<Array<DeclaredApplicationCall>, RunJournalError> =>
+const declaredApplicationCalls = (
+  messages: PersistedJson,
+): Effect.Effect<Array<DeclaredApplicationCall>, RunJournalError> =>
+  Effect.suspend(() =>
     declaredToolCalls(messages).pipe(Effect.map(({ application }) => application)),
-);
+  );
 
 /**
  * The declared-but-unsettled Tool batch of one Run's last committed Turn (§2.4 batch resume):
@@ -1556,7 +1560,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         runIds.has(record.payload.runId));
   };
 
-  const readControl = Effect.fn("DurableAgentRuntime.readControl")(function* (
+  const readControl = Effect.fnUntraced(function* (
     threadId: ThreadId,
     submissionIds: ReadonlyArray<SubmissionId>,
   ) {
@@ -1568,7 +1572,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     );
   });
 
-  const loadRecoveryCheckpoint = Effect.fn("DurableAgentRuntime.loadRecoveryCheckpoint")(function* (
+  const loadRecoveryCheckpoint = Effect.fnUntraced(function* (
     threadId: ThreadId,
     throughSequence: CanonicalSequence,
   ) {
@@ -1698,7 +1702,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   };
 
   /** Run seeds retain their owner; certified Thread context serves only provably later Runs. */
-  const recoveryView = Effect.fn("DurableAgentRuntime.recoveryView")(function* (
+  const recoveryView = Effect.fnUntraced(function* (
     threadId: ThreadId,
     throughSequence: CanonicalSequence,
     submissionIds: ReadonlyArray<SubmissionId>,
@@ -1972,21 +1976,21 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     yield* persistRecoveryCheckpoint(ctx, submission, contents.value, tail, yield* DateTime.now);
   });
 
-  const readAllTolerant = Effect.fn("DurableAgentRuntime.readAllTolerant")(
-    (
-      threadId: ThreadId,
-      submissionIds: ReadonlyArray<SubmissionId>,
-    ): Effect.Effect<
-      { readonly records: ReadonlyArray<CanonicalRecordEnvelope>; readonly materialized: boolean },
-      ThreadStoreError
-    > =>
+  const readAllTolerant = (
+    threadId: ThreadId,
+    submissionIds: ReadonlyArray<SubmissionId>,
+  ): Effect.Effect<
+    { readonly records: ReadonlyArray<CanonicalRecordEnvelope>; readonly materialized: boolean },
+    ThreadStoreError
+  > =>
+    Effect.suspend(() =>
       readControl(threadId, submissionIds).pipe(
         Effect.map((records) => ({ records, materialized: true })),
         Effect.catchTag("ThreadNotMaterialized", () =>
           Effect.succeed({ records: [], materialized: false }),
         ),
       ),
-  );
+    );
 
   interface RecoveryHistorySnapshot {
     readonly records: ReadonlyArray<CanonicalRecordEnvelope>;
@@ -2001,7 +2005,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
    * left for a later snapshot, while a short page or sequence gap fails typed before recovery
    * mutates anything. At most `ceil((through - after) / READ_PAGE)` store pages are requested.
    */
-  const readCanonicalRange = Effect.fn("DurableAgentRuntime.readCanonicalRange")(function* (
+  const readCanonicalRange = Effect.fnUntraced(function* (
     threadId: ThreadId,
     afterSequence: CanonicalSequence,
     throughSequence: CanonicalSequence,
@@ -2018,7 +2022,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
    * for this Thread, retaining only the addressed runs' control evidence
    * and never survives the pass or an interruption/restart.
    */
-  const readRecoveryHistory = Effect.fn("DurableAgentRuntime.readRecoveryHistory")(function* (
+  const readRecoveryHistory = Effect.fnUntraced(function* (
     threadId: ThreadId,
     submissionIds: ReadonlyArray<SubmissionId>,
   ): Effect.fn.Return<RecoveryHistorySnapshot, ThreadStoreError> {
@@ -2051,7 +2055,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
    * beyond its pass snapshot. The append-only prefix remains valid; no full-history retry is
    * needed, and malformed suffix pagination fails through the same typed boundary.
    */
-  const refreshRecoveryHistory = Effect.fn("DurableAgentRuntime.refreshRecoveryHistory")(function* (
+  const refreshRecoveryHistory = Effect.fnUntraced(function* (
     threadId: ThreadId,
     records: ReadonlyArray<CanonicalRecordEnvelope>,
     after: CanonicalSequence,
@@ -2082,49 +2086,45 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   const knownRecordIdsOf = (records: ReadonlyArray<CanonicalRecordEnvelope>): Set<string> =>
     new Set(records.map((envelope) => envelope.record.recordId));
 
-  const settlementPayloadFromRecord = Effect.fn("DurableAgentRuntime.settlementPayloadFromRecord")(
-    function* (
-      record: RecordEnvelope,
-      submissionId: SubmissionId,
-    ): Effect.fn.Return<SubmissionSettledRecord, LedgerError> {
-      const payload = record.payload;
+  const settlementPayloadFromRecord = Effect.fnUntraced(function* (
+    record: RecordEnvelope,
+    submissionId: SubmissionId,
+  ): Effect.fn.Return<SubmissionSettledRecord, LedgerError> {
+    const payload = record.payload;
 
-      if (
-        payload._tag !== "SubmissionSettled" ||
-        payload.submissionId !== submissionId ||
-        payload.settlementId !== submissionSettlementId(submissionId) ||
-        record.recordId !== submissionSettlementRecordId(submissionId)
-      ) {
-        return yield* LedgerError.make({
-          operation: "settlementPayloadFromRecord",
-          message: `The reserved canonical record is not the exact Settlement for Submission ${submissionId}`,
-        });
-      }
+    if (
+      payload._tag !== "SubmissionSettled" ||
+      payload.submissionId !== submissionId ||
+      payload.settlementId !== submissionSettlementId(submissionId) ||
+      record.recordId !== submissionSettlementRecordId(submissionId)
+    ) {
+      return yield* LedgerError.make({
+        operation: "settlementPayloadFromRecord",
+        message: `The reserved canonical record is not the exact Settlement for Submission ${submissionId}`,
+      });
+    }
 
-      return payload;
-    },
-  );
+    return payload;
+  });
 
-  const canonicalSettlementRecord = Effect.fn("DurableAgentRuntime.canonicalSettlementRecord")(
-    function* (
-      records: ReadonlyArray<CanonicalRecordEnvelope>,
-      submissionId: SubmissionId,
-    ): Effect.fn.Return<RecordEnvelope, LedgerError> {
-      const record = records.find(
-        (envelope) => envelope.record.recordId === submissionSettlementRecordId(submissionId),
-      )?.record;
+  const canonicalSettlementRecord = Effect.fnUntraced(function* (
+    records: ReadonlyArray<CanonicalRecordEnvelope>,
+    submissionId: SubmissionId,
+  ): Effect.fn.Return<RecordEnvelope, LedgerError> {
+    const record = records.find(
+      (envelope) => envelope.record.recordId === submissionSettlementRecordId(submissionId),
+    )?.record;
 
-      if (record === undefined) {
-        return yield* LedgerError.make({
-          operation: "canonicalSettlementRecord",
-          message: `Canonical history has no Settlement for Submission ${submissionId}`,
-        });
-      }
-      yield* settlementPayloadFromRecord(record, submissionId);
+    if (record === undefined) {
+      return yield* LedgerError.make({
+        operation: "canonicalSettlementRecord",
+        message: `Canonical history has no Settlement for Submission ${submissionId}`,
+      });
+    }
+    yield* settlementPayloadFromRecord(record, submissionId);
 
-      return record;
-    },
-  );
+    return record;
+  });
 
   /**
    * Fold structured recovery evidence from canonical records (plan §2.2). Canonical history is
@@ -2134,7 +2134,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
    * durability §15 window), approvals pend until a canonical decision exists, and joined-side
    * prompt coverage requires a host `ModelResponseRecorded` after the joined `input:{sid}` record.
    */
-  const evidenceFor = Effect.fn("DurableAgentRuntime.evidenceFor")(function* (
+  const evidenceFor = Effect.fnUntraced(function* (
     records: ReadonlyArray<CanonicalRecordEnvelope>,
     submissionId: SubmissionId,
     materialized: boolean,
@@ -2482,7 +2482,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
    * has authorized re-execution, so it stays in the resumed batch until its own `ToolCallSettled`
    * exists.
    */
-  const pendingToolBatchFor = Effect.fn("DurableAgentRuntime.pendingToolBatchFor")(function* (
+  const pendingToolBatchFor = Effect.fnUntraced(function* (
     records: ReadonlyArray<CanonicalRecordEnvelope>,
     runId: ReturnType<typeof runIdForSubmission>,
     completionTools: ReadonlyArray<string> = [],
@@ -2694,7 +2694,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       definitions,
     ).pipe(Effect.provideService(ThreadStore, store), Effect.provideService(WakeScheduler, wake));
 
-  const attemptContextFor = Effect.fn("DurableAgentRuntime.attemptContextFor")(function* (
+  const attemptContextFor = Effect.fnUntraced(function* (
     threadId: ThreadId,
     producerEpoch: ProducerEpoch,
   ): Effect.fn.Return<AttemptAppendContext, ThreadStoreError | ThreadNotMaterialized> {
@@ -2710,7 +2710,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
    * Its canonical settlement reservation authorizes the append; it never authorizes tool
    * execution, unknown-resolution appends, or repair audits beside a live writer.
    */
-  const attemptContextAtTail = Effect.fn("DurableAgentRuntime.attemptContextAtTail")(function* (
+  const attemptContextAtTail = Effect.fnUntraced(function* (
     threadId: ThreadId,
   ): Effect.fn.Return<AttemptAppendContext, ThreadStoreError | ThreadNotMaterialized> {
     const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
@@ -2770,7 +2770,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             });
             // Canonical storage is already committed. This hint may be lost or duplicated, but
             // it lets scoped progress waiters re-read promptly without making memory authoritative.
-            yield* wake.notify(ctx.threadId);
+            yield* wake.notify(ctx.threadId, "progress");
 
             return result;
           }
@@ -3302,9 +3302,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     );
   });
 
-  const canonicalRunStartFromRecords = Effect.fn(
-    "DurableAgentRuntime.canonicalRunStartFromRecords",
-  )(function* (records: ReadonlyArray<CanonicalRecordEnvelope>, runId: RunId) {
+  const canonicalRunStartFromRecords = Effect.fnUntraced(function* (
+    records: ReadonlyArray<CanonicalRecordEnvelope>,
+    runId: RunId,
+  ) {
     const recordId = runStartedRecordId(runId);
 
     const starts = records.filter(
@@ -4085,7 +4086,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     readonly childRecords: ReadonlyArray<CanonicalRecordEnvelope>;
   }
 
-  const verifiedChildUsage = Effect.fn("DurableAgentRuntime.verifiedChildUsage")(function* (
+  const verifiedChildUsage = Effect.fnUntraced(function* (
     verified: VerifiedChildSettlement,
     childRunId: RunId,
   ) {
@@ -6692,7 +6693,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       ) {
         for (const pending of claims) {
           yield* ledger.revertJoining(
-            RevertJoiningRequest.make({ submissionId: pending.claim.submissionId }),
+            RevertJoiningRequest.make({
+              submissionId: pending.claim.submissionId,
+              guard: {
+                hostSubmissionId: submissionId,
+                ownershipToken: yield* Ref.get(tokenRef),
+              },
+            }),
           );
           pendingJoinClaims.splice(pendingJoinClaims.indexOf(pending), 1);
         }
@@ -8486,9 +8493,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       // The append-only prefix remains valid for this Attempt. Retain only this Run's control
       // evidence and validate each newly visible suffix against its own captured tail.
-      const refreshControl = Effect.fn("DurableAgentRuntime.refreshAttemptControl")(function* (
-        throughSequence?: CanonicalSequence,
-      ) {
+      const refreshControl = Effect.fnUntraced(function* (throughSequence?: CanonicalSequence) {
         const through =
           throughSequence ??
           (yield* store.inspectTail(ThreadTailRequest.make({ threadId }))).tailSequence;
@@ -9872,76 +9877,103 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         case "ResumeSuspended": {
           return yield* resumeSuspendedForRecovery(snapshot);
         }
-        case "RevertJoining": {
-          // `joining` without a canonical `input:{sid}` record: the host never consumed the
-          // input, so the claim returns to ready and is delivered exactly once later
-          // (DUR-016). Ownership-free by contract; the wake hint reopens the lane.
-          yield* ledger.revertJoining(
-            RevertJoiningRequest.make({ submissionId: submission.submissionId }),
-          );
-          yield* wake.notify(submission.threadId);
-
-          return "repaired";
-        }
+        case "RevertJoining":
         case "RepairJoinMarker": {
           const hostSubmissionId = snapshot.hostSubmissionId;
 
           if (hostSubmissionId === undefined) return "deferred";
 
-          const inputEnvelope = records.find(
-            (envelope) =>
-              envelope.record.recordId === submissionInputRecordId(submission.submissionId),
-          );
-
-          if (inputEnvelope === undefined) return "deferred";
-          if (evidence.hostSettlementOutcome !== undefined) {
-            // The host settled while the marker was lost, so no host ownership can ever repair
-            // it. The coverage rule decides honestly (DUR-016): an uncovered input was never
-            // consumed by the host and returns to ready to run as its own Run (the canonical
-            // `input:{sid}` record reattaches through the ordinary input-marker repair); a
-            // covered-but-unmarked input is unreachable under this coordinator (`markJoined`
-            // always precedes delivery), so it stays visible instead of being guessed at.
-            if (!evidence.joinedInputCovered) {
-              yield* ledger.revertJoining(
-                RevertJoiningRequest.make({ submissionId: submission.submissionId }),
-              );
-              yield* wake.notify(submission.threadId);
-
-              return "repaired";
-            }
-
-            return "deferred";
-          }
-
-          // `markJoined` is fenced by the HOST lane's ownership: claim the host head, repair
-          // the marker from history (DUR-015), and release. A live host defers to that host's
-          // own drain-seam repair.
           const host = yield* ledger.lookup(
             SubmissionLookupById.make({ submissionId: hostSubmissionId }),
           );
 
           if (Option.isNone(host)) return "deferred";
-          const claimed = yield* claimFor(host.value, decision);
 
-          if (Option.isNone(claimed)) return "deferred";
-          const claim = claimed.value;
+          // Joining belongs to the host's ownership period, including the interval before
+          // its input append. Recovery must not revert claims a live host is still consuming.
+          const claimed =
+            host.value.state === "settled"
+              ? Option.none<Claim>()
+              : yield* claimFor(host.value, decision);
 
-          yield* ledger.markJoined(
-            MarkJoinedRequest.make({
-              submissionId: submission.submissionId,
-              ownershipToken: claim.ownershipToken,
-              recordId: inputEnvelope.record.recordId,
-              sequence: inputEnvelope.sequence,
-            }),
-          );
-          yield* ledger
-            .releaseOwnership(
-              ReleaseOwnershipRequest.make({
-                submissionId: hostSubmissionId,
-                ownershipToken: claim.ownershipToken,
+          if (host.value.state !== "settled" && Option.isNone(claimed)) return "deferred";
+          if (Option.isSome(claimed))
+            yield* store.materialize(
+              ThreadMaterialization.make({
+                threadId: submission.threadId,
+                producerEpoch: claimed.value.producerEpoch,
               }),
-            )
-            .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
+            );
+
+          // The previous owner may have appended after the pass snapshot, before this claim.
+          // Re-read that suffix and the join link before deciding whether the input is absent.
+          const currentRecords = yield* refreshRecoveryHistory(
+            submission.threadId,
+            records,
+            history.throughSequence,
+            history.submissionIds,
+          );
+
+          const current = yield* ledger.loadRecoverySnapshot(
+            RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
+          );
+
+          if (
+            current.submission.state !== "joining" ||
+            current.hostSubmissionId !== hostSubmissionId
+          )
+            return "deferred";
+
+          const currentEvidence = yield* evidenceFor(
+            currentRecords,
+            submission.submissionId,
+            history.materialized,
+            hostSubmissionId,
+          );
+
+          const inputEnvelope = currentRecords.find(
+            (envelope) =>
+              envelope.record.recordId === submissionInputRecordId(submission.submissionId),
+          );
+
+          if (currentEvidence.hostSettlementOutcome !== undefined) {
+            // A covered terminal input stays visible: markJoined must precede delivery, so
+            // recovery cannot guess at that unreachable prefix. Uncovered input returns ready.
+            if (currentEvidence.joinedInputCovered) return "deferred";
+          } else if (Option.isNone(claimed)) {
+            // A ledger-settled host without canonical settlement evidence is not repair authority.
+            return "deferred";
+          } else if (inputEnvelope !== undefined) {
+            yield* ledger.markJoined(
+              MarkJoinedRequest.make({
+                submissionId: submission.submissionId,
+                ownershipToken: claimed.value.ownershipToken,
+                recordId: inputEnvelope.record.recordId,
+                sequence: inputEnvelope.sequence,
+              }),
+            );
+          }
+          if (currentEvidence.hostSettlementOutcome !== undefined || inputEnvelope === undefined)
+            yield* ledger.revertJoining(
+              RevertJoiningRequest.make({
+                submissionId: submission.submissionId,
+                guard: {
+                  hostSubmissionId,
+                  ...(Option.isNone(claimed)
+                    ? {}
+                    : { ownershipToken: claimed.value.ownershipToken }),
+                },
+              }),
+            );
+          if (Option.isSome(claimed))
+            yield* ledger
+              .releaseOwnership(
+                ReleaseOwnershipRequest.make({
+                  submissionId: hostSubmissionId,
+                  ownershipToken: claimed.value.ownershipToken,
+                }),
+              )
+              .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
           yield* wake.notify(submission.threadId);
 
           return "repaired";
@@ -10868,7 +10900,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         Effect.gen(function* () {
           // Register before reading the ledger so settlement between the read and
           // parking cannot be lost. Hints never replace the authoritative re-read.
-          const awaitHint = yield* wake.subscribe(receipt.threadId);
+          const awaitHint = yield* wake.subscribe(receipt.threadId, "settlement");
           const finalized = yield* readFinalizedSubmission(receipt);
 
           if (Option.isNone(finalized))
@@ -11059,7 +11091,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   const ageSecondsSince = (instant: DateTime.Utc, nowMillis: number): number =>
     Math.max(0, Math.floor((nowMillis - DateTime.toEpochMillis(instant)) / 1_000));
 
-  const lookupKnownSubmission = Effect.fn("DurableAgentRuntime.lookupKnownSubmission")(function* (
+  const lookupKnownSubmission = Effect.fnUntraced(function* (
     operation: string,
     submissionId: SubmissionId,
   ): Effect.fn.Return<SubmissionSnapshot, LedgerError> {
@@ -11081,7 +11113,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
    * assembling it performs zero writes (P7 exit gate: operators explain recovery state without
    * editing storage).
    */
-  const explainSubmission = Effect.fn("DurableAgentRuntime.explainSubmission")(function* (
+  const explainSubmission = Effect.fnUntraced(function* (
     submission: SubmissionSnapshot,
   ): Effect.fn.Return<RecoveryExplanation, LedgerError | ThreadStoreError | RunJournalError> {
     const snapshot = yield* ledger.loadRecoverySnapshot(

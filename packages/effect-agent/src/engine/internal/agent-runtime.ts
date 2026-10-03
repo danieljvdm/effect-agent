@@ -2976,7 +2976,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
     }),
   );
 
-const schedulingConcurrency = Effect.fn("AgentRuntime.schedulingConcurrency")(function* (
+const schedulingConcurrency = Effect.fnUntraced(function* (
   configured: number,
   explicit: RunSchedulingHook | undefined,
 ) {
@@ -3887,7 +3887,7 @@ const stampProviderResultEvent = (
  * since then; a fresh Run or a just-compacted view falls back to the full
  * chars/4 estimate.
  */
-const estimateContextTokens = Effect.fn("AgentRuntime.estimateContextTokens")(function* (
+const estimateContextTokens = Effect.fnUntraced(function* (
   messages: ReadonlyArray<Prompt.Message>,
   messageTokenEstimator?: ContextMessageTokenEstimator,
 ) {
@@ -4570,12 +4570,12 @@ export function renderInputPrompt<Input>(
   return renderInputPromptEffect(inputPrompt, decodedInput, encodedInput);
 }
 
-const makeInitialPrompt = Effect.fn("AgentRuntime.makeInitialPrompt")(
-  (
-    instructions: Prompt.RawInput,
-    inputPrompt: Prompt.RawInput,
-    history: Prompt.Prompt,
-  ): Effect.Effect<Prompt.Prompt, AgentInputError> =>
+const makeInitialPrompt = (
+  instructions: Prompt.RawInput,
+  inputPrompt: Prompt.RawInput,
+  history: Prompt.Prompt,
+): Effect.Effect<Prompt.Prompt, AgentInputError> =>
+  Effect.suspend(() =>
     Effect.try({
       try: () => {
         const instructionPrompt =
@@ -4598,39 +4598,42 @@ const makeInitialPrompt = Effect.fn("AgentRuntime.makeInitialPrompt")(
           message: `Unable to materialize Agent input: ${errorMessage(cause)}`,
         }),
     }),
-);
+  );
 
-const decodeToolCallId = Effect.fn((id: string) =>
-  Schema.decodeEffect(ToolCallId)(id).pipe(
-    Effect.mapError((cause) =>
-      ModelProtocolError.make({
-        message: `Invalid Tool Call ID: ${cause.message}`,
-      }),
+const decodeToolCallId = (id: string) =>
+  Effect.suspend(() =>
+    Schema.decodeEffect(ToolCallId)(id).pipe(
+      Effect.mapError((cause) =>
+        ModelProtocolError.make({
+          message: `Invalid Tool Call ID: ${cause.message}`,
+        }),
+      ),
     ),
-  ),
-);
+  );
 
-const decodeProviderToolCallId = Effect.fn((id: string) =>
-  Schema.decodeEffect(ProviderToolCallId)(id).pipe(
-    Effect.mapError(() =>
-      ModelProtocolError.make({
-        message:
-          "Model supplied an invalid Tool Call ID; expected 1-128 ASCII letters, digits, dots, underscores, colons, or hyphens",
-      }),
+const decodeProviderToolCallId = (id: string) =>
+  Effect.suspend(() =>
+    Schema.decodeEffect(ProviderToolCallId)(id).pipe(
+      Effect.mapError(() =>
+        ModelProtocolError.make({
+          message:
+            "Model supplied an invalid Tool Call ID; expected 1-128 ASCII letters, digits, dots, underscores, colons, or hyphens",
+        }),
+      ),
     ),
-  ),
-);
+  );
 
-const decodeProviderResponsePartId = Effect.fn((id: string) =>
-  Schema.decodeEffect(ProviderResponsePartId)(id).pipe(
-    Effect.mapError(() =>
-      ModelProtocolError.make({
-        message:
-          "Model supplied an invalid response part ID; expected 1-128 ASCII letters, digits, dots, underscores, colons, or hyphens",
-      }),
+const decodeProviderResponsePartId = (id: string) =>
+  Effect.suspend(() =>
+    Schema.decodeEffect(ProviderResponsePartId)(id).pipe(
+      Effect.mapError(() =>
+        ModelProtocolError.make({
+          message:
+            "Model supplied an invalid response part ID; expected 1-128 ASCII letters, digits, dots, underscores, colons, or hyphens",
+        }),
+      ),
     ),
-  ),
-);
+  );
 
 const validateProviderPartIdentifiers = Effect.fnUntraced(function* (part: Response.AnyPart) {
   switch (part.type) {
@@ -4694,8 +4697,11 @@ const responseIdentity = (part: Response.ResponseMetadataPart, previous?: ModelR
     ),
   );
 
-const decodeEventJson = Effect.fn("AgentRuntime.decodeEventJson")(
-  (value: unknown, label: string): Effect.Effect<Schema.Json, ModelProtocolError> =>
+const decodeEventJson = (
+  value: unknown,
+  label: string,
+): Effect.Effect<Schema.Json, ModelProtocolError> =>
+  Effect.suspend(() =>
     Schema.decodeUnknownEffect(Schema.Json)(value).pipe(
       Effect.mapError((cause) =>
         ModelProtocolError.make({
@@ -4703,7 +4709,7 @@ const decodeEventJson = Effect.fn("AgentRuntime.decodeEventJson")(
         }),
       ),
     ),
-);
+  );
 
 /**
  * Preserves provider-executed results as assistant content while application

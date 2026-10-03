@@ -928,7 +928,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     modelRestarts: seed?.policyUsage.modelRestarts ?? 0,
   };
 
-  const accountResponse = Effect.fn("RunJournal.accountResponse")(function* (
+  const accountResponse = Effect.fnUntraced(function* (
     envelope: CanonicalRecordEnvelope,
     payload: ModelResponseRecorded,
     messages: Prompt.Prompt,
@@ -1498,7 +1498,7 @@ const splitTurnMessages = (appended: ReadonlyArray<Prompt.Message>): SplitTurnMe
   return { promptMessages, toolParts };
 };
 
-const modelResponseRecord = Effect.fn("RunJournal.modelResponseRecord")(function* (
+const modelResponseRecord = Effect.fnUntraced(function* (
   input: TurnCommitInput,
   promptMessages: ReadonlyArray<Prompt.Message>,
 ): Effect.fn.Return<RecordEnvelope, RunJournalError | DigestError, Crypto.Crypto> {
@@ -1604,7 +1604,7 @@ const modelResponseRecord = Effect.fn("RunJournal.modelResponseRecord")(function
   });
 });
 
-const toolSettledRecords = Effect.fn("RunJournal.toolSettledRecords")(function* (
+const toolSettledRecords = Effect.fnUntraced(function* (
   input: TurnCommitInput,
   toolParts: ReadonlyArray<Prompt.ToolResultPart>,
 ): Effect.fn.Return<Array<RecordEnvelope>, RunJournalError> {
@@ -1662,9 +1662,7 @@ export const runCompletionDigest = (
     exhausted: completion.exhausted ?? null,
   });
 
-const runCompletionRecord = Effect.fn("RunJournal.runCompletionRecord")(function* (
-  input: TurnCommitInput,
-) {
+const runCompletionRecord = Effect.fnUntraced(function* (input: TurnCommitInput) {
   if (input.runCompletion === undefined) return undefined;
   const completion = { runId: input.runId, ...input.runCompletion };
 

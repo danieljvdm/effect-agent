@@ -1,6 +1,6 @@
 import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
 import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
-import { runDurableObjectAlarm } from "cloudflare:test";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect } from "effect";
 import { type Receipt } from "effect-agent/durable-agent-runtime";
 import { type DurableRuntimeFailpointLocation } from "effect-agent/durable-failpoint";
@@ -156,22 +156,28 @@ describe("Cross-Object child admission, wake, and abort ownership", () => {
       return before > 0 && armedEvictionsRemaining(ref) === before;
     }, "the armed-eviction burn to stop under the transport fault");
 
-    // Child-side probe window: fire ONLY the child's own alarm passes (the fault blocks its
-    // portCall/wake entry points, never its own alarm). The classifier must answer
-    // AwaitParentEstablishment — the child stays `admitted`, never claims, and the
-    // researcher model never runs.
-    for (let round = 0; round < 5; round++) {
+    // Await the child's maintenance owner before observing quiescence: an automatic
+    // alarm delivery can temporarily clear the slot while its pass is still running.
+    // The transport fault prevents parent establishment throughout these safety checks.
+    await waitFor(async () => {
+      let completed = true;
+
       try {
-        await runDurableObjectAlarm(stubFor(child, SUBAGENTS));
+        await runInDurableObject(stubFor(child, SUBAGENTS), (instance) =>
+          Promise.resolve(instance.alarm()),
+        );
       } catch {
-        // A child pass may reject while its cross-Object parent hint races the parent's own
-        // doomed incarnation; the probes below carry the claim.
+        // A parent hint can race its doomed incarnation; retained work must still quiesce.
+        completed = false;
       }
       const rows = await laneRows(child, SUBAGENTS);
 
       expect(rows).toHaveLength(1);
-      expect(rows[0]?.state, `child state in probe round ${round}`).toBe("admitted");
-    }
+      expect(rows[0]?.state, "child state before parent establishment").toBe("admitted");
+      expect(childModelInvocations(ref)).toBe(0);
+
+      return completed && (await scheduledAlarm(child, SUBAGENTS)) === null;
+    }, "child maintenance to quiesce while awaiting parent establishment");
     expect(childModelInvocations(ref)).toBe(0);
     expect(
       await scheduledAlarm(child, SUBAGENTS),

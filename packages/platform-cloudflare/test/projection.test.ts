@@ -634,12 +634,18 @@ describe("live Thread projection and alarm backfill", () => {
   );
 
   it("does not let a future projection deadline gate approval publication or execution", () =>
-    withThread(async (thread, now, advance) => {
+    withThread(async (thread, _now, advance) => {
       const receipt = await submit(thread, approvalDefinition);
 
       await drainAlarmsUntil(thread, anyInState(thread, "suspended", namespace), { namespace });
       await quiesce(thread, advance);
-      projectionControls.set(thread, { skipLive: true, retryAt: now + 25 });
+
+      const projectionRetryAt =
+        (await runInDurableObject(stub(thread), (instance) =>
+          instance[DurableObject.RunSymbol](Clock.currentTimeMillis),
+        )) + 25;
+
+      projectionControls.set(thread, { skipLive: true, retryAt: projectionRetryAt });
       await runClient(
         Effect.flatMap(CloudflareThreadClient, (client) =>
           client.resolveApproval(
@@ -660,7 +666,7 @@ describe("live Thread projection and alarm backfill", () => {
       expect(await watermark(thread)).toBeLessThan(
         (await readCanonical(thread, namespace)).at(-1)!.sequence,
       );
-      expect(await scheduledAlarm(thread, namespace)).toBeLessThanOrEqual(now + 25);
+      expect(await scheduledAlarm(thread, namespace)).toBeLessThanOrEqual(projectionRetryAt);
       projectionControls.delete(thread);
       await quiesce(thread, advance);
     }));

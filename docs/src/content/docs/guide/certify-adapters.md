@@ -83,6 +83,11 @@ const readAbort = Effect.fn(function* (submissionId: SubmissionId) {
 Cloudflare keeps this read local to the submission's owning Durable Object. The abort command
 still becomes canonical under the append gate before the runtime interrupts execution.
 
+Joined input belongs to its host Submission. Validate a supplied `RevertJoiningRequest.guard`
+atomically with rollback: leave a different host link untouched, and require the current host's
+ownership token unless that exact host has settled. The shared ledger conformance suite checks
+these recovery boundaries.
+
 ## Run the certification
 
 ```ts

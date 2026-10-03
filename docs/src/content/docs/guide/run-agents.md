@@ -414,6 +414,9 @@ creating a second model-call span. The configured model and provider are recorde
 and token-usage annotations. Each retry and compaction summary has its own model span.
 These labels add identifiers, not prompts, instructions, or tool payloads.
 
+Use operation spans for timing and failure diagnostics. Internal helpers may share the enclosing
+operation's span without adding separate spans or Effect call frames.
+
 An agent span covers one active execution Scope. A durable Run resumed by another
 Attempt can produce another span with the same Run ID; the span is not the entire
 wall-clock lifetime of a suspended Run. See [Cloudflare tracing](/platforms/cloudflare/#agent-tracing)

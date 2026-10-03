@@ -1725,6 +1725,47 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             // already-joined (or already-reverted) Submission is a no-op (DUR-016).
             if (stored.row.state !== "joining") return [success(undefined), current];
 
+            const guard = request.guard;
+
+            if (guard !== undefined) {
+              if (stored.joinedHostSubmissionId !== guard.hostSubmissionId)
+                return [success(undefined), current];
+              const host = current.submissions.get(guard.hostSubmissionId);
+
+              if (host === undefined || host.row.threadId !== stored.row.threadId) {
+                return [
+                  failure(
+                    ledgerError(
+                      "revertJoining",
+                      `Host Submission ${guard.hostSubmissionId} is missing or belongs to another Thread`,
+                    ),
+                  ),
+                  current,
+                ];
+              }
+              if (guard.ownershipToken === undefined) {
+                if (host.row.state !== "settled") {
+                  return [
+                    failure(
+                      ledgerError("revertJoining", "Tokenless cleanup requires a settled host"),
+                    ),
+                    current,
+                  ];
+                }
+              } else if (!ownsLane(current, host, guard.ownershipToken)) {
+                return [
+                  failure(
+                    ledgerError(
+                      "revertJoining",
+                      "Host ownership changed before reverting the joining Submission",
+                      ownershipLost(current, host),
+                    ),
+                  ),
+                  current,
+                ];
+              }
+            }
+
             return [
               success(undefined),
               withSubmission(current, {

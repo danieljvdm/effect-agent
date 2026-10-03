@@ -2676,6 +2676,39 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
         // Idempotent and recovery-only: only a still-`joining` Submission reverts; an
         // already-joined (or already-reverted) Submission is a no-op (DUR-016).
         if (submission.state !== "joining") return;
+        const guard = validated.guard;
+
+        if (guard !== undefined) {
+          if (submission.joined_host_submission_id !== guard.hostSubmissionId) return;
+          const host = yield* requireSubmission(operation, guard.hostSubmissionId);
+
+          if (host.thread_id !== submission.thread_id)
+            return yield* corruptionFailure(
+              operation,
+              "effect_agent_submissions",
+              validated.submissionId,
+              "The joined host belongs to another Thread.",
+            );
+          if (guard.ownershipToken === undefined) {
+            if (host.state !== "settled")
+              return yield* LedgerError.make({
+                operation,
+                message: "Cannot revert joining without ownership of a live host.",
+              });
+          } else {
+            yield* requireOwnership(operation, host, guard.ownershipToken).pipe(
+              Effect.mapError((cause) =>
+                cause._tag === "OwnershipLost"
+                  ? LedgerError.make({
+                      operation,
+                      message: "Joining recovery no longer owns the linked host.",
+                      cause,
+                    })
+                  : cause,
+              ),
+            );
+          }
+        }
         yield* sql`
           UPDATE effect_agent_submissions
           SET state = 'ready', joined_host_submission_id = NULL

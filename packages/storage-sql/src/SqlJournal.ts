@@ -30,7 +30,11 @@ import {
   type SqlStorageFailpoint,
   type SqlTransactions,
 } from "./SqlStorage.ts";
-import { canonicalRecordMetadata, indexCanonicalRecord } from "./SqlThreadNativeReads.ts";
+import {
+  canonicalRecordMetadata,
+  canonicalRecordOutstanding,
+  indexCanonicalRecord,
+} from "./SqlThreadNativeReads.ts";
 
 export interface SqlJournalOptions<
   S extends Diagnostic,
@@ -481,17 +485,21 @@ export const makeSqlJournal = Effect.fn("SqlJournal.make")(function* <
                     sequence,
                     record_id,
                     batch_id,
-                    record_json${sql.onDialectOrElse({ pg: () => sql`, read_metadata`, orElse: () => sql`` })}
+                    record_json,
+                    outstanding${sql.onDialectOrElse({ pg: () => sql`, read_metadata`, orElse: () => sql`` })}
                   ) VALUES (
                     ${request.threadId},
                     ${firstSequence + index},
                     ${record.recordId},
                     ${request.batchId},
-                    ${record.recordJson}${sql.onDialectOrElse({ pg: () => sql`, ${canonicalRecordMetadata(canonical)}::jsonb`, orElse: () => sql`` })}
+                    ${record.recordJson},
+                    ${canonicalRecordOutstanding(canonical)}${sql.onDialectOrElse({ pg: () => sql`, ${canonicalRecordMetadata(canonical)}::jsonb`, orElse: () => sql`` })}
                   )
                 `.pipe(execute, Effect.mapError(storageError("insert canonical record")));
 
-              yield* indexCanonicalRecord(request.threadId, canonical, options.namespace).pipe(
+              yield* indexCanonicalRecord(request.threadId, canonical, options.namespace, {
+                sequence: firstSequence + index,
+              }).pipe(
                 Effect.provideService(SqlClient.SqlClient, sql),
                 Effect.mapError(storageError("index canonical record")),
               );

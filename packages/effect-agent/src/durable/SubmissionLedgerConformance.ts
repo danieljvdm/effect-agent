@@ -2321,7 +2321,7 @@ const joiningPrefixClaim = conformanceCase(
 
 const revertJoiningReturnsToReady = conformanceCase(
   "revertJoining returns exactly the pre-append claims to ready",
-  ({ ensure, expectSome }) =>
+  ({ ensure, expectFailure, expectSome }) =>
     Effect.gen(function* () {
       const threadId = decodeThreadId("ledger-conformance-revert-joining");
       const ledger = yield* SubmissionLedger;
@@ -2342,17 +2342,86 @@ const revertJoiningReturnsToReady = conformanceCase(
 
       yield* ensure(claims.length === 2, "Both queued Submissions must join the host's prefix");
 
+      // Regression in the unguarded recovery mutation (161aab335): a stale recovery view
+      // must not clear a join still owned by the live host or a successor Attempt.
+      yield* ledger.revertJoining(
+        RevertJoiningRequest.make({
+          submissionId: second.submissionId,
+          guard: { hostSubmissionId: third.submissionId, ownershipToken: BOGUS_TOKEN },
+        }),
+      );
+      const unchangedHost = yield* recoverySnapshot(second.submissionId);
+
+      yield* ensure(
+        unchangedHost.submission.state === "joining" &&
+          unchangedHost.hostSubmissionId === host.submissionId,
+        "A different guarded host must leave the current join unchanged",
+      );
+
+      const liveHost = yield* expectFailure(
+        "reverting a live host's join without its ownership token",
+        ledger.revertJoining(
+          RevertJoiningRequest.make({
+            submissionId: second.submissionId,
+            guard: { hostSubmissionId: host.submissionId },
+          }),
+        ),
+      );
+
+      yield* ensure(isLedgerError(liveHost), "Tokenless cleanup must reject an unsettled host");
+      yield* ledger.releaseOwnership(
+        ReleaseOwnershipRequest.make({
+          submissionId: host.submissionId,
+          ownershipToken: hostClaim.ownershipToken,
+        }),
+      );
+
+      const currentHostClaim = yield* expectSome(
+        "the successor host claim",
+        yield* claimLane(threadId, PRODUCER_B),
+      );
+
+      const staleOwner = yield* expectFailure(
+        "reverting a join with the superseded host token",
+        ledger.revertJoining(
+          RevertJoiningRequest.make({
+            submissionId: second.submissionId,
+            guard: {
+              hostSubmissionId: host.submissionId,
+              ownershipToken: hostClaim.ownershipToken,
+            },
+          }),
+        ),
+      );
+
+      yield* ensure(isLedgerError(staleOwner), "A superseded owner must not clear the join");
+      const unchangedOwner = yield* recoverySnapshot(second.submissionId);
+
+      yield* ensure(
+        unchangedOwner.submission.state === "joining" &&
+          unchangedOwner.hostSubmissionId === host.submissionId,
+        "Rejected recovery must retain the live host's joining state and linkage",
+      );
+
       // third's canonical input is appended; second's never is.
       yield* ledger.markJoined(
         MarkJoinedRequest.make({
           submissionId: third.submissionId,
-          ownershipToken: hostClaim.ownershipToken,
+          ownershipToken: currentHostClaim.ownershipToken,
           recordId: submissionInputRecordId(third.submissionId),
           sequence: decodeSequence(7),
         }),
       );
 
-      yield* ledger.revertJoining(RevertJoiningRequest.make({ submissionId: second.submissionId }));
+      yield* ledger.revertJoining(
+        RevertJoiningRequest.make({
+          submissionId: second.submissionId,
+          guard: {
+            hostSubmissionId: host.submissionId,
+            ownershipToken: currentHostClaim.ownershipToken,
+          },
+        }),
+      );
 
       const reverted = yield* expectSome(
         "lookup after revert",
@@ -2404,7 +2473,7 @@ const revertJoiningReturnsToReady = conformanceCase(
         ClaimJoiningRequest.make({
           threadId,
           hostSubmissionId: host.submissionId,
-          ownershipToken: hostClaim.ownershipToken,
+          ownershipToken: currentHostClaim.ownershipToken,
           maxCount: 8,
         }),
       );
@@ -2412,6 +2481,20 @@ const revertJoiningReturnsToReady = conformanceCase(
       yield* ensure(
         reclaimed.length === 1 && reclaimed[0].submissionId === second.submissionId,
         "A reverted Submission must be claimable again exactly once",
+      );
+      yield* settleClaimed(host, currentHostClaim.ownershipToken);
+      yield* ledger.revertJoining(
+        RevertJoiningRequest.make({
+          submissionId: second.submissionId,
+          guard: { hostSubmissionId: host.submissionId },
+        }),
+      );
+      const afterSettlement = yield* recoverySnapshot(second.submissionId);
+
+      yield* ensure(
+        afterSettlement.submission.state === "ready" &&
+          afterSettlement.hostSubmissionId === undefined,
+        "The exact settled host must permit tokenless cleanup of its uncommitted join",
       );
     }),
 );

@@ -464,7 +464,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
       Effect.mapError(internalFailure(operation)),
     );
 
-  const readSubmission = Effect.fn("SqlSubmissionLedger.readSubmission")(function* (
+  const readSubmission = Effect.fnUntraced(function* (
     operation: string,
     submissionId: string,
   ): Effect.fn.Return<Option.Option<SubmissionRow>, LedgerError> {
@@ -488,7 +488,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
     return decoded.length === 0 ? Option.none() : Option.some(decoded[0]);
   });
 
-  const requireSubmission = Effect.fn("SqlSubmissionLedger.requireSubmission")(function* (
+  const requireSubmission = Effect.fnUntraced(function* (
     operation: string,
     submissionId: string,
   ): Effect.fn.Return<SubmissionRow, LedgerError> {
@@ -504,7 +504,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
     return submission.value;
   });
 
-  const readOwnership = Effect.fn("SqlSubmissionLedger.readOwnership")(function* (
+  const readOwnership = Effect.fnUntraced(function* (
     operation: string,
     submissionId: string,
   ): Effect.fn.Return<Option.Option<OwnershipRow>, LedgerError> {
@@ -539,7 +539,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
     return decoded.length === 0 ? Option.none() : Option.some(decoded[0]);
   });
 
-  const threadEpoch = Effect.fn("SqlSubmissionLedger.threadEpoch")(function* (
+  const threadEpoch = Effect.fnUntraced(function* (
     operation: string,
     threadId: string,
   ): Effect.fn.Return<ProducerEpoch, LedgerError> {
@@ -555,7 +555,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
    * Submission's lane; a superseded or missing token fails with OwnershipLost carrying the
    * Thread's current producer epoch (DUR-006).
    */
-  const requireOwnership = Effect.fn("SqlSubmissionLedger.requireOwnership")(function* (
+  const requireOwnership = Effect.fnUntraced(function* (
     operation: string,
     submission: SubmissionRow,
     ownershipToken: string,
@@ -578,102 +578,85 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
     return ownership.value;
   });
 
-  const decodeSubmissionSnapshot = Effect.fn("SqlSubmissionLedger.decodeSubmissionSnapshot")(
-    function* (
-      operation: string,
-      row: SubmissionRow,
-    ): Effect.fn.Return<SubmissionSnapshot, LedgerError> {
-      const agentDigests = yield* parseStoredJsonText(row.agent_digests_json).pipe(
-        Effect.mapError((error) =>
-          corruptionFailure(
-            operation,
-            "effect_agent_submissions",
-            row.submission_id,
-            error.message,
-          ),
-        ),
+  const decodeSubmissionSnapshot = Effect.fnUntraced(function* (
+    operation: string,
+    row: SubmissionRow,
+  ): Effect.fn.Return<SubmissionSnapshot, LedgerError> {
+    const agentDigests = yield* parseStoredJsonText(row.agent_digests_json).pipe(
+      Effect.mapError((error) =>
+        corruptionFailure(operation, "effect_agent_submissions", row.submission_id, error.message),
+      ),
+    );
+
+    const inputPayload = yield* parseStoredJsonText(row.input_json).pipe(
+      Effect.mapError((error) =>
+        corruptionFailure(operation, "effect_agent_submissions", row.submission_id, error.message),
+      ),
+    );
+
+    if ((row.parent_submission_id === null) !== (row.parent_tool_call_id === null)) {
+      return yield* corruptionFailure(
+        operation,
+        "effect_agent_submissions",
+        row.submission_id,
+        "A parent linkage must record both the parent Submission and the parent Tool Call.",
       );
+    }
 
-      const inputPayload = yield* parseStoredJsonText(row.input_json).pipe(
-        Effect.mapError((error) =>
-          corruptionFailure(
-            operation,
-            "effect_agent_submissions",
-            row.submission_id,
-            error.message,
-          ),
-        ),
-      );
+    return yield* decodeSubmissionSnapshotUnknown({
+      submissionId: row.submission_id,
+      threadId: row.thread_id,
+      queueSequence: row.queue_sequence,
+      principal: row.principal,
+      idempotencyKey: row.idempotency_key,
+      agentId: row.agent_id,
+      agentDigests,
+      deploymentId: row.deployment_id,
+      inputPayload,
+      inputDigest: row.input_digest,
+      receiptId: row.receipt_id,
+      state: row.state,
+      createdAt: row.created_at,
+      ...(row.admission_group === null ? {} : { admissionGroup: row.admission_group }),
+      ...(row.worker_admission_json === null
+        ? {}
+        : {
+            workerAdmission: yield* parseStoredJsonText(row.worker_admission_json).pipe(
+              Effect.mapError(internalFailure(operation)),
+            ),
+          }),
+      ...(row.message_admission_json === null
+        ? {}
+        : {
+            messageAdmission: yield* parseStoredJsonText(row.message_admission_json).pipe(
+              Effect.mapError(internalFailure(operation)),
+            ),
+          }),
+      ...(row.admission_fence_json === null
+        ? {}
+        : {
+            admissionFence: yield* parseStoredJsonText(row.admission_fence_json).pipe(
+              Effect.mapError(internalFailure(operation)),
+            ),
+          }),
+      ...(row.settled_outcome === null ? {} : { settledOutcome: row.settled_outcome }),
+      ...(row.ready_at === null ? {} : { readyAt: row.ready_at }),
+      ...(row.parent_submission_id === null || row.parent_tool_call_id === null
+        ? {}
+        : {
+            parentLinkage: {
+              parentSubmissionId: row.parent_submission_id,
+              parentToolCallId: row.parent_tool_call_id,
+            },
+          }),
+    }).pipe(
+      Effect.mapError((error) =>
+        corruptionFailure(operation, "effect_agent_submissions", row.submission_id, error.message),
+      ),
+    );
+  });
 
-      if ((row.parent_submission_id === null) !== (row.parent_tool_call_id === null)) {
-        return yield* corruptionFailure(
-          operation,
-          "effect_agent_submissions",
-          row.submission_id,
-          "A parent linkage must record both the parent Submission and the parent Tool Call.",
-        );
-      }
-
-      return yield* decodeSubmissionSnapshotUnknown({
-        submissionId: row.submission_id,
-        threadId: row.thread_id,
-        queueSequence: row.queue_sequence,
-        principal: row.principal,
-        idempotencyKey: row.idempotency_key,
-        agentId: row.agent_id,
-        agentDigests,
-        deploymentId: row.deployment_id,
-        inputPayload,
-        inputDigest: row.input_digest,
-        receiptId: row.receipt_id,
-        state: row.state,
-        createdAt: row.created_at,
-        ...(row.admission_group === null ? {} : { admissionGroup: row.admission_group }),
-        ...(row.worker_admission_json === null
-          ? {}
-          : {
-              workerAdmission: yield* parseStoredJsonText(row.worker_admission_json).pipe(
-                Effect.mapError(internalFailure(operation)),
-              ),
-            }),
-        ...(row.message_admission_json === null
-          ? {}
-          : {
-              messageAdmission: yield* parseStoredJsonText(row.message_admission_json).pipe(
-                Effect.mapError(internalFailure(operation)),
-              ),
-            }),
-        ...(row.admission_fence_json === null
-          ? {}
-          : {
-              admissionFence: yield* parseStoredJsonText(row.admission_fence_json).pipe(
-                Effect.mapError(internalFailure(operation)),
-              ),
-            }),
-        ...(row.settled_outcome === null ? {} : { settledOutcome: row.settled_outcome }),
-        ...(row.ready_at === null ? {} : { readyAt: row.ready_at }),
-        ...(row.parent_submission_id === null || row.parent_tool_call_id === null
-          ? {}
-          : {
-              parentLinkage: {
-                parentSubmissionId: row.parent_submission_id,
-                parentToolCallId: row.parent_tool_call_id,
-              },
-            }),
-      }).pipe(
-        Effect.mapError((error) =>
-          corruptionFailure(
-            operation,
-            "effect_agent_submissions",
-            row.submission_id,
-            error.message,
-          ),
-        ),
-      );
-    },
-  );
-
-  const readReservation = Effect.fn("SqlSubmissionLedger.readReservation")(function* (
+  const readReservation = Effect.fnUntraced(function* (
     operation: string,
     submissionId: string,
   ): Effect.fn.Return<Option.Option<ReservationRow>, LedgerError> {
@@ -710,7 +693,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
     return decoded.length === 0 ? Option.none() : Option.some(decoded[0]);
   });
 
-  const readAbortIntent = Effect.fn("SqlSubmissionLedger.readAbortIntent")(function* (
+  const readAbortIntent = Effect.fnUntraced(function* (
     operation: string,
     submissionId: string,
   ): Effect.fn.Return<Option.Option<AbortIntentRow>, LedgerError> {
@@ -846,7 +829,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
     }).pipe(Effect.mapError(rowFailure));
   });
 
-  const readApprovalDecisions = Effect.fn("SqlSubmissionLedger.readApprovalDecisions")(function* (
+  const readApprovalDecisions = Effect.fnUntraced(function* (
     operation: string,
     submissionId: string,
   ): Effect.fn.Return<ReadonlyArray<ApprovalDecisionRow>, LedgerError> {
@@ -894,7 +877,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
     );
   });
 
-  const readUnknownResolutions = Effect.fn("SqlSubmissionLedger.readUnknownResolutions")(function* (
+  const readUnknownResolutions = Effect.fnUntraced(function* (
     operation: string,
     submissionId: string,
   ): Effect.fn.Return<ReadonlyArray<UnknownResolutionRow>, LedgerError> {
@@ -1929,7 +1912,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
     return reserved;
   });
 
-  const validateFinalization = Effect.fn("SqlSubmissionLedger.validateFinalization")(function* (
+  const validateFinalization = Effect.fnUntraced(function* (
     validated: SettlementFinalization,
     reservation: Option.Option<ReservationRow>,
   ) {
@@ -1973,7 +1956,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
     return { reservation: reservation.value, reservationRecord, settlementFailure };
   });
 
-  const replayFinalization = Effect.fn("SqlSubmissionLedger.replayFinalization")(function* (
+  const replayFinalization = Effect.fnUntraced(function* (
     validated: SettlementFinalization,
     submission: SubmissionRow,
     { reservation, settlementFailure }: Effect.Success<ReturnType<typeof validateFinalization>>,
@@ -2525,6 +2508,39 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
         // Idempotent and recovery-only: only a still-`joining` Submission reverts; an
         // already-joined (or already-reverted) Submission is a no-op (DUR-016).
         if (submission.state !== "joining") return;
+        const guard = validated.guard;
+
+        if (guard !== undefined) {
+          if (submission.joined_host_submission_id !== guard.hostSubmissionId) return;
+          const host = yield* requireSubmission(operation, guard.hostSubmissionId);
+
+          if (host.thread_id !== submission.thread_id) {
+            return yield* corruptionFailure(
+              operation,
+              "effect_agent_submissions",
+              validated.submissionId,
+              "Linked host belongs to another Thread.",
+            );
+          }
+          if (guard.ownershipToken === undefined) {
+            if (host.state !== "settled") {
+              return yield* LedgerError.make({
+                operation,
+                message: "Tokenless cleanup requires a settled host.",
+              });
+            }
+          } else {
+            yield* requireOwnership(operation, host, guard.ownershipToken).pipe(
+              Effect.catchTag("OwnershipLost", (cause) =>
+                LedgerError.make({
+                  operation,
+                  message: "Host ownership changed before reverting the joining Submission.",
+                  cause,
+                }),
+              ),
+            );
+          }
+        }
         yield* sql`
           UPDATE ${relation("effect_agent_submissions")}
           SET state = 'ready', joined_host_submission_id = NULL
