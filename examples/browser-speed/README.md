@@ -268,8 +268,7 @@ the example does not bundle historical benchmark reports.
 
 ## Ownership and limits
 
-One tab owns one browser and admits one run at a time. Task-board runs allow 30 model turns,
-100 tool calls, 100 browser actions, and 60,000 tokens. Wikipedia limits are listed above.
+One tab owns one browser and admits one run at a time. Task-specific limits are listed above.
 Every run has a four-minute overall deadline. Every tab is bounded to 100 admissions.
 The remote browser has a ten-minute maximum lifetime and a durable cleanup alarm. Use **Stop run**
 to interrupt active work and **Close browser** to retry failed cleanup or release a recovered browser.

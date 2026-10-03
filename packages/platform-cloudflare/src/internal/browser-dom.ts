@@ -493,7 +493,8 @@ export const waitDom = (selector: string, state: string, text: string | undefine
         if (
           node instanceof HTMLElement &&
           node.matches(selector) &&
-          node.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+          node.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) &&
+          (text === undefined || node.innerText.includes(text))
         ) {
           if (state === "hidden") return false;
           if (
@@ -501,7 +502,7 @@ export const waitDom = (selector: string, state: string, text: string | undefine
             (state === "enabled" &&
               !node.matches(":disabled") &&
               node.getAttribute("aria-disabled") !== "true") ||
-            (state === "text" && text !== undefined && node.innerText.includes(text))
+            (state === "text" && text !== undefined)
           )
             return true;
         }

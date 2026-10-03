@@ -143,6 +143,7 @@ export const WaitRequest = Schema.Struct({
   selector: Selector,
   frame: Schema.optionalKey(Ref),
   state: Schema.Literals(["visible", "hidden", "enabled", "text"]),
+  /** Case-sensitive visible text qualifier for every state; required for `text`. */
   text: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(1_024))),
   timeoutMillis: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 15_000 })),
 });
@@ -271,7 +272,7 @@ export const browserTools = Toolkit.make(
   }),
   Tool.make("wait", {
     description:
-      "Wait for an asynchronous condition using standard CSS and observed DOM/attribute evidence in the current frame. Text matching is case-sensitive. Control kinds are semantic roles, not necessarily HTML tags. Returns a fresh observation; do not wait for an already satisfied condition or use fixed sleeps.",
+      "Wait for an asynchronous condition using standard CSS and observed DOM/attribute evidence in the current frame. Optional text qualifies every state, case-sensitively; hidden with text waits until no visible match contains that text. Control kinds are semantic roles, not necessarily HTML tags. Returns a fresh observation; do not wait for an already satisfied condition or use fixed sleeps.",
     parameters: WaitRequest,
     success: Observation,
     failure: BrowserUseError,
