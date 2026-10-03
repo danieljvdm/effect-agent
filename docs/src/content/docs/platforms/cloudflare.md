@@ -191,7 +191,7 @@ Register the exported class as a SQLite Durable Object under `THREADS`.
 ```
 
 Match `THREADS` to `namespaceBinding` and `TravelThread` to the exported class.
-Enable `nodejs_compat` for the async context support used by `effect-cf`.
+Enable `nodejs_compat` for `effect-cf`'s async context support and native SHA-256 hashing.
 See Cloudflare's [class configuration guide](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/)
 for Workers using the older `migrations` array.
 

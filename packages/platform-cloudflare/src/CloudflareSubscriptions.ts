@@ -3,7 +3,6 @@ import {
   DoSubscriptionTransaction,
   doSubscriptionStoreLayer,
 } from "@effect-agent/storage-cloudflare/do-subscription-store";
-import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Cause, Clock, Context, DateTime, Effect, Layer, Schema, type Scope } from "effect";
 import { type EventSources } from "effect-agent/event-source";
@@ -37,6 +36,7 @@ import {
 
 import { type ThreadObjectNamespace } from "./CloudflareBindings.ts";
 import { CloudflareThreadClient } from "./CloudflareThreadClient.ts";
+import { cloudflareCryptoLayer } from "./internal/crypto.ts";
 import { cloudflarePreparedInputAdmissionLayer } from "./internal/prepared-admission.ts";
 
 const SUBSCRIPTION_ALARM_TAG = "effect-agent/SubscriptionPartitionWake";
@@ -997,7 +997,7 @@ export const makeSubscriptionPartitionObjectClass = <E>(
     Layer.provide(
       cloudflarePreparedInputAdmissionLayer.pipe(Layer.provide(CloudflareThreadClient.layer)),
     ),
-    Layer.provide(BrowserCrypto.layer),
+    Layer.provide(cloudflareCryptoLayer),
     Layer.provideMerge(DurableObjectAlarm.DurableObjectAlarm.layer),
     Layer.provide(host),
     Layer.provideMerge(identityLayer),
