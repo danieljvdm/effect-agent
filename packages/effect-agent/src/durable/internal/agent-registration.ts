@@ -1,6 +1,6 @@
 import {
-  type Crypto,
-  type Option,
+  Crypto,
+  Option,
   type Scope,
   Context,
   Effect,
@@ -37,7 +37,7 @@ import {
 } from "../../engine/SubagentHost.ts";
 import { digestDefinitions, digestJson, DigestError } from "../Digest.ts";
 import type { DurableWorkerFailure, DurableWorkerRequirements } from "../DurableAgentRuntime.ts";
-import type { DefinitionDigestInput, PersistedJson } from "../Records.ts";
+import type { DefinitionDigestInput, Digest, PersistedJson } from "../Records.ts";
 import { DefinitionDigests, ReplayContract } from "../Records.ts";
 import type { Claim, Settlement, SubmissionSnapshot } from "../SubmissionLedger.ts";
 
@@ -87,18 +87,71 @@ export interface ReplayVersions {
   readonly tools: Readonly<Record<string, PersistedJson>>;
 }
 
+// These are immutable declaration projections, never model or admission contexts.
+const replaySchemaProjections = new WeakMap<Schema.Top, Schema.Json>();
+
+type CachedFallbackContracts = {
+  readonly tools: ReadonlyArray<Tool.Any>;
+  readonly completionTool: string | undefined;
+  readonly completionFromTools: ReadonlyArray<string>;
+  readonly version: PersistedJson;
+  readonly contracts: Record<string, Digest>;
+};
+
+const fallbackContracts = new WeakMap<Crypto.Crypto, WeakMap<object, CachedFallbackContracts>>();
+
 /** Hash current operation contracts; no historical definitions or schemas are retained. */
 export const toolReplayContracts = Effect.fn("AgentRegistration.toolReplayContracts")(function* (
   definition: Agent.AnyDefinition,
   versions?: ReplayVersions,
   fallbackVersion: PersistedJson = null,
 ) {
-  const declarations = yield* Effect.try({
-    try: () => {
-      const jsonSchema = (schema: Schema.Top) =>
-        Schema.decodeUnknownSync(Schema.Json)(Tool.getJsonSchemaFromSchema(schema));
+  // Optional lookup preserves validation before a missing-service defect. A
+  // different host Crypto service must never inherit another host's digest map.
+  const crypto = Option.getOrUndefined(yield* Effect.serviceOption(Crypto.Crypto));
 
-      return Object.values(definition.toolkit.tools).map((tool) => {
+  const prepared = yield* Effect.try({
+    try: () => {
+      const tools = Object.values(definition.toolkit.tools);
+      const completionTool = definition.completion?.tool;
+      const completionFromTools = definition.completionFromTools?.map(({ tool }) => tool) ?? [];
+      // Object-valued versions may be mutable caller data. Only primitive fallback
+      // versions can reuse a result, and only one result is retained per toolkit.
+
+      const cacheable =
+        versions === undefined && (fallbackVersion === null || typeof fallbackVersion !== "object");
+
+      const cached =
+        cacheable && crypto !== undefined
+          ? fallbackContracts.get(crypto)?.get(definition.toolkit.tools)
+          : undefined;
+
+      if (
+        cached !== undefined &&
+        cached.version === fallbackVersion &&
+        cached.completionTool === completionTool &&
+        cached.completionFromTools.length === completionFromTools.length &&
+        cached.completionFromTools.every((tool, index) => tool === completionFromTools[index]) &&
+        cached.tools.length === tools.length &&
+        cached.tools.every((tool, index) => tool === tools[index])
+      )
+        return { _tag: "Cached" as const, contracts: { ...cached.contracts } };
+
+      const jsonSchema = (schema: Schema.Top) => {
+        const cached = replaySchemaProjections.get(schema);
+
+        if (cached !== undefined) return cached;
+
+        const projection = Schema.decodeUnknownSync(Schema.Json)(
+          Tool.getJsonSchemaFromSchema(schema),
+        );
+
+        replaySchemaProjections.set(schema, projection);
+
+        return projection;
+      };
+
+      const declarations = tools.map((tool) => {
         const version = versions === undefined ? fallbackVersion : versions.tools[tool.name];
 
         if (
@@ -139,6 +192,15 @@ export const toolReplayContracts = Effect.fn("AgentRegistration.toolReplayContra
           },
         };
       });
+
+      return {
+        _tag: "Compile" as const,
+        declarations,
+        cacheable,
+        tools,
+        completionTool,
+        completionFromTools,
+      };
     },
     catch: () =>
       DigestError.make({
@@ -146,11 +208,28 @@ export const toolReplayContracts = Effect.fn("AgentRegistration.toolReplayContra
       }),
   });
 
-  return Object.fromEntries(
-    yield* Effect.forEach(declarations, ({ name, contract }) =>
+  if (prepared._tag === "Cached") return prepared.contracts;
+
+  const contracts = Object.fromEntries(
+    yield* Effect.forEach(prepared.declarations, ({ name, contract }) =>
       digestJson(contract).pipe(Effect.map((digest) => [name, digest] as const)),
     ),
   );
+
+  if (prepared.cacheable && crypto !== undefined) {
+    const cache = fallbackContracts.get(crypto) ?? new WeakMap<object, CachedFallbackContracts>();
+
+    cache.set(definition.toolkit.tools, {
+      tools: prepared.tools,
+      completionTool: prepared.completionTool,
+      completionFromTools: prepared.completionFromTools,
+      version: fallbackVersion,
+      contracts: { ...contracts },
+    });
+    fallbackContracts.set(crypto, cache);
+  }
+
+  return contracts;
 });
 
 /** Compile current metadata without acquiring executable services. */
