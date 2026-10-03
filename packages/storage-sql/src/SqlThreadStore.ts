@@ -86,7 +86,7 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
       message: error.message,
     });
 
-  const parseOffset = Effect.fn("SqlThreadStore.parseOffset")(function* (
+  const parseOffset = Effect.fnUntraced(function* (
     threadId: ThreadMaterialization["threadId"],
     offset: ObservationOffset | undefined,
   ): Effect.fn.Return<CanonicalSequence, ThreadStoreError> {
@@ -119,7 +119,7 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
     );
   });
 
-  const encodeCanonicalRecord = Effect.fn("SqlThreadStore.encodeCanonicalRecord")(function* (
+  const encodeCanonicalRecord = Effect.fnUntraced(function* (
     record: CanonicalRecord,
   ): Effect.fn.Return<string, ThreadStoreError> {
     return yield* encodeRecordJson(record).pipe(
@@ -127,7 +127,7 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
     );
   });
 
-  const encodeCanonicalBatch = Effect.fn("SqlThreadStore.encodeCanonicalBatch")(function* (
+  const encodeCanonicalBatch = Effect.fnUntraced(function* (
     batch: CanonicalBatch,
   ): Effect.fn.Return<string, ThreadStoreError> {
     return yield* Schema.encodeEffect(Schema.fromJsonString(CanonicalBatch))(batch).pipe(
@@ -135,7 +135,7 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
     );
   });
 
-  const encodeCheckpoint = Effect.fn("SqlThreadStore.encodeCheckpoint")(function* (
+  const encodeCheckpoint = Effect.fnUntraced(function* (
     checkpoint: ThreadCheckpoint,
   ): Effect.fn.Return<string, ThreadStoreError> {
     return yield* Schema.encodeEffect(Schema.fromJsonString(ThreadCheckpoint))(checkpoint).pipe(
@@ -185,7 +185,7 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
     });
   });
 
-  const decodeCheckpoint = Effect.fn("SqlThreadStore.decodeCheckpoint")(function* (
+  const decodeCheckpoint = Effect.fnUntraced(function* (
     checkpointJson: string,
   ): Effect.fn.Return<ThreadCheckpoint, ThreadStoreError> {
     return yield* Schema.decodeEffect(Schema.fromJsonString(ThreadCheckpoint))(checkpointJson).pipe(
@@ -193,7 +193,7 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
     );
   });
 
-  const requireThread = Effect.fn("SqlThreadStore.requireThread")(function* (
+  const requireThread = Effect.fnUntraced(function* (
     journal: SqlJournal<S, C, W, F>,
     threadId: ThreadMaterialization["threadId"],
   ) {
@@ -208,7 +208,7 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
     return rows[0];
   });
 
-  const tailDigestAt = Effect.fn("SqlThreadStore.tailDigestAt")(function* (
+  const tailDigestAt = Effect.fnUntraced(function* (
     journal: SqlJournal<S, C, W, F>,
     threadId: ThreadMaterialization["threadId"],
     sequence: CanonicalSequence,
@@ -451,12 +451,14 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
   const provideCrypto = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>) =>
     Effect.provideService(effect, Crypto.Crypto, crypto);
 
-  const hitFailpoint = Effect.fn("SqlThreadStore.hitFailpoint")(
-    (location: SqlStorageFailpointLocation): Effect.Effect<void, ThreadStoreError> =>
+  const hitFailpoint = (
+    location: SqlStorageFailpointLocation,
+  ): Effect.Effect<void, ThreadStoreError> =>
+    Effect.suspend(() =>
       failpoint
         .hit(location)
         .pipe(Effect.mapError((error) => storeError(`storage failpoint ${location}`, error))),
-  );
+    );
 
   const materialize: ThreadStore["Service"]["materialize"] = Effect.fn(
     "SqlThreadStore.materialize",
@@ -539,7 +541,7 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
     return result;
   });
 
-  const loadRecords = Effect.fn("SqlThreadStore.loadRecords")(function* (request: RawReadRequest) {
+  const loadRecords = Effect.fnUntraced(function* (request: RawReadRequest) {
     const rows = yield* journal
       .read(request)
       .pipe(Effect.mapError((error) => storeError("read canonical records", error)));
