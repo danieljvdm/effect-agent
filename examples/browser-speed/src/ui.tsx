@@ -204,11 +204,11 @@ export const App = () => {
   const [wikiTarget, setWikiTarget] = useState(defaultChallenge.target);
   const [prompt, setPrompt] = useState<string>(scenarios[0].prompt);
   const [mode, setMode] = useState<typeof Mode.Type>("agent");
-  const [model, setModel] = useState<ModelId | "all">("gpt-6-luna");
+  const [model, setModel] = useState<ModelId | "all">("gpt-6-sol");
   const [engine, setEngine] = useState<typeof BrowserEngine.Type | "all">("chromium");
   const [grounding, setGrounding] = useState<typeof Grounding.Type>("direct");
   const [wikiDriver, setWikiDriver] = useState<"model" | "jev">("model");
-  const [reasoning, setReasoning] = useState<typeof Reasoning.Type>("none");
+  const [reasoning, setReasoning] = useState<typeof Reasoning.Type>("high");
   const [serviceTier, setServiceTier] = useState<typeof ServiceTier.Type>("fast");
   const [screenshots, setScreenshots] = useState(false);
   const [liveView, setLiveView] = useState(true);

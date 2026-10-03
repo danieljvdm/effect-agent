@@ -142,12 +142,13 @@ The app connects automatically; there is no login or app token. Cloudflare and m
 stay in the Worker. Missing configuration disables runs with an explanation.
 `worker --local` disables remote bindings for API checks; it cannot run a browser benchmark.
 
-The model picker offers **GPT-6 Luna** (default), **GPT-6 Sol**, and **Llama 3.3**. OpenAI models
+The model picker offers **GPT-6 Sol** (initial selection), **GPT-6 Luna**, and **Llama 3.3**. OpenAI models
 use Responses; Llama uses Workers AI Chat Completions in the configured Cloudflare account.
 Provider credentials stay on the server, and requests can select only this approved catalog.
 Missing credentials disable the corresponding option.
 
-OpenAI runs default to **Fast** processing and **none** reasoning. **OpenAI speed** switches
+The UI starts with **Fast** processing and **high** reasoning for the Wikipedia race.
+API requests that omit reasoning use **none**. **OpenAI speed** switches
 between Fast and Standard; **Reasoning** exposes none, low, medium, high, xhigh, and max.
 Fast is a service tier, independent of reasoning effort, and has premium OpenAI pricing.
 The Worker explicitly sends both settings and records the tier actually returned by OpenAI.
