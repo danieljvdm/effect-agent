@@ -72,13 +72,19 @@ export const WikiObservation = Schema.Struct({
 
 const PageData = Schema.Struct({
   url: Schema.String,
+  documentOrigin: Schema.Finite,
   canonical: Schema.String,
   title: Schema.String,
   article: Schema.Boolean,
   excerpt: Schema.String,
   linkCount: Schema.Natural,
   links: Schema.Array(
-    Schema.Struct({ index: Schema.Natural, url: Schema.String, label: Schema.String }),
+    Schema.Struct({
+      index: Schema.Natural,
+      url: Schema.String,
+      href: Schema.String,
+      label: Schema.String,
+    }),
   ),
 });
 
@@ -188,8 +194,9 @@ export const makeWikipedia = Effect.fnUntraced(function* (
   let generation = 0;
   let path: ReadonlyArray<typeof WikiHop.Type> = [];
   let currentUrl = "";
+  let currentDocument = 0;
   let uncertain = false;
-  let observed = new Map<string, { index: number; url: string; label: string }>();
+  let observed = new Map<string, { index: number; url: string; href: string; label: string }>();
   let observation: typeof WikiObservation.Type | undefined;
   let routePage: RoutePage | undefined;
 
@@ -340,6 +347,7 @@ export const makeWikipedia = Effect.fnUntraced(function* (
           page.evaluate(
             (query) => ({
               url: location.href,
+              documentOrigin: performance.timeOrigin,
               canonical:
                 document.querySelector<HTMLLinkElement>('link[rel="canonical"]')?.href ?? "",
               title: document.querySelector("#firstHeading")?.textContent?.trim() ?? "",
@@ -362,6 +370,7 @@ export const makeWikipedia = Effect.fnUntraced(function* (
                         {
                           index,
                           url: node.href,
+                          href: node.getAttribute("href") ?? "",
                           label: (
                             node.innerText ||
                             node.title ||
@@ -407,7 +416,7 @@ export const makeWikipedia = Effect.fnUntraced(function* (
         code: "browser",
         message: "The browser did not reach a valid Wikipedia article.",
       });
-    if (path.length && !via && data.url !== currentUrl)
+    if (path.length && !via && (data.url !== currentUrl || data.documentOrigin !== currentDocument))
       return yield* new LabError({
         code: "browser",
         message: "The page changed without an observed link click.",
@@ -419,11 +428,12 @@ export const makeWikipedia = Effect.fnUntraced(function* (
         { title: data.title, url: data.canonical, at: trace.now(), ...(via ? { via } : {}) },
       ];
       currentUrl = data.url;
+      currentDocument = data.documentOrigin;
     }
 
     const candidates = new Map<
       string,
-      { index: number; url: string; label: string; title: string }
+      { index: number; url: string; href: string; label: string; title: string }
     >();
 
     for (const link of data.links) {
@@ -511,82 +521,68 @@ export const makeWikipedia = Effect.fnUntraced(function* (
         code: "invalid",
         message: "The 20-hop limit was reached. End the race.",
       });
+
+    const current = yield* browser
+      .inspect({
+        selector: `${selector}[href=${JSON.stringify(link.href)}]:not(.new):not([download]):is(:not([target]),[target=""],[target="_self"])`,
+      })
+      .pipe(Effect.mapError((error) => new LabError({ code: "browser", message: error.message })));
+
+    const control = current.controls.find(
+      (control) =>
+        control.kind === "link" &&
+        control.attributes?.href === link.href &&
+        (!control.name ||
+          normalizeTitle(control.name.slice(0, 180)) === normalizeTitle(link.label)),
+    );
+
+    if (current.tabs?.find((tab) => tab.active)?.url !== currentUrl || control === undefined)
+      return yield* new LabError({
+        code: "invalid",
+        message:
+          "The observed article or link changed. No click was dispatched. Read the page again.",
+      });
+
     approved = link.url;
     observed.clear();
-    let dispatched = false;
+    uncertain = true;
+    const result = yield* browser.act([{ kind: "click", ref: control.ref }]);
 
-    yield* trace
-      .measure(
-        "action",
-        `Follow · ${link.label}`,
-        browser
-          .native(async (page) => {
-            if (page.url() !== currentUrl)
-              return "Article changed before click. Read the page again.";
+    if (result.dispatch === "not-dispatched") uncertain = false;
+    if (result.completed !== 1 || result.dispatch !== "acknowledged")
+      return yield* new LabError({
+        code: "browser",
+        message: result.error ?? "The link click was not acknowledged. No click will be replayed.",
+      });
 
-            // Wikipedia hydrates its layout after DOMContentLoaded. Locate the observed
-            // destination and label again, rather than trusting a now-shifted DOM index.
-            const handle = await page.evaluateHandle(
-              (query, expected, label) =>
-                Array.from(document.querySelectorAll<HTMLAnchorElement>(query)).find(
-                  (node) =>
-                    node.href === expected &&
-                    node.checkVisibility() &&
-                    !node.classList.contains("new") &&
-                    !node.hasAttribute("download") &&
-                    (!node.target || node.target === "_self") &&
-                    (node.innerText || node.title || node.querySelector("img")?.alt || "")
-                      .trim()
-                      .slice(0, 180) === label,
-                ),
-              selector,
-              link.url,
-              link.label,
-            );
+    yield* trace.measure(
+      "wait",
+      `Wait for article · ${link.label}`,
+      browser.native(async (page) => {
+        // A condition check also observes navigation that finished during the
+        // action's own read. It never subscribes too late to a navigation event.
+        const ready = await page.waitForFunction(
+          (previous) =>
+            performance.timeOrigin !== previous &&
+            document.readyState !== "loading" &&
+            document.body.classList.contains("ns-0") &&
+            document.querySelector("#mw-content-text .mw-parser-output") !== null,
+          { timeout: 12_000 },
+          currentDocument,
+        );
 
-            try {
-              const element = handle.asElement();
+        await ready.dispose();
+      }),
+    );
+    uncertain = false;
 
-              if (
-                !element ||
-                !(await element.evaluate(
-                  (node, expected) =>
-                    node instanceof HTMLAnchorElement &&
-                    node.href === expected &&
-                    node.checkVisibility(),
-                  link.url,
-                ))
-              )
-                return "The observed link changed before click. No click was dispatched. Read the page again.";
-              const anchor = await element.toElement("a");
-
-              dispatched = true;
-              await Promise.all([
-                page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 12_000 }),
-                anchor.click(),
-              ]);
-
-              return null;
-            } finally {
-              await handle.dispose();
-            }
-          })
-          .pipe(
-            Effect.flatMap((message) =>
-              message === null
-                ? Effect.void
-                : Effect.fail(new LabError({ code: "invalid", message })),
-            ),
-          ),
-      )
-      .pipe(
-        Effect.onExit((exit) =>
-          Effect.sync(() => {
-            if (exit._tag === "Failure" && dispatched) uncertain = true;
-          }),
-        ),
-      );
-    const next = yield* read(0, { label: link.label, url: link.url });
+    const next = yield* read(0, { label: link.label, url: link.url }).pipe(
+      Effect.onExit((exit) =>
+        Effect.sync(() => {
+          if (exit._tag === "Failure") uncertain = true;
+        }),
+      ),
+    );
 
     yield* browser.capture().pipe(Effect.catch(() => Effect.void));
 

@@ -20,6 +20,8 @@ remaining links or filter their titles and labels with a case-insensitive substr
 only reads links already on the current article; offsets and counts refer to the matching links.
 Both direct selection and Jev element matching receive those same candidates. Refs expire when
 another link page is read or navigation occurs, and every click rechecks its anchor.
+Clicks use the same guarded native adapter as the task board, including scrolling and
+hit-target verification. A condition wait verifies the next article document after acknowledged input.
 
 The host resolves the destination's canonical title through Wikipedia's title API before the
 race; that lookup gives the agent no route. A win requires an observed link click, a valid article,

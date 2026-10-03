@@ -12,7 +12,9 @@ export const inspectDom = (
   const registry = new Map<string, Element>();
 
   Reflect.set(globalThis, "@effect-agent/native-browser", registry);
-  const roots: Array<Document | ShadowRoot | Element> = [document];
+  const roots: Array<Document | ShadowRoot> = [document];
+  const visited = new Set<Node>();
+  let discoveredElements = 0;
   const candidates: Array<HTMLElement> = [];
   let scanned = 0;
   let truncated = false;
@@ -21,67 +23,93 @@ export const inspectDom = (
   const controlSelector =
     'button,a[href],input,textarea,select,label,[contenteditable="true"],[role="button"],[role="link"],[role="checkbox"],[role="radio"],[role="switch"],[role="tab"],[role="option"],[role="combobox"],[role="textbox"],[role="menuitem"],[role="scrollbar"]';
 
+  const filter: NodeFilter = {
+    acceptNode(node) {
+      if (!(node instanceof Element)) return NodeFilter.FILTER_ACCEPT;
+      const style = getComputedStyle(node);
+
+      return node.matches('script,style,template,option,optgroup,[inert],[aria-hidden="true"]') ||
+        style.display === "none" ||
+        style.opacity === "0" ||
+        style.contentVisibility === "hidden"
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_ACCEPT;
+    },
+  };
+
   for (let index = 0; index < roots.length && !truncated; index++) {
     const root = roots[index];
 
     if (root === undefined) break;
 
-    // Discover shadow roots even when the selector matches only inside one.
-    const discovery = document.createTreeWalker(
-      root,
-      NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
-      {
-        acceptNode(node) {
-          if (!(node instanceof Element)) return NodeFilter.FILTER_ACCEPT;
-          const style = getComputedStyle(node);
+    // Narrow inspection starts at matching roots, so unrelated page content
+    // cannot exhaust its budget. Shadow-host discovery has a separate bound.
+    if (selector !== undefined) {
+      const discovery = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, filter);
+      let node = discovery.nextNode();
 
-          // Hidden templates and collapsed option lists must not consume the
-          // observation budget before the rendered page is reached.
-          return node.matches(
-            'script,style,template,option,optgroup,[inert],[aria-hidden="true"]',
-          ) ||
-            style.display === "none" ||
-            style.opacity === "0" ||
-            style.contentVisibility === "hidden"
-            ? NodeFilter.FILTER_REJECT
-            : NodeFilter.FILTER_ACCEPT;
-        },
-      },
-    );
-
-    const nodes: Array<Element> = [];
-    let discovered = discovery.nextNode();
-
-    while (discovered !== null) {
-      if (++scanned > 10_000) {
-        truncated = true;
-        break;
+      while (node !== null) {
+        if (++discoveredElements > 10_000) {
+          truncated = true;
+          break;
+        }
+        if (node instanceof Element && node.shadowRoot !== null) roots.push(node.shadowRoot);
+        node = discovery.nextNode();
       }
-      if (discovered instanceof Element) {
-        nodes.push(discovered);
-        if (discovered.shadowRoot !== null) roots.push(discovered.shadowRoot);
-      } else if (discovered instanceof Text) {
-        const parent = discovered.parentElement;
+    }
+    const matches = selector === undefined ? [root] : Array.from(root.querySelectorAll(selector));
+    const scopes = matches.slice(0, 256);
+    const nodes: Array<Element> = [];
 
-        // Select options have their own bounded lookup. Native innerText includes the
-        // entire collapsed option list and can bury form errors and current content.
-        if (
-          parent instanceof HTMLElement &&
-          (selector === undefined || parent.closest(selector) !== null) &&
-          parent.closest('select,script,style,[inert],[aria-hidden="true"]') === null &&
-          parent.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
-        ) {
-          const value = discovered.textContent?.replace(/\s+/g, " ").trim() ?? "";
+    truncated ||= matches.length > scopes.length;
+    for (const scope of scopes) {
+      if (scope instanceof Element && filter.acceptNode(scope) === NodeFilter.FILTER_REJECT)
+        continue;
 
-          if (value.length > 0) {
-            const room = Math.max(0, 12_000 - text.length);
+      const walker = document.createTreeWalker(
+        scope,
+        NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+        filter,
+      );
 
-            text += `${value.slice(0, room)}\n`;
-            truncated ||= value.length >= room;
+      let node: Node | null = scope instanceof Element ? scope : walker.nextNode();
+
+      while (node !== null) {
+        if (visited.has(node)) {
+          node = walker.nextNode();
+          continue;
+        }
+        visited.add(node);
+        if (++scanned > 10_000) {
+          truncated = true;
+          break;
+        }
+        if (node instanceof Element) {
+          nodes.push(node);
+          if (selector === undefined && node.shadowRoot !== null) roots.push(node.shadowRoot);
+        } else if (node instanceof Text) {
+          const parent = node.parentElement;
+
+          // Select options have their own bounded lookup; collapsed option text
+          // must not bury the current form's values and validation messages.
+          if (
+            parent instanceof HTMLElement &&
+            parent.closest('select,script,style,[inert],[aria-hidden="true"]') === null &&
+            parent.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+          ) {
+            const value = node.textContent?.replace(/\s+/g, " ").trim() ?? "";
+
+            if (value.length > 0) {
+              const room = Math.max(0, 12_000 - text.length);
+
+              text += `${value.slice(0, room)}\n`;
+              truncated ||= value.length >= room;
+            }
           }
         }
+        node = walker.nextNode();
       }
-      discovered = discovery.nextNode();
+      if (scanned > 10_000) break;
     }
     for (const node of nodes) {
       if (selector !== undefined && !node.matches(selector) && node.closest(selector) === null)
