@@ -553,11 +553,21 @@ export class MarkJoinedRequest extends Schema.Class<MarkJoinedRequest>(
 /**
  * Recovery-only revert of a `joining` Submission whose canonical input append never committed
  * (DUR-016): `joining → ready`, idempotent, a no-op when the Submission already joined.
+ * A guard limits the revert to the exact linked host: its current ownership token is required
+ * while it is live; omit the token only for a settled host. A changed host link is a no-op.
+ * Adapters validate the guard atomically with the transition. Unguarded requests retain the
+ * caller-owned recovery contract.
  */
 export class RevertJoiningRequest extends Schema.Class<RevertJoiningRequest>(
   "@effect-agent/thread/RevertJoiningRequest",
 )({
   submissionId: SubmissionId,
+  guard: Schema.optionalKey(
+    Schema.Struct({
+      hostSubmissionId: SubmissionId,
+      ownershipToken: Schema.optionalKey(OwnershipToken),
+    }),
+  ),
 }) {}
 
 /**

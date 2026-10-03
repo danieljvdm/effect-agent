@@ -6692,7 +6692,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       ) {
         for (const pending of claims) {
           yield* ledger.revertJoining(
-            RevertJoiningRequest.make({ submissionId: pending.claim.submissionId }),
+            RevertJoiningRequest.make({
+              submissionId: pending.claim.submissionId,
+              guard: {
+                hostSubmissionId: submissionId,
+                ownershipToken: yield* Ref.get(tokenRef),
+              },
+            }),
           );
           pendingJoinClaims.splice(pendingJoinClaims.indexOf(pending), 1);
         }
@@ -9872,76 +9878,103 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         case "ResumeSuspended": {
           return yield* resumeSuspendedForRecovery(snapshot);
         }
-        case "RevertJoining": {
-          // `joining` without a canonical `input:{sid}` record: the host never consumed the
-          // input, so the claim returns to ready and is delivered exactly once later
-          // (DUR-016). Ownership-free by contract; the wake hint reopens the lane.
-          yield* ledger.revertJoining(
-            RevertJoiningRequest.make({ submissionId: submission.submissionId }),
-          );
-          yield* wake.notify(submission.threadId);
-
-          return "repaired";
-        }
+        case "RevertJoining":
         case "RepairJoinMarker": {
           const hostSubmissionId = snapshot.hostSubmissionId;
 
           if (hostSubmissionId === undefined) return "deferred";
 
-          const inputEnvelope = records.find(
-            (envelope) =>
-              envelope.record.recordId === submissionInputRecordId(submission.submissionId),
-          );
-
-          if (inputEnvelope === undefined) return "deferred";
-          if (evidence.hostSettlementOutcome !== undefined) {
-            // The host settled while the marker was lost, so no host ownership can ever repair
-            // it. The coverage rule decides honestly (DUR-016): an uncovered input was never
-            // consumed by the host and returns to ready to run as its own Run (the canonical
-            // `input:{sid}` record reattaches through the ordinary input-marker repair); a
-            // covered-but-unmarked input is unreachable under this coordinator (`markJoined`
-            // always precedes delivery), so it stays visible instead of being guessed at.
-            if (!evidence.joinedInputCovered) {
-              yield* ledger.revertJoining(
-                RevertJoiningRequest.make({ submissionId: submission.submissionId }),
-              );
-              yield* wake.notify(submission.threadId);
-
-              return "repaired";
-            }
-
-            return "deferred";
-          }
-
-          // `markJoined` is fenced by the HOST lane's ownership: claim the host head, repair
-          // the marker from history (DUR-015), and release. A live host defers to that host's
-          // own drain-seam repair.
           const host = yield* ledger.lookup(
             SubmissionLookupById.make({ submissionId: hostSubmissionId }),
           );
 
           if (Option.isNone(host)) return "deferred";
-          const claimed = yield* claimFor(host.value, decision);
 
-          if (Option.isNone(claimed)) return "deferred";
-          const claim = claimed.value;
+          // Joining belongs to the host's ownership period, including the interval before
+          // its input append. Recovery must not revert claims a live host is still consuming.
+          const claimed =
+            host.value.state === "settled"
+              ? Option.none<Claim>()
+              : yield* claimFor(host.value, decision);
 
-          yield* ledger.markJoined(
-            MarkJoinedRequest.make({
-              submissionId: submission.submissionId,
-              ownershipToken: claim.ownershipToken,
-              recordId: inputEnvelope.record.recordId,
-              sequence: inputEnvelope.sequence,
-            }),
-          );
-          yield* ledger
-            .releaseOwnership(
-              ReleaseOwnershipRequest.make({
-                submissionId: hostSubmissionId,
-                ownershipToken: claim.ownershipToken,
+          if (host.value.state !== "settled" && Option.isNone(claimed)) return "deferred";
+          if (Option.isSome(claimed))
+            yield* store.materialize(
+              ThreadMaterialization.make({
+                threadId: submission.threadId,
+                producerEpoch: claimed.value.producerEpoch,
               }),
-            )
-            .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
+            );
+
+          // The previous owner may have appended after the pass snapshot, before this claim.
+          // Re-read that suffix and the join link before deciding whether the input is absent.
+          const currentRecords = yield* refreshRecoveryHistory(
+            submission.threadId,
+            records,
+            history.throughSequence,
+            history.submissionIds,
+          );
+
+          const current = yield* ledger.loadRecoverySnapshot(
+            RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
+          );
+
+          if (
+            current.submission.state !== "joining" ||
+            current.hostSubmissionId !== hostSubmissionId
+          )
+            return "deferred";
+
+          const currentEvidence = yield* evidenceFor(
+            currentRecords,
+            submission.submissionId,
+            history.materialized,
+            hostSubmissionId,
+          );
+
+          const inputEnvelope = currentRecords.find(
+            (envelope) =>
+              envelope.record.recordId === submissionInputRecordId(submission.submissionId),
+          );
+
+          if (currentEvidence.hostSettlementOutcome !== undefined) {
+            // A covered terminal input stays visible: markJoined must precede delivery, so
+            // recovery cannot guess at that unreachable prefix. Uncovered input returns ready.
+            if (currentEvidence.joinedInputCovered) return "deferred";
+          } else if (Option.isNone(claimed)) {
+            // A ledger-settled host without canonical settlement evidence is not repair authority.
+            return "deferred";
+          } else if (inputEnvelope !== undefined) {
+            yield* ledger.markJoined(
+              MarkJoinedRequest.make({
+                submissionId: submission.submissionId,
+                ownershipToken: claimed.value.ownershipToken,
+                recordId: inputEnvelope.record.recordId,
+                sequence: inputEnvelope.sequence,
+              }),
+            );
+          }
+          if (currentEvidence.hostSettlementOutcome !== undefined || inputEnvelope === undefined)
+            yield* ledger.revertJoining(
+              RevertJoiningRequest.make({
+                submissionId: submission.submissionId,
+                guard: {
+                  hostSubmissionId,
+                  ...(Option.isNone(claimed)
+                    ? {}
+                    : { ownershipToken: claimed.value.ownershipToken }),
+                },
+              }),
+            );
+          if (Option.isSome(claimed))
+            yield* ledger
+              .releaseOwnership(
+                ReleaseOwnershipRequest.make({
+                  submissionId: hostSubmissionId,
+                  ownershipToken: claimed.value.ownershipToken,
+                }),
+              )
+              .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
           yield* wake.notify(submission.threadId);
 
           return "repaired";
