@@ -16,7 +16,9 @@ The default **Wikipedia race** accepts starting and destination article titles. 
 ordinary English Wikipedia article links in the current article body: no search, URL entry,
 back button, namespaces, external links, or fragment shortcuts. Each observation contains an
 article excerpt and up to 80 unique links in the two planner modes; the agent can page through the current article's
-remaining links. Both direct selection and Jev element matching receive those same candidates. Refs expire when
+remaining links or filter their titles and labels with a case-insensitive substring. Filtering
+only reads links already on the current article; offsets and counts refer to the matching links.
+Both direct selection and Jev element matching receive those same candidates. Refs expire when
 another link page is read or navigation occurs, and every click rechecks its anchor.
 
 The host resolves the destination's canonical title through Wikipedia's title API before the

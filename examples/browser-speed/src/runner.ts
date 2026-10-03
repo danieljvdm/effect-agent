@@ -224,7 +224,9 @@ export const executeTask = Effect.fnUntraced(function* (
           new LabError({
             code: "browser",
             message:
-              error._tag === "ModelProtocolError" || error._tag === "AgentPolicyError"
+              error._tag === "ModelProtocolError" ||
+              error._tag === "AgentPolicyError" ||
+              error._tag === "ContextBudgetError"
                 ? `Agent stopped: ${error.message}`
                 : error._tag === "AiError"
                   ? `Model request failed (${error.reason._tag}): ${"description" in error.reason ? error.reason.description : "No provider detail."}`
