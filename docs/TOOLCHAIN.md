@@ -51,8 +51,10 @@ do not add a global Vite override.
 Alchemy and its Cloudflare runtime advance together. Their beta.80 packages and Distilled
 rc.13 clients support stable Effect 4 directly. The experimental
 `@yielded/agent-platform-alchemy-cloudflare` host also consumes Alchemy at runtime and requires
-`patches/alchemy@2.0.0-beta.80.patch` for Object lifetimes, native clients, and transactional
-alarms. Root `patchedDependencies` applies it; a peer dependency alone does not.
+`patches/alchemy@2.0.0-beta.80.patch` for native Durable Object RPC dispatch, an interrupted
+transaction rollback fix, and runtime module exports that avoid bundling deployment tooling.
+Object lifetimes belong to the host adapter; alarms reuse Alchemy's transaction and scheduling
+APIs. Root `patchedDependencies` applies these changes; a peer dependency alone does not.
 Verify upgrades with a frozen install, the existing Alchemy host suites, and `vp run check:deploy`.
 
 The demo uses Auth beta.11 and its compatible Drizzle, GitHub, and crypto companions,

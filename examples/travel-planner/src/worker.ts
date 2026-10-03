@@ -41,10 +41,17 @@ const workflowEntrypoint = Worker(
   }),
 );
 
-export class SiteBuild extends makeWorkflowBridge(WorkflowEntrypoint, {
-  entrypoint: workflowEntrypoint,
-  stack: runtimeStack,
-})("SiteBuild") {}
+export class SiteBuild extends makeWorkflowBridge(
+  // beta.80 describes the native constructor with unknown parameters.
+  WorkflowEntrypoint as unknown as Parameters<typeof makeWorkflowBridge>[0],
+  {
+    // Runtime evaluation bypasses deployment Providers; beta.80's bridge omits that requirement.
+    entrypoint: workflowEntrypoint as unknown as Parameters<
+      typeof makeWorkflowBridge
+    >[1]["entrypoint"],
+    stack: runtimeStack,
+  },
+)("SiteBuild") {}
 
 export class AccountPlannerThread extends makeTravelPlannerThread(
   Layer.unwrap(

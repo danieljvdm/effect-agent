@@ -106,7 +106,11 @@ export const entrypoint = Worker(
   }).pipe(Effect.provide(AlarmsOwnerLive)),
 );
 
-const meta = { entrypoint, stack: { name: "effect-agent-alchemy-restart", stage: "test" } };
+const meta = {
+  entrypoint: entrypoint as unknown as Parameters<typeof makeDurableObjectBridge>[1]["entrypoint"],
+  stack: { name: "effect-agent-alchemy-restart", stage: "test" },
+};
+
 const bridge = makeDurableObjectBridge(DurableObject, meta);
 
 export class RestartAlarmOwner extends bridge("RESTART_ALARMS") {}

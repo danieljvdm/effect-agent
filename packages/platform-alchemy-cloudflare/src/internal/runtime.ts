@@ -1,7 +1,8 @@
 import { DurableObjectContext } from "@yielded/agent-platform-cloudflare/cloudflare-host-bindings";
 import { DurableObjectState } from "alchemy/Cloudflare/Workers/DurableObjectState";
 import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
-import { Context, Effect, Layer, Scope } from "effect";
+import type { RuntimeContext } from "alchemy/RuntimeContext";
+import { Context, Effect, Exit, Layer, Scope } from "effect";
 
 import * as Rpc from "../Rpc.ts";
 
@@ -25,11 +26,21 @@ export interface EventOptions<Services, EventServices = never, EventError = neve
   readonly eventLayer?: Layer.Layer<EventServices, EventError, Services | HostServices>;
 }
 
-/**
- * Run inside Alchemy's inner constructor Effect. The patched bridge owns the incarnation
- * Scope and constructor gate; it closes that Scope on initialization failure. Handlers
- * reuse the application services while retaining their invocation's Scope and memo map.
- */
+/** Own construction resources per incarnation, including failure after application acquisition. */
+export const ownInstance = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.make();
+
+      return yield* restore(effect).pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.provideService(Layer.CurrentMemoMap, Layer.makeMemoMapUnsafe()),
+        Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(scope, exit) : Effect.void)),
+      );
+    }),
+  );
+
+/** Reuse application services while retaining each invocation's Scope and memo map. */
 export const acquire = <Services, Error, Requirements, EventServices = never, EventError = never>(
   application: Layer.Layer<Services, Error, Requirements>,
   options: EventOptions<Services, EventServices, EventError> = {},
@@ -82,7 +93,7 @@ export type NativeHandlers<Handlers> = {
 };
 
 export type Constructor<Rpc> = Effect.Effect<
-  Effect.Effect<Rpc, never, DurableObjectState | Scope.Scope>,
+  Effect.Effect<Rpc, never, DurableObjectState | RuntimeContext>,
   never,
   WorkerEnvironment
 >;

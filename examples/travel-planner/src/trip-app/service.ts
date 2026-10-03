@@ -6,7 +6,6 @@ import { plannerEnvironment } from "../server/alchemy.ts";
 import { ownerOfThread } from "../server/tenancy.ts";
 import { TripFailpoint } from "../server/trips.ts";
 import { publishTripAppAddress, tripAppHostname } from "./addresses.ts";
-import { SiteBuildBinding, SiteBuildBindingLive } from "./bindings.ts";
 import { AppRepository } from "./repository.ts";
 import { requireAppTrip } from "./scope.ts";
 import { AppSourceStore, appSourceLayer } from "./source.ts";
@@ -40,38 +39,37 @@ const startBuild = Effect.fn("startTripAppBuild")(function* (app: TripApp, label
     return yield* failed("The app builder isn't configured.");
   yield* publishTripAppAddress(ownerOfThread(identity.threadId), app, env.APP_DOMAIN);
   const id = `${app.id}-${app.sourceCommit}`;
+  const binding = env.SITE_BUILD;
+
+  const workflow = <A>(run: () => Promise<A>) =>
+    Effect.tryPromise({
+      try: run,
+      catch: () => failed("The source is saved, but the build couldn't start. Retry the build."),
+    });
 
   yield* failpoint.hit("app-build:before-start");
-  yield* Effect.gen(function* () {
-    const workflow = yield* SiteBuildBinding;
 
-    const params = {
-      owner: ownerOfThread(identity.threadId),
-      appId: app.id,
-      tripId: app.tripId,
-      repoName: app.repoName,
-      commitId: app.sourceCommit,
-      label,
-    };
+  const params = {
+    owner: ownerOfThread(identity.threadId),
+    appId: app.id,
+    tripId: app.tripId,
+    repoName: app.repoName,
+    commitId: app.sourceCommit,
+    label,
+  };
 
-    yield* workflow.create({ params, id }).pipe(
-      Effect.catch((error) =>
-        Effect.gen(function* () {
-          const existing = yield* workflow.get(id);
-          const status = yield* existing.status();
+  yield* workflow(() => binding.create({ params, id })).pipe(
+    Effect.catch((error) =>
+      Effect.gen(function* () {
+        const existing = yield* workflow(() => binding.get(id));
+        const status = yield* workflow(() => existing.status());
 
-          if (status.status === "errored" || status.status === "terminated")
-            yield* existing.restart();
-          if (status.status === "unknown") return yield* error;
+        if (status.status === "errored" || status.status === "terminated")
+          yield* workflow(() => existing.restart());
+        if (status.status === "unknown") return yield* error;
 
-          return existing;
-        }),
-      ),
-    );
-  }).pipe(
-    Effect.provide(SiteBuildBindingLive),
-    Effect.mapError(() =>
-      failed("The source is saved, but the build couldn't start. Retry the build."),
+        return existing;
+      }),
     ),
   );
   yield* failpoint.hit("app-build:after-start");

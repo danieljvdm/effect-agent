@@ -572,7 +572,12 @@ export const makeTravelPlannerThread = <
     ctx: DurableObjectState,
     env: Cloudflare.Env,
   ) => DurableObject<Cloudflare.Env> & NativeRpc<ThreadObject.Rpc<typeof plannerRpc & Handlers>> =
-    makeDurableObjectBridge(DurableObject, { entrypoint, stack: runtimeStack })("ACCOUNT_THREADS");
+    makeDurableObjectBridge(DurableObject, {
+      entrypoint: entrypoint as unknown as Parameters<
+        typeof makeDurableObjectBridge
+      >[1]["entrypoint"],
+      stack: runtimeStack,
+    })("ACCOUNT_THREADS");
 
   return Native;
 };

@@ -180,7 +180,7 @@ Register the exported class as a SQLite Durable Object under `THREADS`.
 Use the experimental `@yielded/agent-platform-alchemy-cloudflare` host when Alchemy owns your Worker and Durable
 Object runtime. This repository currently requires Alchemy `2.0.0-beta.80` with its
 [runtime patch](https://github.com/yielded-dev/agent/blob/main/patches/alchemy%402.0.0-beta.80.patch); stock beta.80 does not supply the
-required constructor lifetimes, native RPC dispatch, and transactional alarm recovery. This host is experimental.
+required native RPC dispatch, interruption rollback fix, and runtime module exports. This host is experimental.
 
 Pass the application Layer to `ThreadObject.make`, then give its two-phase constructor
 to an Alchemy Durable Object declaration. `RuntimeLive` contains the registrations and
@@ -203,7 +203,7 @@ const ThreadsLive = Threads.make(
 
 Yield `Threads` in the Worker and provide `ThreadsLive`. The outer Effect captures the
 Worker environment; the inner Effect acquires the application once per Object incarnation,
-inside Alchemy's constructor gate and Scope. Each RPC and alarm uses its own event Scope.
+inside Alchemy's constructor gate with a host-owned instance Scope. Each RPC and alarm uses its own event Scope.
 Put resources needing timely cleanup and observability in `options.eventLayer`; eviction still cannot guarantee
 incarnation finalizers. See the [complete Alchemy setup](https://github.com/yielded-dev/agent/blob/main/examples/alchemy-cloudflare/alchemy.run.ts).
 

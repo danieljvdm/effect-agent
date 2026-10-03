@@ -11,6 +11,7 @@ import { Effect, Layer } from "effect";
 
 import {
   acquire,
+  ownInstance,
   platformLayer,
   type HostServices,
   type Constructor,
@@ -43,7 +44,7 @@ export const make = <E>(
       const rpc = Host.rpc(options.rpcLimits);
 
       return { memory: (encoded: string) => invoke(rpc.memory(encoded)) };
-    }).pipe(Effect.provideService(WorkerEnvironment, env), Effect.orDie);
+    }).pipe(ownInstance, Effect.provideService(WorkerEnvironment, env), Effect.orDie);
   });
 
 export type Rpc = NativeHandlers<ReturnType<typeof Host.rpc>>;

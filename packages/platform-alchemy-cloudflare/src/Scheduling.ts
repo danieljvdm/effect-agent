@@ -11,6 +11,7 @@ import { Effect, Layer, type Scope } from "effect";
 import * as Alarms from "./Alarms.ts";
 import {
   acquire,
+  ownInstance,
   platformLayer,
   type HostServices,
   type Constructor,
@@ -47,7 +48,7 @@ export const make = <E>(
         schedule: (encoded: unknown) => invoke(Host.rpc.schedule(encoded)),
         alarm: () => invoke(Host.alarm(limits)).pipe(Effect.orDie),
       };
-    }).pipe(Effect.provideService(WorkerEnvironment, env), Effect.orDie);
+    }).pipe(ownInstance, Effect.provideService(WorkerEnvironment, env), Effect.orDie);
   });
 
 export type Rpc = NativeHandlers<typeof Host.rpc> & {

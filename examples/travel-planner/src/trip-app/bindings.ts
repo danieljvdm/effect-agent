@@ -1,10 +1,8 @@
 import type { Sandbox } from "@cloudflare/sandbox";
-import { makeBucketClient } from "alchemy/Cloudflare/R2/ReadWriteBucketBinding";
-import type { WorkflowHandle } from "alchemy/Cloudflare/Workflows";
-import { makeWorkflowClient } from "alchemy/Cloudflare/Workflows";
+import { R2Error } from "alchemy/Cloudflare/R2/BucketTypes";
 import { Context, Effect, Layer } from "effect";
 
-import { type AppBuildRequest, PlannerError } from "../domain.ts";
+import { PlannerError } from "../domain.ts";
 import { plannerEnvironment } from "../server/alchemy.ts";
 import { AppBuildBucket } from "./bucket.ts";
 
@@ -18,30 +16,39 @@ export const AppBuildBucketLive = Layer.effect(AppBuildBucket)(
         message: "App build storage isn't configured.",
       });
 
-    // The DOM and module declarations describe the same native Cloudflare binding.
-    return makeBucketClient(env.APP_BUILDS as unknown as Parameters<typeof makeBucketClient>[0]);
-  }),
-);
+    const bucket = env.APP_BUILDS;
 
-export class SiteBuildBinding extends Context.Service<
-  SiteBuildBinding,
-  WorkflowHandle<AppBuildRequest, { readonly commitId: string }>
->()("trip-app/SiteBuild") {}
-
-export const SiteBuildBindingLive = Layer.effect(SiteBuildBinding)(
-  Effect.gen(function* () {
-    const env = yield* plannerEnvironment;
-
-    if (!env.SITE_BUILD)
-      return yield* new PlannerError({
-        code: "unavailable",
-        message: "The app builder isn't configured.",
+    const request = <A>(run: () => Promise<A>) =>
+      Effect.tryPromise({
+        try: run,
+        catch: (cause) =>
+          new R2Error({
+            message: cause instanceof Error ? cause.message : "App build storage is unavailable.",
+            cause: cause instanceof Error ? cause : new Error("R2 operation failed", { cause }),
+          }),
       });
 
-    return makeWorkflowClient<AppBuildRequest, { readonly commitId: string }>(
-      env.SITE_BUILD,
-      "SiteBuild",
-    );
+    return AppBuildBucket.of({
+      get: (key) =>
+        request(() => bucket.get(key)).pipe(
+          Effect.map((object) =>
+            object === null
+              ? null
+              : {
+                  size: object.size,
+                  get bodyUsed() {
+                    return object.bodyUsed;
+                  },
+                  // The caller's Scope consumes or cancels this native body.
+                  readable: object.body,
+                  text: () => request(() => object.text()),
+                },
+          ),
+        ),
+      head: (key) => request(() => bucket.head(key)),
+      put: (key, value, options) =>
+        request(() => bucket.put(key, value, options)).pipe(Effect.asVoid),
+    });
   }),
 );
 

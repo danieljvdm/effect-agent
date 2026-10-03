@@ -1,5 +1,6 @@
 import type { DurableObjectState } from "alchemy/Cloudflare/Workers/DurableObjectState";
 import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
+import type { RuntimeContext } from "alchemy/RuntimeContext";
 import { Context, Effect, Layer, type Scope } from "effect";
 import { expect, expectTypeOf, it } from "vite-plus/test";
 
@@ -15,7 +16,7 @@ it("keeps native constructor dependencies and RPC invocation scope explicit", ()
     Effect.Services<ReturnType<typeof ThreadObject.make>>
   >().toEqualTypeOf<WorkerEnvironment>();
   expectTypeOf<Effect.Services<ThreadConstructor>>().toEqualTypeOf<
-    DurableObjectState | Scope.Scope
+    DurableObjectState | RuntimeContext
   >();
   expectTypeOf<Effect.Error<ThreadConstructor>>().toEqualTypeOf<never>();
   expectTypeOf<

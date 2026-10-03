@@ -7,6 +7,7 @@ import type { Scope } from "effect";
 import { Config, Context, Effect, Layer } from "effect";
 import { HttpServerResponse } from "effect/http";
 
+import { ownInstance } from "../src/internal/runtime.ts";
 import * as ThreadObject from "../src/ThreadObject.ts";
 import {
   Memories,
@@ -156,7 +157,7 @@ const ProbesLive = Probes.make(
             return "ok";
           }),
       };
-    }).pipe(Effect.orDie),
+    }).pipe(ownInstance, Effect.orDie),
   ),
 );
 
@@ -183,7 +184,11 @@ export const entrypoint = Worker(
 );
 
 // The same entrypoint bridge emitted by Alchemy's bundler; no substitute runtime.
-const meta = { entrypoint, stack: { name: "effect-agent-alchemy-test", stage: "test" } };
+const meta = {
+  entrypoint: entrypoint as unknown as Parameters<typeof makeDurableObjectBridge>[1]["entrypoint"],
+  stack: { name: "effect-agent-alchemy-test", stage: "test" },
+};
+
 const bridge = makeDurableObjectBridge(DurableObject, meta);
 
 export class TestThread extends bridge("THREADS") {}

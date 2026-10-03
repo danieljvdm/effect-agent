@@ -73,7 +73,7 @@ const NativeAuth: new (
   ctx: DurableObjectState,
   env: Cloudflare.Env,
 ) => DurableObject<Cloudflare.Env> = makeDurableObjectBridge(DurableObject, {
-  entrypoint,
+  entrypoint: entrypoint as unknown as Parameters<typeof makeDurableObjectBridge>[1]["entrypoint"],
   stack: runtimeStack,
 })("AUTH");
 

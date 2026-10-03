@@ -9,6 +9,7 @@ import { Effect, Layer, type Scope } from "effect";
 
 import {
   acquire,
+  ownInstance,
   platformLayer,
   type EventOptions,
   type HostServices,
@@ -199,7 +200,7 @@ export const make = <
           invoke(Host.administrativeRpc.obligationsEncoded(encoded)),
         alarm: () => invoke(Host.alarm).pipe(Effect.orDie),
       };
-    }).pipe(Effect.provideService(WorkerEnvironment, env), Effect.orDie);
+    }).pipe(ownInstance, Effect.provideService(WorkerEnvironment, env), Effect.orDie);
   });
 
 export type Rpc<Custom = {}> = NativeHandlers<typeof Host.rpc & typeof Host.administrativeRpc> & {
