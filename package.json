@@ -153,6 +153,7 @@
     }
   },
   "patchedDependencies": {
+    "effect@4.0.0": "patches/effect@4.0.0.patch",
     "alchemy@2.0.0-beta.77": "patches/alchemy@2.0.0-beta.77.patch",
     "@alchemy.run/cloudflare-runtime@2.0.0-beta.77": "patches/@alchemy.run%2Fcloudflare-runtime@2.0.0-beta.77.patch",
     "@distilled.cloud/core@1.0.0-rc.9": "patches/@distilled.cloud%2Fcore@1.0.0-rc.9.patch",

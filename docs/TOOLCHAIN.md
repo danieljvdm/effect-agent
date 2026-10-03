@@ -45,6 +45,11 @@ a Vitest 5 peer minimum, as it did on Effect rc.117. Verify this compatibility w
 existing suites when either dependency changes.
 Operational harnesses under `tooling/*` also use Vite tasks for Miniflare tests.
 
+The root temporarily patches Effect 4.0.0 to reuse streaming response decoders when
+tool declarations stay unchanged. This applies to repository installations; published
+libraries still resolve their consumer's Effect peer. Remove the patch when adopting
+an upstream release containing the change.
+
 Astro uses its own Vite dependency. Keep the root Vite+ core alias required by Vite+;
 do not add a global Vite override.
 
