@@ -16,13 +16,14 @@ export const TaskResult = Schema.Struct({ message: Schema.String });
 
 export const finishTool = Tool.make("finish", {
   description:
-    "Finish the run after the observed task board shows all requested changes are saved.",
+    "Verify the saved task board and finish. A failed verification returns saved values to inspect and correct before finishing again.",
   parameters: TaskResult,
   success: TaskResult,
+  failure: LabError,
+  failureMode: "return",
 });
 
 export const completionTools = Toolkit.make(finishTool);
-export const completionLayer = completionTools.toLayer({ finish: Effect.succeed });
 
 export const makeBrowser = Effect.fnUntraced(function* (
   session: Pick<BrowserSession, "run">,

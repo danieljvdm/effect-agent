@@ -11,16 +11,10 @@ import * as BrowserUse from "effect-agent/browser-use";
 import { Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 
-import {
-  scripted,
-  Observation,
-  TaskResult,
-  Browser,
-  completionLayer,
-  completionTools,
-} from "./browser.ts";
+import { scripted, Observation, TaskResult, Browser, completionTools } from "./browser.ts";
 import {
   defaultChallenge,
+  Board,
   LabError,
   scenarios,
   verify,
@@ -132,6 +126,25 @@ export const executeTask = Effect.fnUntraced(function* (
 ) {
   const browser = yield* Browser;
   const trace = yield* Trace;
+  let completedBoard: typeof Board.Type | undefined;
+  let completedAt: number | undefined;
+
+  const completionLayer = completionTools.toLayer({
+    finish: Effect.fnUntraced(function* (result) {
+      const board = yield* browser.readBoard;
+
+      trace.update({ board });
+      if (input.scenario !== "custom" && !verify(input.scenario, board))
+        return yield* new LabError({
+          code: "invalid",
+          message: `Saved tasks do not match the request. Inspect and correct the remaining differences before finishing. Current saved board: ${Schema.encodeSync(Schema.fromJsonString(Board))(board)}`,
+        });
+      completedBoard = board;
+      completedAt = trace.now();
+
+      return result;
+    }),
+  });
 
   const wiki =
     input.scenario === "wikipedia"
@@ -246,12 +259,12 @@ export const executeTask = Effect.fnUntraced(function* (
 
     return;
   }
-  const board = yield* browser.readBoard;
+  const board = completedBoard ?? (yield* browser.readBoard);
   const passed = verify(input.scenario, board);
 
   trace.update({
     board,
-    verifiedAt: input.scenario !== "custom" && passed ? trace.now() : null,
+    verifiedAt: input.scenario !== "custom" && passed ? (completedAt ?? trace.now()) : null,
     status: input.scenario === "custom" ? "unverified" : passed ? "passed" : "failed",
     message:
       input.scenario === "custom"

@@ -42,7 +42,9 @@ Wikipedia eligibility, route choice, verification, model
 configuration, and the comparison UI remain here. [Consumer setup](../../docs/src/content/docs/guide/browser.md#opt-into-decision-grounded-browser-tools).
 
 The task board uses self-contained HTML and exposes observed clicks, fills, and selections.
-Its preset verifier checks the complete saved board; free-form board requests are **unverified**.
+Its preset verifier checks the complete saved board before accepting completion. A mismatch
+returns the saved values so the agent can correct omissions within its remaining budget.
+Free-form board requests are **unverified**.
 Task-board agents have 30 turns, 100 tool calls, 300,000 model tokens and three minutes.
 Mechanical pruning bounds each context to 10,000 estimated tokens and retains a 4,000-token
 recent tail. Exhaustion fails explicitly; partial board changes cannot pass the verifier.
