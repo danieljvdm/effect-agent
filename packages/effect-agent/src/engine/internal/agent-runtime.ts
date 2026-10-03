@@ -7,6 +7,7 @@ import * as Response from "effect/ai/Response";
 import * as ResponseIdTracker from "effect/ai/ResponseIdTracker";
 import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
+import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Channel from "effect/Channel";
 import * as Clock from "effect/Clock";
@@ -5696,7 +5697,7 @@ const makeTurn = <
             }),
           );
 
-          return [
+          const events: Arr.NonEmptyReadonlyArray<RunEvent> = [
             TurnStarted.make({
               ...(yield* eventBase(context)),
               turnId,
@@ -5707,9 +5708,11 @@ const makeTurn = <
               turnId,
               turn,
             }),
-          ] satisfies ReadonlyArray<RunEvent>;
+          ];
+
+          return events;
         }).pipe(Effect.withLogSpan("AgentRuntime.model")),
-      ).pipe(Stream.flatMap(Stream.fromIterable));
+      ).pipe(Stream.flattenArray);
 
       // Final-answer mode (RUN-018/RUN-019, extended to tokens by RUN-025):
       // once the Turn, Tool Call, or token budget is
@@ -6468,7 +6471,8 @@ const makeTurn = <
                           ),
                         ),
                       ),
-                      Stream.flatMap(Stream.fromIterable),
+                      Stream.filter(Arr.isReadonlyArrayNonEmpty),
+                      Stream.flattenArray,
                       Stream.onExit((exit) =>
                         Exit.isFailure(exit) ? retainFailedUsage() : Effect.void,
                       ),
@@ -7955,7 +7959,7 @@ const makeResumeTurn = <
             }),
           );
 
-          return [
+          const events: Arr.NonEmptyReadonlyArray<RunEvent> = [
             TurnStarted.make({
               ...(yield* eventBase(context)),
               turnId,
@@ -7967,9 +7971,11 @@ const makeResumeTurn = <
               turn,
               finishReason: "tool-calls",
             }),
-          ] satisfies ReadonlyArray<RunEvent>;
+          ];
+
+          return events;
         }).pipe(Effect.withLogSpan("AgentRuntime.resume")),
-      ).pipe(Stream.flatMap(Stream.fromIterable));
+      ).pipe(Stream.flattenArray);
 
       const continueAfterBatch = () =>
         toolBatchContinuation(agent, context, trace, resumedPrompt, turn, toolCalls, options);
